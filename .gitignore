@@ -27,6 +27,10 @@ build/
 *.tsbuildinfo
 next-env.d.ts
 
+# Next.js telemetry / tooling state (created inside Docker)
+admin/cache/
+frontend/cache/
+
 # Data
 *.sql
 *.sql.zst

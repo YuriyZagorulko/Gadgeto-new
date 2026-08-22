@@ -1,0 +1,109 @@
+# Cline Project Rules
+
+## Git
+
+* NEVER create a Git commit automatically.
+* NEVER run `git commit` without explicit permission from the user.
+* NEVER run `git push` without explicit permission from the user.
+* NEVER run `git push --force` without explicit permission from the user.
+* NEVER run `git reset --hard` without explicit permission from the user.
+* You may freely inspect Git state with safe read-only commands such as `git status`, `git diff`, and `git log`.
+* If you think a commit should be created, STOP and ask the user for permission first.
+
+## Command Execution
+
+Use SAFE COMMANDS ONLY automatically.
+
+The desired behavior is equivalent to:
+
+**Execute Safe Commands = ON**
+
+**Unsafe / potentially destructive commands = ASK FOR PERMISSION**
+
+Safe commands can be executed automatically when they are clearly read-only, diagnostic, or normal development/test commands.
+
+Examples of generally safe commands:
+
+* `pwd`
+* `ls`
+* `find`
+* `cat`
+* `grep`
+* `head`
+* `tail`
+* `git status`
+* `git diff`
+* `git log`
+* `docker ps`
+* `docker compose ps`
+* `docker compose logs`
+* `docker inspect`
+* project tests
+* linters
+* type checking
+* normal builds
+
+If a command can delete data, overwrite important data, modify system configuration, modify production infrastructure, or otherwise cause potentially irreversible changes, ASK FOR USER PERMISSION FIRST.
+
+Examples:
+
+* `rm`
+* `rm -rf`
+* `docker system prune`
+* `docker volume rm`
+* `docker compose down -v`
+* database deletion
+* destructive database migrations
+* `git commit`
+* `git push`
+* `git push --force`
+* `git reset --hard`
+* firewall changes
+* SSH configuration changes
+* system user/permission changes
+* production infrastructure changes
+* destructive `sudo` commands
+
+If you are unsure whether a command is safe, DO NOT execute it automatically. Ask the user.
+
+## File Changes
+
+You may modify project source files when necessary to complete the user's requested task.
+
+Do not make unrelated changes.
+
+Do not delete important project files unless explicitly required by the task.
+
+## Production Safety
+
+Treat production as sensitive.
+
+Never perform destructive production operations without explicit user approval.
+
+Never delete production data, databases, Docker volumes, or infrastructure without explicit approval.
+
+If you cannot determine whether an operation affects development or production, ask first.
+
+## Verification
+
+After making code changes:
+
+1. Run appropriate SAFE tests/checks automatically.
+2. Inspect the results.
+3. Fix problems when possible.
+4. Report what was changed and what was verified.
+5. Do NOT create a Git commit.
+
+## Final Rule
+
+The approval policy is:
+
+SAFE → execute automatically.
+
+UNSAFE / DESTRUCTIVE → ask the user.
+
+GIT COMMIT → always ask.
+
+GIT PUSH → always ask.
+
+If there is any doubt about safety → ask.
