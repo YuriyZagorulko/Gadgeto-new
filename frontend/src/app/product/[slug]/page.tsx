@@ -9,8 +9,9 @@ async function getProduct(slug: string) {
   } catch { return null; }
 }
 
-export default async function ProductPage({ params }: { params: { slug: string } }) {
-  const product = await getProduct(params.slug);
+export default async function ProductPage({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
+  const product = await getProduct(slug);
   if (!product) notFound();
 
   const price = (product.price / 100).toLocaleString('uk-UA', { style: 'currency', currency: 'UAH' });
@@ -78,7 +79,7 @@ export default async function ProductPage({ params }: { params: { slug: string }
           {product.description && (
             <div className="mt-6 border-t pt-4">
               <h3 className="font-semibold mb-2">Description</h3>
-              <dic classNmae="text-sm text-gray-700 whitespace-pre-wrap">{product.description.replace(/<[^>]+>/g, '')}</div>
+              <div className="text-sm text-gray-700 whitespace-pre-wrap">{product.description.replace(/<[^>]+>/g, '')}</div>
             </div>
           )}
         </div>

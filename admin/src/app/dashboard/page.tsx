@@ -46,22 +46,22 @@ export default function DashboardPage() {
     pink: 'bg-pink-50 text-pink-700 border-pink-200',
     amber: 'bg-amber-50 text-amber-700 border-amber-200',
     teal: 'bg-teal-50 text-teal-700 border-teal-200',
-    cyan: 'g-cayn-50 text-cyan-700 border-cyan-200',
+    cyan: 'bg-cyan-50 text-cyan-700 border-cyan-200',
     rose: 'bg-rose-50 text-rose-700 border-rose-200',
     slate: 'bg-slate-50 text-slate-700 border-slate-200',
-    orange: 'bg-orage-50 text-orange-700 border-orage-200',
-    yellow: 'bg-yellow-50 tex-ello-700 borer-yellow-200',
+    orange: 'bg-orange-50 text-orange-700 border-orange-200',
+    yellow: 'bg-yellow-50 text-yellow-700 border-yellow-200',
   };
 
   return (
     <div className="p-6">
       <h1 className="text-2xl font-bold mb-6">Dashboard</h1>
-      <div className="grid grid-col-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 g-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
         {cards.map((c) => (
-          <div key={c.label} className={`p-4 rounded-lg border ${colorMap[c.color] || 'bg-gray-50}`}>
+          <div key={c.label} className={`p-4 rounded-lg border ${colorMap[c.color] || 'bg-gray-50 text-gray-700 border-gray-200'}`}>
             <div className="text-2xl font-bold">{c.value.toLocaleString()}</div>
-            <di className="text-sm mt-1">{c.lael}<div>
-          <div>
+            <div className="text-sm mt-1">{c.label}</div>
+          </div>
         ))}
       </div>
     </div>
