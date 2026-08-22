@@ -1,0 +1,113 @@
+"""Admin products API."""
+import json, re
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
+from typing import Optional, List
+import psycopg2, psycopg2.extras
+
+router = APIRouter()
+DB = "dbname=gadgeto user=gadgeto password=gadgeto host=localhost port=5432"
+
+def db():
+    conn = psycopg2.connect(DB); conn.autocommit = True
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    return conn, cur
+
+class ProductUpdate(BaseModel):
+    name: Optional[str] = None
+    slug: Optional[str] = None
+    sku: Optional[str] = None
+    price: Optional[int] = None
+    old_price: Optional[int] = None
+    stock_qty: Optional[int] = None
+    stock_status: Optional[str] = None
+    status: Optional[str] = None
+    description: Optional[str] = None
+    short_description: Optional[str] = None
+    brand_id: Optional[int] = None
+    category_ids: Optional[List[int]] = None
+    seo_title: Optional[str] = None
+    seo_description: Optional[str] = None
+    focus_keyphrase: Optional[str] = None
+
+@router.get("/products")
+async def list_products(page: int = Query(1,ge=1), per_page: int = Query(20,ge=1,le=100),
+    search: Optional[str] = None, category_id: Optional[int] = None,
+    brand_id: Optional[int] = None, status: Optional[str] = None,
+    stock: Optional[str] = None):
+    conn, cur = db()
+    conds, params = ["1=1"], []
+    if search:
+        conds.append("(p.name ILIKE %s OR p.sku ILIKE %s)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    if category_id:
+        conds.append("EXISTS (SELECT 1 FROM product_categories pc WHERE pc.product_id=p.id AND pc.category_id=%s)")
+        params.append(category_id)
+    if brand_id:
+        conds.append("p.brand_id=%s"); params.append(brand_id)
+    if status:
+        conds.append("p.status=%s"); params.append(status)
+    if stock == "in_stock": conds.append("p.stock_status='in_stock'")
+    elif stock == "out_of_stock": conds.append("p.stock_status='out_of_stock'")
+    where = " AND ".join(conds)
+    offset = (page - 1) * per_page
+    cur.execute(f"SELECT count(*) FROM products p WHERE {where}", params)
+    total = cur.fetchone()["count"]
+    cur.execute(f"""
+        SELECT p.id, p.sku, p.name, p.slug, p.price, p.old_price, p.stock_status,
+               p.stock_qty, p.status, p.is_active, p.updated_at,
+               b.name as brand_name,
+               (SELECT url FROM product_images WHERE product_id=p.id AND is_primary=true LIMIT 1) as image,
+               (SELECT string_agg(c.name, ', ') FROM product_categories pc JOIN categories c ON c.id=pc.category_id WHERE pc.product_id=p.id) as categories
+        FROM products p LEFT JOIN brands b ON b.id=p.brand_id
+        WHERE {where} ORDER BY p.updated_at DESC LIMIT %s OFFSET %s
+    """, params + [per_page, offset])
+    items = cur.fetchall(); conn.close()
+    return {"items": items, "total": total, "page": page, "per_page": per_page,
+            "total_pages": max(1, (total + per_page - 1) // per_page)}
+
+@router.get("/products/{pid}")
+async def get_product(pid: int):
+    conn, cur = db()
+    cur.execute("SELECT p.*, b.name as brand_name FROM products p LEFT JOIN brands b ON b.id=p.brand_id WHERE p.id=%s", (pid,))
+    p = cur.fetchone()
+    if not p: conn.close(); raise HTTPException(status_code=404)
+    cur.execute("SELECT c.id, c.name, c.slug FROM product_categories pc JOIN categories c ON c.id=pc.category_id WHERE pc.product_id=%s", (pid,))
+    cats = cur.fetchall()
+    cur.execute("""
+        SELECT a.id, a.name, a.slug, av.value as attr_val, av.id as val_id
+        FROM product_attributes pa JOIN attributes a ON a.id=pa.attribute_id
+        LEFT JOIN attribute_values av ON av.id=pa.attribute_value_id
+        WHERE pa.product_id=%s ORDER BY a.name
+    """, (pid,))
+    attrs = cur.fetchall()
+    cur.execute("SELECT id, url, sort_order, is_primary FROM product_images WHERE product_id=%s ORDER BY sort_order", (pid,))
+    imgs = cur.fetchall()
+    conn.close()
+    return {"product": p, "categories": cats, "attributes": attrs, "images": imgs}
+
+@router.put("/products/{pid}")
+async def update_product(pid: int, data: ProductUpdate):
+    conn, cur = db()
+    sets, params = [], []
+    for f in ["name","slug","sku","price","old_price","stock_qty","stock_status",
+              "status","description","short_description","brand_id",
+              "seo_title","seo_description","focus_keyphrase"]:
+        v = getattr(data, f, None)
+        if v is not None: sets.append(f"{f}=%s"); params.append(v)
+    if sets:
+        params.append(pid)
+        cur.execute(f"UPDATE products SET {','.join(sets)}, updated_at=NOW() WHERE id=%s", params)
+    if data.category_ids is not None:
+        cur.execute("DELETE FROM product_categories WHERE product_id=%s", (pid,))
+        for cid in data.category_ids:
+            cur.execute("INSERT INTO product_categories (product_id,category_id) VALUES (%s,%s) ON CONFLICT DO NOTHING", (pid, cid))
+    conn.close()
+    return {"ok": True, "id": pid}
+
+@router.delete("/products/{pid}")
+async def delete_product(pid: int):
+    conn, cur = db()
+    cur.execute("UPDATE products SET status='archived', is_active=false, updated_at=NOW() WHERE id=%s", (pid,))
+    conn.close()
+    return {"ok": True}

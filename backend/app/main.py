@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.core import config, database
 from app.api.v1 import router as api_router
+from app.api.admin import router as admin_router
 
 # Create FastAPI app
 app = FastAPI(
