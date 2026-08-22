@@ -1,13 +1,16 @@
 'use client';
 import { useState, useEffect } from 'react';
-import Link from 'next/link';
+import { useTranslations } from 'next-intl';
+import { Link, useRouter } from '@/i18n/navigation';
 
 export default function Header() {
+  const t = useTranslations('header');
   const [menuOpen, setMenuOpen] = useState(false);
   const [searchQ, setSearchQ] = useState('');
   const [categories, setCategories] = useState<any[]>([]);
   const [cartCount, setCartCount] = useState(0);
   const [user, setUser] = useState<any>(null);
+  const router = useRouter();
 
   useEffect(() => {
     fetch('/api/categories').then(r => r.json()).then(d => setCategories(d.items || [])).catch(() => {});
@@ -24,7 +27,7 @@ export default function Header() {
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    if (searchQ.trim()) window.location.href = `/search?q=${encodeURIComponent(searchQ.trim())}`;
+    if (searchQ.trim()) router.push(`/search?q=${encodeURIComponent(searchQ.trim())}`);
   };
 
   return (
@@ -39,18 +42,18 @@ export default function Header() {
           </nav>
           <form onSubmit={handleSearch} className="hidden md:flex items-center gap-2">
             <input type="search" value={searchQ} onChange={e => setSearchQ(e.target.value)}
-              placeholder="Search products..." className="input-field w-48 lg:w-64 text-sm" />
+              placeholder={t('searchPlaceholder')} className="input-field w-48 lg:w-64 text-sm" />
           </form>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 sm:gap-4">
             {user ? (
-              <Link href="/account" className="text-sm hover:text-blue-600">Account</Link>
+              <Link href="/account" className="hidden sm:inline text-sm hover:text-blue-600">{t('account')}</Link>
             ) : (
-              <Link href="/login" className="text-sm hover:text-blue-600">Sign In</Link>
+              <Link href="/login" className="hidden sm:inline text-sm hover:text-blue-600">{t('signIn')}</Link>
             )}
             <Link href="/cart" className="relative text-sm hover:text-blue-600">
-              Cart {cartCount > 0 && <span className="absolute -top-2 -right-2 bg-blue-600 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">{cartCount}</span>}
+              {t('cart')} {cartCount > 0 && <span className="absolute -top-2 -right-2 bg-blue-600 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">{cartCount}</span>}
             </Link>
-            <button className="md:hidden" onClick={() => setMenuOpen(!menuOpen)}>☰</button>
+            <button className="md:hidden" onClick={() => setMenuOpen(!menuOpen)} aria-label={t('menu')}>☰</button>
           </div>
         </div>
         {menuOpen && (
@@ -60,7 +63,7 @@ export default function Header() {
             ))}
             <form onSubmit={handleSearch} className="flex gap-2 mt-2">
               <input type="search" value={searchQ} onChange={e => setSearchQ(e.target.value)}
-                placeholder="Search..." className="input-field flex-1 text-sm" />
+                placeholder={t('searchPlaceholderMobile')} className="input-field flex-1 text-sm" />
             </form>
           </div>
         )}

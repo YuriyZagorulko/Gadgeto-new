@@ -1,0 +1,130 @@
+{
+  "common": {
+    "loading": "Завантаження...",
+    "switchLanguage": "Змінити мову"
+  },
+  "header": {
+    "searchPlaceholder": "Пошук товарів...",
+    "searchPlaceholderMobile": "Пошук...",
+    "account": "Акаунт",
+    "signIn": "Увійти",
+    "cart": "Кошик",
+    "menu": "Меню"
+  },
+  "footer": {
+    "tagline": "Магазин комп'ютерної техніки та електроніки в Україні. Якісні товари, швидка доставка.",
+    "information": "Інформація",
+    "catalog": "Каталог",
+    "search": "Пошук",
+    "cart": "Кошик",
+    "contact": "Контакти",
+    "address": "Дніпро, Україна",
+    "delivery": "Доставка Новою Поштою",
+    "copyright": "© {year} Gadgeto. Всі права захищено."
+  },
+  "home": {
+    "heroTitle": "Магазин комп'ютерної техніки та електроніки",
+    "heroSubtitle": "Якісна комп'ютерна техніка та електроніка. Швидка доставка по всій Україні.",
+    "shopNow": "Перейти до каталогу",
+    "categoriesTitle": "Категорії",
+    "latestProductsTitle": "Новинки"
+  },
+  "products": {
+    "noImage": "Немає фото",
+    "inStock": "В наявності",
+    "outOfStock": "Немає в наявності",
+    "productsCount": "{count, plural, one {# товар} few {# товари} many {# товарів} other {# товара}}",
+    "subcategoriesCount": "{count, plural, one {# підкатегорія} few {# підкатегорії} many {# підкатегорій} other {# підкатегорії}}"
+  },
+  "catalog": {
+    "title": "Каталог",
+    "notFound": "Категорію не знайдено",
+    "noFilters": "Фільтри не налаштовано",
+    "noProducts": "У цій категорії немає товарів.",
+    "metaTitle": "Каталог"
+  },
+  "filters": {
+    "title": "Фільтри"
+  },
+  "product": {
+    "sku": "Артикул: {sku}",
+    "brand": "Бренд: {brand}",
+    "addToCart": "Додати в кошик",
+    "specifications": "Характеристики",
+    "description": "Опис"
+  },
+  "cart": {
+    "title": "Кошик",
+    "empty": "Ваш кошик порожній",
+    "continueShopping": "Продовжити покупки",
+    "remove": "Видалити",
+    "total": "Разом: {total}",
+    "proceedToCheckout": "Оформити замовлення",
+    "noImage": "Немає фото",
+    "sku": "Артикул: {sku}"
+  },
+  "checkout": {
+    "title": "Оформлення замовлення",
+    "customerInfo": "Дані покупця",
+    "firstName": "Ім'я",
+    "lastName": "Прізвище",
+    "phone": "Телефон",
+    "email": "Електронна пошта",
+    "delivery": "Доставка (Нова Пошта)",
+    "city": "Місто",
+    "cityPlaceholder": "Почніть вводити назву міста...",
+    "branch": "Відділення / Поштомат",
+    "branchPlaceholder": "Номер відділення або адреса",
+    "itemsCount": "Товари: {count}",
+    "total": "Разом: {total}",
+    "placeOrder": "Підтвердити замовлення",
+    "processing": "Обробка...",
+    "emptyCart": "Кошик порожній"
+  },
+  "checkoutSuccess": {
+    "title": "Замовлення оформлено!",
+    "orderNumber": "Замовлення №{number}",
+    "status": "Статус: {status}",
+    "note": "Ми зв'яжемося з вами для підтвердження замовлення.",
+    "continueShopping": "Продовжити покупки",
+    "myOrders": "Мої замовлення"
+  },
+  "auth": {
+    "signInTitle": "Вхід",
+    "registerTitle": "Створити акаунт",
+    "email": "Електронна пошта",
+    "password": "Пароль",
+    "confirmPassword": "Підтвердіть пароль",
+    "fullName": "Ім'я та прізвище",
+    "phone": "Телефон",
+    "signIn": "Увійти",
+    "register": "Створити акаунт",
+    "noAccountPrompt": "Немає акаунта?",
+    "registerLink": "Зареєструватися",
+    "errorInvalidCredentials": "Невірна електронна пошта або пароль",
+    "errorPasswordMismatch": "Паролі не збігаються",
+    "errorPasswordLength": "Пароль має містити щонайменше 6 символів",
+    "errorLoginFailed": "Помилка входу. Спробуйте ще раз.",
+    "errorRegistrationFailed": "Помилка реєстрації. Спробуйте ще раз."
+  },
+  "account": {
+    "title": "Мій акаунт",
+    "profile": "Профіль",
+    "orders": "Замовлення",
+    "logout": "Вийти",
+    "name": "Ім'я:",
+    "email": "Ел. пошта:",
+    "phone": "Телефон:",
+    "noOrders": "У вас ще немає замовлень."
+  },
+  "errors": {
+    "notFoundTitle": "Сторінку не знайдено",
+    "notFoundDescription": "Сторінки, яку ви шукаєте, не існує або вона була переміщена.",
+    "backToHome": "На головну"
+  },
+  "metadata": {
+    "title": "Gadgeto — магазин комп'ютерної техніки та електроніки",
+    "titleTemplate": "%s | Gadgeto",
+    "description": "Купуйте комп'ютерну техніку, комплектуючі та електроніку в Україні. Швидка доставка, гарантія якості."
+  }
+}

@@ -1,4 +1,6 @@
-import Link from 'next/link';
+import { useLocale, useTranslations } from 'next-intl';
+import { Link } from '@/i18n/navigation';
+import { formatPrice } from '@/lib/format';
 
 interface ProductCardProps {
   product: {
@@ -9,16 +11,18 @@ interface ProductCardProps {
 }
 
 export default function ProductCard({ product }: ProductCardProps) {
-  const price = (product.price / 100).toLocaleString('uk-UA', { style: 'currency', currency: 'UAH' });
-  const oldPrice = product.old_price ? (product.old_price / 100).toLocaleString('uk-UA', { style: 'currency', currency: 'UAH' }) : null;
-  
+  const t = useTranslations('products');
+  const locale = useLocale();
+  const price = formatPrice(product.price, locale);
+  const oldPrice = product.old_price ? formatPrice(product.old_price, locale) : null;
+
   return (
     <Link href={`/product/${product.slug}`} className="card overflow-hidden group">
       <div className="aspect-square bg-gray-100 flex items-center justify-center overflow-hidden">
         {product.image ? (
           <img src={product.image} alt={product.name} className="w-full h-full object-cover group-hover:scale-105 transition" loading="lazy" />
         ) : (
-          <span className="text-gray-400 text-sm">No image</span>
+          <span className="text-gray-400 text-sm">{t('noImage')}</span>
         )}
       </div>
       <div className="p-3">
@@ -29,7 +33,7 @@ export default function ProductCard({ product }: ProductCardProps) {
           {oldPrice && <span className="text-sm text-gray-400 line-through">{oldPrice}</span>}
         </div>
         {product.stock_status === 'out_of_stock' && (
-          <span className="text-xs text-red-600">Out of stock</span>
+          <span className="text-xs text-red-600">{t('outOfStock')}</span>
         )}
       </div>
     </Link>
