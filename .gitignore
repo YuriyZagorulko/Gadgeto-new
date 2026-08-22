@@ -1,0 +1,54 @@
+# Environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.python-version
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+next-env.d.ts
+
+# Data
+*.sql
+*.sql.zst
+*.tar
+*.csv
+*.xml
+backups/
+analysis/
+tmp/
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+
+# IDE-specific
+.DS_Store
