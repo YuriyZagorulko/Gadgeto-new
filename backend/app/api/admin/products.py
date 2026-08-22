@@ -3,10 +3,11 @@ import json, re
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
-import psycopg2, psycopg2.extras
+
 
 router = APIRouter()
-DB = "dbname=gadgeto user=gadgeto password=gadgeto host=localhost port=5432"
+from app.core.db_connect import get_cursor as _db
+# DB connection via app.core.db_connect
 
 def db():
     conn = psycopg2.connect(DB); conn.autocommit = True

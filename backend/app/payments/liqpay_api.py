@@ -5,7 +5,8 @@ from pydantic import BaseModel
 from typing import Optional
 
 router = APIRouter()
-DB = "dbname=gadgeto user=gadgeto password=gadgeto host=localhost port=5432"
+from app.core.db_connect import get_cursor as _db
+# DB connection via app.core.db_connect
 
 LIQPAY_PUBLIC_KEY = os.getenv("LIQPAY_PUBLIC_KEY", "sandbox_i1234567890")
 LIQPAY_PRIVATE_KEY = os.getenv("LIQPAY_PRIVATE_KEY", "")
@@ -16,7 +17,7 @@ def liqpay_sign(data: dict) -> str:
 
 @router.post("/payments/liqpay/create")
 async def create_payment(order_id: int, token: str = ""):
-    import psycopg2, psycopg2.extras
+    
     conn = psycopg2.connect(DB)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT number, total_amount, status, email FROM orders WHERE id=%s", (order_id,))
@@ -52,7 +53,7 @@ async def create_payment(order_id: int, token: str = ""):
 
 @router.post("/payments/liqpay/callback")
 async def liqpay_callback(data: str = "", signature: str = ""):
-    import psycopg2, psycopg2.extras
+    
     # Verify signature
     expected_sig = liqpay_sign({"data": data})
     if signature != expected_sig:

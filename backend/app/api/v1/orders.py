@@ -5,11 +5,12 @@ from pydantic import BaseModel
 from typing import Optional, List
 
 router = APIRouter()
-DB = "dbname=gadgeto user=gadgeto password=gadgeto host=localhost port=5432"
+from app.core.db_connect import get_cursor as _db
+# DB connection via app.core.db_connect
 
 def get_user_from_token(token: str):
     """Verify auth token and return user."""
-    import psycopg2, psycopg2.extras
+    
     conn = psycopg2.connect(DB)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     th = hashlib.sha256(token.encode()).hexdigest()
@@ -38,7 +39,7 @@ class CheckoutRequest(BaseModel):
 
 @router.post("/checkout")
 async def checkout(req: CheckoutRequest):
-    import psycopg2, psycopg2.extras
+    
     conn = psycopg2.connect(DB)
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -126,7 +127,7 @@ async def get_orders(token: str = ""):
     user = get_user_from_token(token)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    import psycopg2, psycopg2.extras
+    
     conn = psycopg2.connect(DB)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT id, number, status, total_amount, created_at FROM orders WHERE user_id=%s ORDER BY created_at DESC LIMIT 50", (user["id"],))
@@ -137,7 +138,7 @@ async def get_orders(token: str = ""):
 @router.get("/orders/{order_id}")
 async def get_order(order_id: int, token: str = ""):
     user = get_user_from_token(token)
-    import psycopg2, psycopg2.extras
+    
     conn = psycopg2.connect(DB)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""

@@ -6,10 +6,11 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
-DB = "dbname=gadgeto user=gadgeto password=gadgeto host=localhost port=5432"
+from app.core.db_connect import get_cursor as _db
+# DB connection via app.core.db_connect
 
 def get_cursor():
-    import psycopg2, psycopg2.extras
+    
     conn = psycopg2.connect(DB)
     conn.autocommit = True
     return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)

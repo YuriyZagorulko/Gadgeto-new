@@ -6,7 +6,8 @@ from typing import Optional
 from datetime import datetime, timedelta
 
 router = APIRouter()
-DB = "dbname=gadgeto user=gadgeto password=gadgeto host=localhost port=5432"
+from app.core.db_connect import get_cursor as _db
+# DB connection via app.core.db_connect
 
 class CartItemRequest(BaseModel):
     product_id: int
@@ -27,7 +28,7 @@ def get_or_create_cart(cur, session_token: Optional[str] = None, user_id: Option
 
 @router.get("/cart")
 async def get_cart(session_token: str = ""):
-    import psycopg2, psycopg2.extras
+    
     conn = psycopg2.connect(DB)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cart_id, token = get_or_create_cart(cur, session_token)
@@ -43,7 +44,7 @@ async def get_cart(session_token: str = ""):
 
 @router.post("/cart/items")
 async def add_to_cart(req: CartItemRequest, session_token: str = ""):
-    import psycopg2, psycopg2.extras
+    
     conn = psycopg2.connect(DB)
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)

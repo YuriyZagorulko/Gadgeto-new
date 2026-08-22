@@ -1,5 +1,0 @@
-Script started on 2026-08-22 15:26:12+03:00 [COMMAND="su - postgres -c 'psql -c "SELECT 1"'" <not executed on terminal>]
-Password: 
-su: Authentication failure
-
-Script done on 2026-08-22 15:26:13+03:00 [COMMAND_EXIT_CODE="1"]

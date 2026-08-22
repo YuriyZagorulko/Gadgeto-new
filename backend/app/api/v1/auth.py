@@ -5,7 +5,8 @@ from pydantic import BaseModel
 from typing import Optional
 
 router = APIRouter()
-DB = "dbname=gadgeto user=gadgeto password=gadgeto host=localhost port=5432"
+from app.core.db_connect import get_cursor as _db
+# DB connection via app.core.db_connect
 
 class RegisterRequest(BaseModel):
     email: str
@@ -22,7 +23,7 @@ class AuthResponse(BaseModel):
     token_type: str = "bearer"
 
 def get_user_from_token(token: str) -> Optional[dict]:
-    import psycopg2, psycopg2.extras
+    
     conn = psycopg2.connect(DB)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     th = hashlib.sha256(token.encode()).hexdigest()
@@ -58,7 +59,7 @@ async def register(req: RegisterRequest):
 
 @router.post("/login")
 async def login(req: LoginRequest):
-    import psycopg2, psycopg2.extras
+    
     conn = psycopg2.connect(DB)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT id, email, password_hash, full_name, phone, role FROM users WHERE email = %s", (req.email,))
