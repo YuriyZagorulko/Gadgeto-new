@@ -1,100 +1,51 @@
 import Link from 'next/link';
+import ProductCard from '@/components/ProductCard';
 
-export default function HomePage() {
+async function getData() {
+  const api = process.env.NEXT_PUBLIC_API_URL;
+  try {
+    const [catsRes, prodsRes] = await Promise.all([
+      fetch(api + '/api/v1/categories', { next: { revalidate: 300 } }).catch(() => ({ ok: false })),
+      fetch(api + '/api/v1/products?page=1&page_size=12', { next: { revalidate: 300 } }).catch(() => ({ ok: false })),
+    ]);
+    const cats = catsRes.ok ? await catsRes.json() : { items: [] };
+    const prods = prodsRes.ok ? await prodsRes.json() : { items: [] };
+    return { categories: cats.items || [], products: prods.items || [] };
+  } catch {
+    return { categories: [], products: [] };
+  }
+}
+
+export default async function HomePage() {
+  const { categories, products } = await getData();
+  const rootCats = (categories || []).filter((c: any) => !c.parent_id);
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Hero Section */}
-      <section className="bg-gradient-to-r from-primary-600 to-primary-800 text-white py-20">
-        <div className="container mx-auto px-4">
-          <h1 className="text-4xl md:text-6xl font-bold mb-6">
-            Computer Components & Gadgets Store
-          </h1>
-          <p className="text-xl mb-8 max-w-2xl">
-            High-quality computer hardware, components, and accessories at competitive prices.
-            Fast delivery across Ukraine.
-          </p>
-          <div className="flex gap-4">
-            <Link href="/catalog" className="bg-white text-primary-700 px-6 py-3 rounded-lg font-semibold hover:bg-gray-100 transition">
-              Shop Now
-            </Link>
-            <Link href="/catalog" className="bg-primary-700 text-white px-6 py-3 rounded-lg font-semibold hover:bg-primary-800 transition">
-              View Catalog
-            </Link>
-          </div>
+    <div>
+      <section className="bg-gradient-to-r from-blue-700 to-blue-900 text-white py-16">
+        <div className="max-w-7xl mx-auto px-4">
+          <h1 className="text-4xl md:text-5xl font-bold mb-4">Computer & Electronics Store</h1>
+          <p className="text-xl mb-8 max-w-2xl text-blue-100">Quality computer hardware and electronics. Fast delivery nationwide.</p>
+          <Link href="/catalog" className="inline-block bg-white text-blue-700 px-6 py-3 rounded-lg font-semibold hover:bg-blue-50 transition">Shop Now</Link>
         </div>
       </section>
 
-      {/* Features */}
-      <section className="py-16 bg-white">
-        <div className="container mx-auto px-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div className="text-center p-6">
-              <div className="text-4xl mb-4">🚚</div>
-              <h3 className="text-xl font-semibold mb-2">Fast Delivery</h3>
-              <p className="text-gray-600">Nova Poshta delivery across Ukraine</p>
-            </div>
-            <div className="text-center p-6">
-              <div className="text-4xl mb-4">💳</div>
-              <h3 className="text-xl font-semibold mb-2">Secure Payment</h3>
-              <p className="text-gray-600">LiqPay secure payment gateway</p>
-            </div>
-            <div className="text-center p-6">
-              <div className="text-4xl mb-4">🛡️</div>
-              <h3 className="text-xl font-semibold mb-2">Quality Guarantee</h3>
-              <p className="text-gray-600">Original products with warranty</p>
-            </div>
-          </div>
-        </div>
+      <section className="max-w-7xl mx-auto px-4 py-12">
+        <h2 className="text-2xl font-bold mb-6">Shop by Category</h2>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          {(rootCats as any[]).slice(0, 10).map((cat: any) => (
+            <Link key={cat.slug} href={`/catalog/${cat.slug}`} className="card p-4 text-center hover:border-blue-300">              <div className="font-medium text-sm">{cat.name}</d>
+              {cat.product_count > 0 && <div className="text-xs text-gray-500 mt-1">{cat.product_count} products</div>}
+            </Link>        )}        </div>
       </section>
 
-      {/* Categories */}
-      <section className="py-16 bg-gray-50">
-        <div className="container mx-auto px-4">
-          <h2 className="text-3xl font-bold mb-8 text-center">Shop by Category</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {[
-              { name: 'SSD Storage', icon: '💾' },
-              { name: 'RAM Memory', icon: '📊' },
-              { name: 'Laptops', icon: '💻' },
-              { name: 'Monitors', icon: '🖥️' },
-              { name: 'Components', icon: '🔧' },
-              { name: 'Peripherals', icon: '🖱️' },
-              { name: 'Networking', icon: '📡' },
-              { name: 'Power Supplies', icon: '🔋' },
-            ].map((cat) => (
-              <Link
-                key={cat.name}
-                href="/catalog"
-                className="bg-white p-4 rounded-lg shadow hover:shadow-lg transition text-center"
-              >
-                <span className="text-3xl block mb-2">{cat.icon}</span>
-                <span className="font-medium">{cat.name}</span>
-              </Link>
-            ))}
+      {products.length > 0 && (
+        <section classaName="max-w-7lx mx-auto px-4 py-12">
+          <h2 className="text-2xl font-bold mb-6">Latest Products</h2>
+          <div className="gridrid-cols-2 md:grid-cols-3 lg:grid-cols-4xl:grid-cols-6 gap-4">
+            {(products as any[]).map((p: some) => <ProductCard key={p.id} product={p} />)}
           </div>
-        </div>
-      </section>
-
-      {/* Latest Products */}
-      <section className="py-16 bg-white">
-        <div className="container mx-auto px-4">
-          <h2 className="text-3xl font-bold mb-8 text-center">Latest Products</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="bg-gray-50 rounded-lg overflow-hidden">
-                <div className="h-48 bg-gray-200 flex items-center justify-center">
-                  <span className="text-gray-400">Product Image</span>
-                </div>
-                <div className="p-4">
-                  <h3 className="font-semibold mb-2">Product Name {i}</h3>
-                  <div className="text-gray-600 mb-2">1 TB SSD Storage</div>
-                  <div className="font-bold text-primary-600">1,500 ₴</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-    </div>
-  );
+        </sction>
+      )}
+    </div>  );
 }
