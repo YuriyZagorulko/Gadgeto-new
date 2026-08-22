@@ -1,0 +1,54 @@
+# Development override for docker-compose.yml
+# Enables hot reload for all services without docker compose build
+#
+# USAGE:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Source code changes on the host are immediately reflected.
+
+services:
+  backend:
+    # Override entrypoint/command to enable reload
+    entrypoint: []
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # Mount source code for hot reload
+    volumes:
+      - ./backend/app:/app/app
+      - ./migrations:/app/migrations
+
+  frontend:
+    # Use dev Dockerfile (installs deps, runs npm run dev)
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+      args:
+        NEXT_PUBLIC_API_URL: "http://backend:8000"
+    # Mount source code, keep node_modules in named volume
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8000
+    # Remove healthcheck dependency for faster startup in dev
+    depends_on:
+      - backend
+
+  admin:
+    # Use dev Dockerfile (installs deps, runs npm run dev)
+    build:
+      context: ./admin
+      dockerfile: Dockerfile.dev
+      args:
+        NEXT_PUBLIC_API_URL: "http://backend:8000"
+    # Mount source code, keep node_modules in named volume
+    volumes:
+      - ./admin:/app
+      - admin_node_modules:/app/node_modules
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8000
+    depends_on:
+      - backend
+
+volumes:
+  frontend_node_modules:
+  admin_node_modules:

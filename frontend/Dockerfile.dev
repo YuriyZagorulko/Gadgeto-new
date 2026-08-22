@@ -1,0 +1,21 @@
+# Development Dockerfile for frontend
+# Installs dependencies once, runs dev server with hot reload
+FROM node:20-alpine
+
+RUN apk add --no-cache libc6-compat
+
+WORKDIR /app
+
+# Copy dependency manifests (layer caching)
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+# Copy config files (rarely change)
+COPY tsconfig.json next.config.js tailwind.config.js postcss.config.js ./
+
+# Dev server
+ENV HOSTNAME="0.0.0.0"
+ENV PORT=3000
+EXPOSE 3000
+
+CMD ["npm", "run", "dev"]

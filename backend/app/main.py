@@ -47,7 +47,7 @@ async def shutdown_event():
 @app.get("/health", tags=["health"])
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "environment": config.settings.ENVIRONMENT}
+    return {"status": "healthy", "environment": config.settings.ENVIRONMENT, "reload_test": "hot_reload_works"}
 
 
 @app.get("/", tags=["root"])
