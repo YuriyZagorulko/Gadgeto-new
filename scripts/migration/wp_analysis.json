@@ -1,0 +1,16 @@
+{
+  "tables": {
+    "posts": 39084,
+    "postmeta": 692925,
+    "terms": 5188,
+    "term_tax": 5188,
+    "term_rel": 0,
+    "attr_tax": 196,
+    "users": 5,
+    "orders": 11
+  },
+  "categories_count": 0,
+  "products_count": 0,
+  "products_by_status": {},
+  "attribute_count": 196
+}
