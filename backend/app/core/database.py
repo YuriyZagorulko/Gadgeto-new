@@ -16,7 +16,7 @@ from app.core.config import settings
 
 # Create async engine
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    str(settings.DATABASE_URL),
     echo=settings.DEBUG,
     pool_pre_ping=True,
     pool_size=10,
@@ -51,8 +51,9 @@ async def get_session() -> AsyncSession:
 
 async def create_tables():
     """Create all tables (useful for testing)."""
-    from app.models import *  # noqa: Import all models
-
+    # Import models registers them with metadata for create_all
+    # Note: import * is only valid at module level, so use explicit import
+    
     async with engine.begin() as conn:
         await conn.run_sync(metadata.create_all)
 
