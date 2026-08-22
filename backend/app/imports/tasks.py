@@ -1,23 +1,17 @@
-"""
-Import tasks for Celery worker.
-"""
+"""Import tasks — direct execution (no Celery/Redis dependency).
+Importers run as normal Python processes, not background tasks."""
 
 import json
 from datetime import datetime
 from typing import Optional
 
-from celery import Celery, signature
-
-from app.core.celery_app import celery_app
-from app.core.config import settings
 from app.imports.itlink import ITLinkImporter
 from app.imports.dclink import DCLinkImporter
 
 
-@celery_app.task(bind=True, max_retries=3)
-def run_import_task(self, supplier_code: str, import_type: str = "full") -> dict:
+def run_import(supplier_code: str, import_type: str = "full") -> dict:
     """
-    Run a supplier import task.
+    Run a supplier import synchronously.
 
     Args:
         supplier_code: 'itlink' or 'dclink'
@@ -43,18 +37,9 @@ def run_import_task(self, supplier_code: str, import_type: str = "full") -> dict
             "stats": stats,
         }
     except Exception as exc:
-        self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
         return {"success": False, "error": str(exc)}
 
 
-@celery_app.task
 def notify_import_complete(import_id: int, stats: dict) -> None:
-    """
-    Notify about import completion.
-
-    Args:
-        import_id: Import job ID
-        stats: Import statistics
-    """
-    # TODO: Send email notification, update import job status, etc.
+    """Placeholder for future email/admin notification."""
     pass

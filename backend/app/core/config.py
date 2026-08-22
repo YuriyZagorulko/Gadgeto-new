@@ -29,9 +29,6 @@ class Settings(BaseSettings):
         default="postgresql+asyncpg://gadgeto:gadgeto@localhost:5432/gadgeto"
     )
 
-    # Redis
-    REDIS_URL: str = Field(default="redis://localhost:6379/0")
-
     # CORS
     CORS_ORIGINS: List[str] = Field(default=["http://localhost:3000"])
 

@@ -10,11 +10,8 @@ asyncpg>=0.30.0
 alembic>=1.14.0
 pgvector>=0.3.0
 
-# Redis
-redis>=5.2.0
 
 # Background jobs
-celery[redis]>=5.4.0
 
 # Pydantic and validation
 pydantic>=2.10.0

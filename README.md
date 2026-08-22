@@ -7,8 +7,8 @@ A production-ready replacement for the legacy Gadgeto WordPress/WooCommerce stor
 ## Architecture
 
 - **Frontend:** Next.js (App Router) + React + TypeScript + Tailwind + shadcn/ui
-- **Backend:** FastAPI + Pydantic + SQLAlchemy 2.x + Alembic + PostgreSQL + Redis
-- **Background jobs:** Celery worker (supplier imports, email, etc.)
+
+
 - **Payments:** LiqPay (backend-verified callbacks)
 - **Delivery:** Nova Poshta API integration
 
