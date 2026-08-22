@@ -30,7 +30,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
-  if (res.status === 401) {
+  // A 401 from the login endpoint itself means invalid credentials,
+  // NOT an expired session — let it fall through to the normal error
+  // handling below so the backend `detail` reaches the form.
+  const isLoginAttempt = path === '/auth/login';
+
+  if (res.status === 401 && !isLoginAttempt) {
     setToken(null);
     if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
       window.location.href = '/login';
