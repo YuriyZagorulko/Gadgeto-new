@@ -28,3 +28,9 @@ def cursor():
     conn = connect()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     return conn, cur
+
+def get_cursor():
+    """Get cursor only (for FastAPI endpoints that close it manually)."""
+    conn = connect()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    return cur

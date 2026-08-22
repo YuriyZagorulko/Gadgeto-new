@@ -6,14 +6,7 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
-from app.core.db_connect import get_cursor as _db
-# DB connection via app.core.db_connect
-
-def get_cursor():
-    
-    conn = psycopg2.connect(DB)
-    conn.autocommit = True
-    return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+from app.core.db_connect import get_cursor, DB
 
 
 @router.get("/categories")
@@ -215,7 +208,7 @@ async def list_products(
     
     query = f"""
         SELECT DISTINCT p.id, p.sku, p.name, p.slug, p.price, p.old_price,
-               p.stock_status, p.stock_qty,
+               p.stock_status, p.stock_qty, p.created_at,
                (SELECT url FROM product_images WHERE product_id = p.id AND is_primary = true LIMIT 1) as image,
                (SELECT c.name FROM product_categories pc2 JOIN categories c ON c.id = pc2.category_id WHERE pc2.product_id = p.id LIMIT 1) as category
         FROM products p
