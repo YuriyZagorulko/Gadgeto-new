@@ -1,25 +1,33 @@
 import Link from 'next/link';
 import ProductCard from '@/components/ProductCard';
 
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://backend:8000').replace(/\/+$/, '');
+
 async function getCategory(slug: string) {
-  const api = process.env.NEXT_PUBLIC_API_URL;
-  const res = await fetch(api + '/api/v1/categories/' + encodeURIComponent(slug));
-  if (!res.ok) return null;
-  return res.json();
+  try {
+    const url = new URL(`/api/v1/categories/${slug}`, API_BASE).toString();
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return res.json();
+  } catch { return null; }
 }
 
 async function getFilters(slug: string) {
-  const api = process.env.NEXT_PUBLIC_API_URL;
-  const res = await fetch(api + '/api/v1/categories/' + encodeURIComponent(slug) + '/filters');
-  if (!res.ok) return null;
-  return res.json();
+  try {
+    const url = new URL(`/api/v1/categories/${slug}/filters`, API_BASE).toString();
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return res.json();
+  } catch { return null; }
 }
 
 async function getProducts(catSlug: string) {
-  const api = process.env.NEXT_PUBLIC_API_URL;
-  const res = await fetch(api + '/api/v1/products?category=' + encodeURIComponent(catSlug) + '&page=1&page_size=24');
-  if (!res.ok) return { items: [], total: 0 };
-  return res.json();
+  try {
+    const url = new URL(`/api/v1/products?category=${encodeURIComponent(catSlug)}&page=1&page_size=24`, API_BASE).toString();
+    const res = await fetch(url);
+    if (!res.ok) return { items: [], total: 0 };
+    return res.json();
+  } catch { return { items: [], total: 0 }; }
 }
 
 export default async function CatalogSlugPage({ params }: { params: Promise<{ slug: string }> }) {

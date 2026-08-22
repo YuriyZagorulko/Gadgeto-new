@@ -3,7 +3,10 @@ import { notFound } from 'next/navigation';
 
 async function getProduct(slug: string) {
   try {
-    const res = await fetch(process.env.NEXT_PUBLIC_API_URL + '/api/v1/products/' + encodeURIComponent(slug), { next: { revalidate: 60 } });
+    // Build URL via URL constructor for correct encoding
+    const base = process.env.NEXT_PUBLIC_API_URL!.replace(/\/+$/, '');
+    const url = new URL(`/api/v1/products/${slug}`, base).toString();
+    const res = await fetch(url, { next: { revalidate: 60 } });
     if (!res.ok) return null;
     return res.json();
   } catch { return null; }

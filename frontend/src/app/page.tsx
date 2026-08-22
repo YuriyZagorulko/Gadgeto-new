@@ -1,12 +1,13 @@
 import Link from 'next/link';
 import ProductCard from '@/components/ProductCard';
 
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://backend:8000').replace(/\/+$/, '');
+
 async function getData() {
-  const api = process.env.NEXT_PUBLIC_API_URL;
   try {
     const [catsRes, prodsRes] = await Promise.all([
-      fetch(api + '/api/v1/categories', { next: { revalidate: 300 } }),
-      fetch(api + '/api/v1/products?page=1&page_size=12', { next: { revalidate: 300 } }),
+      fetch(new URL('/api/v1/categories', API_BASE).toString(), { next: { revalidate: 300 } }),
+      fetch(new URL('/api/v1/products?page=1&page_size=12', API_BASE).toString(), { next: { revalidate: 300 } }),
     ]);
     const cats = await catsRes.json();
     const prods = await prodsRes.json();

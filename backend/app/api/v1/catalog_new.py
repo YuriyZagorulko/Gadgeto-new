@@ -15,7 +15,7 @@ async def list_categories():
     cur = get_cursor()
     cur.execute("""
         SELECT id, name, slug, parent_id, product_count, COALESCE(seo_title, '') as seo_title
-        FROM categories WHERE is_active = true OR is_active IS NULL
+        FROM categories WHERE is_active = true
         ORDER BY COALESCE(sort_order, 0), name
     """)
     cats = cur.fetchall()
@@ -153,7 +153,7 @@ async def list_products(
     """List products with filtering."""
     cur = get_cursor()
     
-    conditions = ["p.is_active = true"]
+    conditions = ["p.is_active = true", "p.is_visible = true", "p.stock_status = 'in_stock'"]
     params = []
     
     if category:
@@ -201,6 +201,7 @@ async def list_products(
     count_query = f"""
         SELECT count(DISTINCT p.id) FROM products p
         LEFT JOIN product_categories pc ON pc.product_id = p.id
+        LEFT JOIN brands b ON b.id = p.brand_id
         WHERE {where}
     """
     cur.execute(count_query, params)
@@ -209,10 +210,12 @@ async def list_products(
     query = f"""
         SELECT DISTINCT p.id, p.sku, p.name, p.slug, p.price, p.old_price,
                p.stock_status, p.stock_qty, p.created_at,
-               (SELECT url FROM product_images WHERE product_id = p.id AND is_primary = true LIMIT 1) as image,
-               (SELECT c.name FROM product_categories pc2 JOIN categories c ON c.id = pc2.category_id WHERE pc2.product_id = p.id LIMIT 1) as category
+               (SELECT url FROM product_images WHERE product_id = p.id ORDER BY sort_order, id LIMIT 1) as image,
+               (SELECT c.name FROM product_categories pc2 JOIN categories c ON c.id = pc2.category_id WHERE pc2.product_id = p.id LIMIT 1) as category,
+               COALESCE(b.name, '') as brand_name
         FROM products p
         LEFT JOIN product_categories pc ON pc.product_id = p.id
+        LEFT JOIN brands b ON b.id = p.brand_id
         WHERE {where}
         ORDER BY {order}
         LIMIT %s OFFSET %s
@@ -231,7 +234,7 @@ async def list_products(
             "price": i["price"] or 0,
             "old_price": i["old_price"],
             "stock_status": i["stock_status"] or "out_of_stock",
-            "brand": "",  
+            "brand": i["brand_name"] or "",  
             "image": i["image"] or "",
             "category": i["category"] or "",
         } for i in items],
@@ -341,7 +344,8 @@ async def search_products(
     # Use full-text search
     cur.execute("""
         SELECT count(*) FROM products
-        WHERE search_vector_tsv @@ plainto_tsquery('simple', %s) AND is_active = true
+        WHERE search_vector_tsv @@ plainto_tsquery('simple', %s)
+          AND is_active = true AND is_visible = true AND stock_status = 'in_stock'
     """, (q,))
     total = cur.fetchone()["count"]
     
@@ -349,15 +353,17 @@ async def search_products(
         # Fallback to trigram
         cur.execute("""
             SELECT count(*) FROM products
-            WHERE lower(name) LIKE lower('%%' || %s || '%%') AND is_active = true
+            WHERE lower(name) LIKE lower('%%' || %s || '%%')
+              AND is_active = true AND is_visible = true AND stock_status = 'in_stock'
         """, (q,))
         total = cur.fetchone()["count"]
         
         cur.execute("""
             SELECT p.id, p.sku, p.name, p.slug, p.price, p.old_price, p.stock_status,
-                   (SELECT url FROM product_images WHERE product_id = p.id AND is_primary = true LIMIT 1) as image
+                   (SELECT url FROM product_images WHERE product_id = p.id ORDER BY sort_order, id LIMIT 1) as image
             FROM products p
-            WHERE lower(p.name) LIKE lower('%%' || %s || '%%') AND p.is_active = true
+            WHERE lower(p.name) LIKE lower('%%' || %s || '%%')
+              AND p.is_active = true AND p.is_visible = true AND p.stock_status = 'in_stock'
             ORDER BY p.price ASC
             LIMIT %s OFFSET %s
         """, (q, page_size, offset))
@@ -365,9 +371,10 @@ async def search_products(
         cur.execute("""
             SELECT p.id, p.sku, p.name, p.slug, p.price, p.old_price, p.stock_status,
                    ts_rank(p.search_vector_tsv, plainto_tsquery('simple', %s)) as rank,
-                   (SELECT url FROM product_images WHERE product_id = p.id AND is_primary = true LIMIT 1) as image
+                   (SELECT url FROM product_images WHERE product_id = p.id ORDER BY sort_order, id LIMIT 1) as image
             FROM products p
-            WHERE p.search_vector_tsv @@ plainto_tsquery('simple', %s) AND p.is_active = true
+            WHERE p.search_vector_tsv @@ plainto_tsquery('simple', %s)
+              AND p.is_active = true AND p.is_visible = true AND p.stock_status = 'in_stock'
             ORDER BY rank DESC
             LIMIT %s OFFSET %s
         """, (q, q, page_size, offset))
