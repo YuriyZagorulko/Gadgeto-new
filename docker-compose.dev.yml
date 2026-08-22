@@ -2,7 +2,15 @@
 # Enables hot reload for all services without docker compose build
 #
 # USAGE:
+#   # First time / after dependency changes:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml build
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+#   # Normal start (no rebuild needed):
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+#   # Stop:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml down
 #
 # Source code changes on the host are immediately reflected.
 
@@ -17,33 +25,31 @@ services:
       - ./migrations:/app/migrations
 
   frontend:
-    # Use dev Dockerfile (installs deps, runs npm run dev)
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev
       args:
         NEXT_PUBLIC_API_URL: "http://backend:8000"
-    # Mount source code, keep node_modules in named volume
+    # Mount source code, keep node_modules and .next in named volumes
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
+      - frontend_next:/app/.next
     environment:
       - NEXT_PUBLIC_API_URL=http://backend:8000
-    # Remove healthcheck dependency for faster startup in dev
     depends_on:
       - backend
 
   admin:
-    # Use dev Dockerfile (installs deps, runs npm run dev)
     build:
       context: ./admin
       dockerfile: Dockerfile.dev
       args:
         NEXT_PUBLIC_API_URL: "http://backend:8000"
-    # Mount source code, keep node_modules in named volume
     volumes:
       - ./admin:/app
       - admin_node_modules:/app/node_modules
+      - admin_next:/app/.next
     environment:
       - NEXT_PUBLIC_API_URL=http://backend:8000
     depends_on:
@@ -51,4 +57,6 @@ services:
 
 volumes:
   frontend_node_modules:
+  frontend_next:
   admin_node_modules:
+  admin_next:
