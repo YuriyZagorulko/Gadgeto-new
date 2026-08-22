@@ -1,113 +1,92 @@
-"""
-Cart API endpoints.
-"""
-
-from fastapi import APIRouter, Depends, HTTPException, Cookie
+"""Cart API - guest and authenticated."""
+import json, secrets
+from fastapi import APIRouter, HTTPException, Cookie, Response
+from pydantic import BaseModel
 from typing import Optional
-from uuid import uuid4
-
-from app.core.database import get_session
-from app.repositories.cart import CartRepository
+from datetime import datetime, timedelta
 
 router = APIRouter()
+DB = "dbname=gadgeto user=gadgeto password=gadgeto host=localhost port=5432"
 
+class CartItemRequest(BaseModel):
+    product_id: int
+    qty: int = 1
 
-def get_session_token(session_token: Optional[str] = Cookie(None)) -> str:
-    """Get or generate session token for guest cart."""
+class CartItemUpdate(BaseModel):
+    qty: int
+
+def get_or_create_cart(cur, session_token: Optional[str] = None, user_id: Optional[int] = None):
     if not session_token:
-        session_token = str(uuid4())
-    return session_token
+        session_token = "guest_" + secrets.token_hex(16)
+    cur.execute("SELECT id FROM carts WHERE session_token = %s OR (user_id = %s AND user_id IS NOT NULL)", (session_token, user_id or 0))
+    cart = cur.fetchone()
+    if cart:
+        return cart["id"], session_token
+    cur.execute("INSERT INTO carts (session_token, user_id, created_at, updated_at) VALUES (%s, %s, NOW(), NOW()) RETURNING id", (session_token, user_id))
+    return cur.fetchone()["id"], session_token
 
+@router.get("/cart")
+async def get_cart(session_token: str = ""):
+    import psycopg2, psycopg2.extras
+    conn = psycopg2.connect(DB)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cart_id, token = get_or_create_cart(cur, session_token)
+    cur.execute("""
+        SELECT ci.id, ci.product_id, ci.qty, ci.price_at_addition, p.name, p.sku, p.price, p.stock_status,
+               (SELECT url FROM product_images WHERE product_id=p.id AND is_primary=true LIMIT 1) as image
+        FROM cart_items ci JOIN products p ON p.id=ci.product_id WHERE ci.cart_id=%s ORDER BY ci.id
+    """, (cart_id,))
+    items = cur.fetchall()
+    subtotal = sum(i["qty"] * (i["price_at_addition"] or i["price"] or 0) for i in items)
+    conn.close()
+    return {"cart_id": cart_id, "session_token": token, "items": items, "subtotal": subtotal}
 
-@router.get("/")
-async def get_cart(
-    session_token: str = Depends(get_session_token),
-    session: AsyncSession = Depends(get_session),
-):
-    """Get or create guest cart."""
-    cart_repo = CartRepository(session)
-    cart = await cart_repo.get_or_create_cart(session_token=session_token)
-
-    items = await cart_repo.get_cart_items(cart.id)
-
-    subtotal = sum(item.price_at_addition * item.qty for item in items)
-
-    return {
-        "cart_id": cart.id,
-        "session_token": session_token,
-        "items": [
-            {
-                "id": item.id,
-                "product_id": item.product_id,
-                "qty": item.qty,
-                "price": item.price_at_addition,
-            }
-            for item in items
-        ],
-        "subtotal": subtotal,
-    }
-
-
-@router.post("/items")
-async def add_to_cart(
-    product_id: int,
-    qty: int = 1,
-    session_token: str = Depends(get_session_token),
-    session: AsyncSession = Depends(get_session),
-):
-    """Add item to cart."""
-    cart_repo = CartRepository(session)
-
-    cart = await cart_repo.get_or_create_cart(session_token=session_token)
-
-    # Get product price (will be implemented)
-    from app.repositories.product import ProductRepository
-    product_repo = ProductRepository(session)
-    product = await product_repo.get_by_id(product_id)
+@router.post("/cart/items")
+async def add_to_cart(req: CartItemRequest, session_token: str = ""):
+    import psycopg2, psycopg2.extras
+    conn = psycopg2.connect(DB)
+    conn.autocommit = True
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cart_id, token = get_or_create_cart(cur, session_token)
+    cur.execute("SELECT id, price, stock_status FROM products WHERE id=%s AND is_active=true", (req.product_id,))
+    product = cur.fetchone()
     if not product:
+        conn.close()
         raise HTTPException(status_code=404, detail="Product not found")
+    if product["stock_status"] == "out_of_stock":
+        conn.close()
+        raise HTTPException(status_code=400, detail="Product is out of stock")
+    cur.execute("SELECT id, qty FROM cart_items WHERE cart_id=%s AND product_id=%s", (cart_id, req.product_id))
+    existing = cur.fetchone()
+    if existing:
+        new_qty = existing["qty"] + req.qty
+        cur.execute("UPDATE cart_items SET qty=%s WHERE id=%s", (new_qty, existing["id"]))
+    else:
+        cur.execute("INSERT INTO cart_items (cart_id, product_id, qty, price_at_addition) VALUES (%s, %s, %s, %s)", (cart_id, req.product_id, req.qty, product["price"]))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "session_token": token}
 
-    cart_item = await cart_repo.add_item(
-        cart_id=cart.id,
-        product_id=product_id,
-        qty=qty,
-        price=product.price,
-    )
+@router.put("/cart/items/{item_id}")
+async def update_cart_item(item_id: int, req: CartItemUpdate):
+    import psycopg2
+    conn = psycopg2.connect(DB)
+    conn.autocommit = True
+    cur = conn.cursor()
+    if req.qty <= 0:
+        cur.execute("DELETE FROM cart_items WHERE id=%s", (item_id,))
+    else:
+        cur.execute("UPDATE cart_items SET qty=%s WHERE id=%s", (req.qty, item_id))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
 
-    return {
-        "id": cart_item.id,
-        "cart_id": cart_item.cart_id,
-        "product_id": cart_item.product_id,
-        "qty": cart_item.qty,
-    }
-
-
-@router.put("/items/{cart_item_id}")
-async def update_cart_item(
-    cart_item_id: int,
-    qty: int,
-    session: AsyncSession = Depends(get_session),
-):
-    """Update cart item quantity."""
-    cart_repo = CartRepository(session)
-    cart_item = await cart_repo.update_item(cart_item_id, qty)
-
-    if not cart_item:
-        raise HTTPException(status_code=404, detail="Cart item not found")
-
-    return {"id": cart_item.id, "qty": cart_item.qty}
-
-
-@router.delete("/items/{cart_item_id}")
-async def remove_from_cart(
-    cart_item_id: int,
-    session: AsyncSession = Depends(get_session),
-):
-    """Remove item from cart."""
-    cart_repo = CartRepository(session)
-    success = await cart_repo.remove_item(cart_item_id)
-
-    if not success:
-        raise HTTPException(status_code=404, detail="Cart item not found")
-
-    return {"deleted": True}
+@router.delete("/cart/items/{item_id}")
+async def remove_cart_item(item_id: int):
+    import psycopg2
+    conn = psycopg2.connect(DB)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM cart_items WHERE id=%s", (item_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
