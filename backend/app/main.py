@@ -62,6 +62,7 @@ async def root():
 
 # Include routers
 app.include_router(api_router, prefix="/api/v1")
+app.include_router(admin_router, prefix="/api/v1")
 
 
 # Exception handlers

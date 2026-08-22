@@ -6,10 +6,13 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
-from passlib.context import CryptContext
+import bcrypt
 
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+from app.core.config import settings
+
+# NOTE: passlib 1.7.4 is incompatible with bcrypt>=4 (passlib's backend
+# detection crashes), so we use the bcrypt library directly. Existing hashes
+# are standard $2b$... and remain fully compatible.
 
 # JWT settings
 ALGORITHM = "HS256"
@@ -18,13 +21,20 @@ REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a password against its bcrypt hash."""
+    try:
+        return bcrypt.checkpw(
+            plain_password.encode("utf-8"), hashed_password.encode("utf-8")
+        )
+    except ValueError:
+        return False
 
 
 def get_password_hash(password: str) -> str:
     """Hash a password."""
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(
+        password.encode("utf-8"), bcrypt.gensalt(rounds=12)
+    ).decode("utf-8")
 
 
 def generate_token() -> str:

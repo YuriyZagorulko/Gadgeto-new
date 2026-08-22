@@ -1,13 +1,16 @@
 """Admin products API."""
 import json, re
-from fastapi import APIRouter, HTTPException, Query
+import psycopg2
+import psycopg2.extras
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 
+from app.api.admin.deps import require_admin
+from app.core.db_connect import DB
+
 
 router = APIRouter()
-from app.core.db_connect import get_cursor as _db
-# DB connection via app.core.db_connect
 
 def db():
     conn = psycopg2.connect(DB); conn.autocommit = True
@@ -31,11 +34,23 @@ class ProductUpdate(BaseModel):
     seo_description: Optional[str] = None
     focus_keyphrase: Optional[str] = None
 
+
+class ProductCreate(ProductUpdate):
+    name: str
+    sku: Optional[str] = None
+
+
+# Must match the DB enum productstatus: {DRAFT, PUBLISHED, HIDDEN, ARCHIVED}
+PRODUCT_STATUSES = ("DRAFT", "PUBLISHED", "HIDDEN", "ARCHIVED")
+STOCK_STATUSES = ("in_stock", "out_of_stock", "pre_order")
+
 @router.get("/products")
 async def list_products(page: int = Query(1,ge=1), per_page: int = Query(20,ge=1,le=100),
     search: Optional[str] = None, category_id: Optional[int] = None,
     brand_id: Optional[int] = None, status: Optional[str] = None,
-    stock: Optional[str] = None):
+    stock: Optional[str] = None,
+    no_image: bool = False, no_price: bool = False,
+    user: dict = Depends(require_admin)):
     conn, cur = db()
     conds, params = ["1=1"], []
     if search:
@@ -50,6 +65,10 @@ async def list_products(page: int = Query(1,ge=1), per_page: int = Query(20,ge=1
         conds.append("p.status=%s"); params.append(status)
     if stock == "in_stock": conds.append("p.stock_status='in_stock'")
     elif stock == "out_of_stock": conds.append("p.stock_status='out_of_stock'")
+    if no_image:
+        conds.append("NOT EXISTS (SELECT 1 FROM product_images pi WHERE pi.product_id=p.id)")
+    if no_price:
+        conds.append("(p.price IS NULL OR p.price = 0)")
     where = " AND ".join(conds)
     offset = (page - 1) * per_page
     cur.execute(f"SELECT count(*) FROM products p WHERE {where}", params)
@@ -68,7 +87,7 @@ async def list_products(page: int = Query(1,ge=1), per_page: int = Query(20,ge=1
             "total_pages": max(1, (total + per_page - 1) // per_page)}
 
 @router.get("/products/{pid}")
-async def get_product(pid: int):
+async def get_product(pid: int, user: dict = Depends(require_admin)):
     conn, cur = db()
     cur.execute("SELECT p.*, b.name as brand_name FROM products p LEFT JOIN brands b ON b.id=p.brand_id WHERE p.id=%s", (pid,))
     p = cur.fetchone()
@@ -88,7 +107,11 @@ async def get_product(pid: int):
     return {"product": p, "categories": cats, "attributes": attrs, "images": imgs}
 
 @router.put("/products/{pid}")
-async def update_product(pid: int, data: ProductUpdate):
+async def update_product(pid: int, data: ProductUpdate, user: dict = Depends(require_admin)):
+    if data.status is not None and data.status not in PRODUCT_STATUSES:
+        raise HTTPException(status_code=400, detail="Невірний статус товару")
+    if data.stock_status is not None and data.stock_status not in STOCK_STATUSES:
+        raise HTTPException(status_code=400, detail="Невірний статус залишку")
     conn, cur = db()
     sets, params = [], []
     for f in ["name","slug","sku","price","old_price","stock_qty","stock_status",
@@ -107,8 +130,76 @@ async def update_product(pid: int, data: ProductUpdate):
     return {"ok": True, "id": pid}
 
 @router.delete("/products/{pid}")
-async def delete_product(pid: int):
+async def delete_product(pid: int, user: dict = Depends(require_admin)):
     conn, cur = db()
-    cur.execute("UPDATE products SET status='archived', is_active=false, updated_at=NOW() WHERE id=%s", (pid,))
+    cur.execute("UPDATE products SET status='ARCHIVED', is_active=false, updated_at=NOW() WHERE id=%s", (pid,))
     conn.close()
     return {"ok": True}
+
+
+def _slugify(name: str) -> str:
+    s = name.strip().lower()
+    s = re.sub(r"[^a-z0-9а-яіїєґё\s-]", "", s)
+    s = re.sub(r"[\s_]+", "-", s).strip("-")
+    return s or "product"
+
+
+@router.post("/products")
+async def create_product(data: ProductCreate, user: dict = Depends(require_admin)):
+    """Create a new product (draft by default)."""
+    if data.status is not None and data.status not in PRODUCT_STATUSES:
+        raise HTTPException(status_code=400, detail="Невірний статус товару")
+    conn, cur = db()
+    try:
+        slug = data.slug or _slugify(data.name)
+        base, i = slug, 2
+        while True:
+            cur.execute("SELECT 1 FROM products WHERE slug=%s", (slug,))
+            if not cur.fetchone():
+                break
+            slug = f"{base}-{i}"; i += 1
+        cur.execute(
+            """INSERT INTO products (name, slug, sku, price, old_price, stock_qty,
+               stock_status, status, description, short_description, brand_id,
+               seo_title, seo_description, focus_keyphrase)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+            (data.name.strip(), slug, data.sku, data.price, data.old_price,
+             data.stock_qty or 0, data.stock_status or "in_stock",
+             data.status or "DRAFT", data.description, data.short_description,
+             data.brand_id, data.seo_title, data.seo_description, data.focus_keyphrase),
+        )
+        pid = cur.fetchone()["id"]
+        for cid in (data.category_ids or []):
+            cur.execute("INSERT INTO product_categories (product_id,category_id) VALUES (%s,%s) ON CONFLICT DO NOTHING", (pid, cid))
+        return {"ok": True, "id": pid, "slug": slug}
+    finally:
+        conn.close()
+
+
+class BulkAction(BaseModel):
+    ids: List[int]
+    action: str  # publish | hide | archive | activate | deactivate
+
+
+@router.post("/products/bulk")
+async def bulk_action(data: BulkAction, user: dict = Depends(require_admin)):
+    """Bulk status change for products."""
+    actions = {
+        "publish": ("status='PUBLISHED', is_active=true",),
+        "hide": ("status='HIDDEN'",),
+        "archive": ("status='ARCHIVED', is_active=false",),
+        "activate": ("is_active=true",),
+        "deactivate": ("is_active=false",),
+    }
+    if data.action not in actions or not data.ids:
+        raise HTTPException(status_code=400, detail="Невірна дія")
+    conn, cur = db()
+    try:
+        cur.execute(
+            f"UPDATE products SET {actions[data.action][0]}, updated_at=NOW() WHERE id = ANY(%s)",
+            (data.ids,),
+        )
+        return {"ok": True, "updated": cur.rowcount}
+    finally:
+        conn.close()
+

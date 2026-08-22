@@ -1,38 +1,72 @@
 """Admin dashboard API - real PostgreSQL data."""
-from fastapi import APIRouter
+import psycopg2
+import psycopg2.extras
+from fastapi import APIRouter, Depends
 
+from app.api.admin.deps import require_admin
+from app.core.db_connect import DB
 
 router = APIRouter()
-from app.core.db_connect import get_cursor as _db
-# DB connection via app.core.db_connect
 
-@router.get("/dashboard")
-async def dashboard():
-    conn = psycopg2.connect(DB)
+
+def db():
+    conn = psycopg2.connect(DB); conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    
-    results = {}
-    
-    cur.execute("SELECT count(*) FROM products"); results["total_products"] = cur.fetchone()["count"]
-    cur.execute("SELECT count(*) FROM products WHERE status='PUBLISHED'"); results["published"] = cur.fetchone()["count"]
-    cur.execute("SELECT count(*) FROM products WHERE is_active=false"); results["inactive"] = cur.fetchone()["count"]
-    cur.execute("SELECT count(*) FROM products WHERE stock_status='in_stock'"); results["in_stock"] = cur.fetchone()["count"]
-    cur.execute("SELECT count(*) FROM products WHERE stock_status='out_of_stock'"); results["out_of_stock"] = cur.fetchone()["count"]
-    cur.execute("SELECT count(*) FROM categories"); results["categories"] = cur.fetchone()["count"]
-    cur.execute("SELECT count(*) FROM attributes"); results["attributes"] = cur.fetchone()["count"]
-    cur.execute("SELECT count(*) FROM attribute_values"); results["attribute_values"] = cur.fetchone()["count"]
-    cur.execute("SELECT count(*) FROM brands"); results["brands"] = cur.fetchone()["count"]
-    cur.execute("SELECT count(*) FROM product_images"); results["images"] = cur.fetchone()["count"]
-    cur.execute("SELECT count(*) FROM product_categories"); results["product_categories"] = cur.fetchone()["count"]
-    cur.execute("SELECT count(*) FROM product_attributes"); results["product_attributes"] = cur.fetchone()["count"]
-    cur.execute("SELECT count(*) FROM category_filters"); results["category_filters"] = cur.fetchone()["count"]
-    cur.execute("SELECT count(*) FROM suppliers"); results["suppliers"] = cur.fetchone()["count"]
-    
-    # Products without images
-    cur.execute("SELECT count(*) FROM products WHERE id NOT IN (SELECT DISTINCT product_id FROM product_images)"); results["no_images"] = cur.fetchone()["count"]
-    
-    # Products without categories
-    cur.execute("SELECT count(*) FROM products WHERE id NOT IN (SELECT DISTINCT product_id FROM product_categories)"); results["no_categories"] = cur.fetchone()["count"]
-    
-    conn.close()
-    return results
+    return conn, cur
+
+
+def _count(cur, sql):
+    cur.execute(sql)
+    return cur.fetchone()["count"]
+
+
+@router.get("/dashboard/stats")
+async def stats(user: dict = Depends(require_admin)):
+    conn, cur = db()
+    try:
+        products = {
+            "total": _count(cur, "SELECT count(*) FROM products"),
+            "active": _count(cur, "SELECT count(*) FROM products WHERE status='PUBLISHED' AND is_active=true"),
+            "without_images": _count(cur, "SELECT count(*) FROM products p WHERE NOT EXISTS (SELECT 1 FROM product_images pi WHERE pi.product_id=p.id)"),
+            "without_price": _count(cur, "SELECT count(*) FROM products WHERE price IS NULL OR price=0"),
+            "out_of_stock": _count(cur, "SELECT count(*) FROM products WHERE stock_status='out_of_stock'"),
+        }
+        catalog = {
+            "categories": _count(cur, "SELECT count(*) FROM categories"),
+            "brands": _count(cur, "SELECT count(*) FROM brands"),
+            "attributes": _count(cur, "SELECT count(*) FROM attributes"),
+        }
+        orders = {
+            "total": _count(cur, "SELECT count(*) FROM orders"),
+            "pending": _count(cur, "SELECT count(*) FROM orders WHERE status='PENDING'"),
+            "processing": _count(cur, "SELECT count(*) FROM orders WHERE status='PROCESSING'"),
+            "completed": _count(cur, "SELECT count(*) FROM orders WHERE status IN ('SHIPPED','DELIVERED')"),
+            "cancelled": _count(cur, "SELECT count(*) FROM orders WHERE status='CANCELLED'"),
+        }
+        imports = {
+            "total": _count(cur, "SELECT count(*) FROM import_jobs"),
+            "running": _count(cur, "SELECT count(*) FROM import_jobs WHERE status IN ('QUEUED','RUNNING')"),
+            "failed": _count(cur, "SELECT count(*) FROM import_jobs WHERE status='FAILED'"),
+        }
+
+        cur.execute("""SELECT number, buyer_name, email, total_amount, status,
+                       payment_status, created_at FROM orders
+                       ORDER BY created_at DESC LIMIT 8""")
+        recent_orders = cur.fetchall()
+
+        cur.execute("""SELECT j.id, j.status, j.import_type, j.started_at, j.finished_at,
+                       s.name AS supplier_name
+                       FROM import_jobs j LEFT JOIN suppliers s ON s.id=j.supplier_id
+                       ORDER BY j.id DESC LIMIT 5""")
+        recent_imports = cur.fetchall()
+
+        cur.execute("SELECT COALESCE(sum(total_amount),0) AS revenue FROM orders "
+                    "WHERE status IN ('PAID','SHIPPED','DELIVERED')")
+        revenue = cur.fetchone()["revenue"]
+
+        return {"products": products, "catalog": catalog, "orders": orders,
+                "imports": imports, "revenue": revenue,
+                "recent_orders": recent_orders, "recent_imports": recent_imports}
+    finally:
+        conn.close()
+

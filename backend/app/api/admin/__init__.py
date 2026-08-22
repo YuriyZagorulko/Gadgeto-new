@@ -1,7 +1,7 @@
 """Admin API routes."""
 from fastapi import APIRouter
 from . import auth, products, categories, attributes, filters, brands
-from . import suppliers, mappings, imports, orders, users, dashboard
+from . import suppliers, mappings, imports, orders, users, dashboard, settings
 
 router = APIRouter(prefix="/admin")
 router.include_router(auth.router, prefix="/auth", tags=["admin-auth"])
@@ -16,3 +16,4 @@ router.include_router(imports.router, prefix="", tags=["admin-imports"])
 router.include_router(orders.router, prefix="", tags=["admin-orders"])
 router.include_router(users.router, prefix="", tags=["admin-users"])
 router.include_router(dashboard.router, prefix="", tags=["admin-dashboard"])
+router.include_router(settings.router, prefix="", tags=["admin-settings"])

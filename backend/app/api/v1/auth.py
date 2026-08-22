@@ -1,8 +1,13 @@
 """Customer authentication API (separate from admin auth)."""
 import secrets, hashlib
+
+import psycopg2
+import psycopg2.extras
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+
+from app.core.db_connect import DB
 
 router = APIRouter()
 from app.core.db_connect import get_cursor as _db
