@@ -56,3 +56,6 @@ Thumbs.db
 
 # IDE-specific
 .DS_Store
+
+# Persistent uploaded media
+data/

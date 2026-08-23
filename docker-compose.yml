@@ -12,6 +12,10 @@ services:
       - SECRET_KEY=dev-secret-key-change-me
       - ENVIRONMENT=development
       - CORS_ORIGINS=["http://localhost:3000", "http://localhost:3001"]
+      - MEDIA_DIR=/app/media
+    volumes:
+      # Persistent uploaded media storage (survives container recreation)
+      - ./data/media:/app/media
     ports:
       - "8000:8000"
     healthcheck:

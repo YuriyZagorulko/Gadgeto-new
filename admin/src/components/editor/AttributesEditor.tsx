@@ -38,7 +38,7 @@ export default function AttributesEditor({ rows, allAttributes, attrValuesByAttr
 
   return (
     <div className="space-y-3">
-      <div className="overflow-x-auto rounded-lg border border-gray-700">
+            <div className="overflow-x-auto rounded-lg border border-blue-200/50">
         <table className="w-full text-sm">
           <thead className="bg-gray-800/60 text-left text-gray-300">
             <tr>
@@ -56,7 +56,7 @@ export default function AttributesEditor({ rows, allAttributes, attrValuesByAttr
               </tr>
             )}
             {rows.map((r) => (
-              <tr key={r.key} className="border-t border-gray-700/60">
+                            <tr key={r.key} className="border-t border-blue-100/60">
                 <td className="px-3 py-2 align-top">
                   <select
                     className="input-field w-full"

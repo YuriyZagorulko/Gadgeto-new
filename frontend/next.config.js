@@ -13,6 +13,11 @@ const nextConfig = {
         source: '/api/:path*',
         destination: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/:path*`,
       },
+      {
+        // Serve uploaded media through the backend static mount
+        source: '/media/:path*',
+        destination: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/media/:path*`,
+      },
     ];
   },
   async headers() {

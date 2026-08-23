@@ -64,7 +64,7 @@ export default function ReviewsEditor({
       {reviews.map((r) => {
         const isPending = r.status === 'pending';
         return (
-          <div key={r.key} className="rounded-lg border border-gray-700 bg-gray-900 p-4 space-y-3">
+                    <div key={r.key} className="rounded-lg border border-blue-200/60 bg-blue-50/60 p-4 space-y-3">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-2">
                 <span className="text-yellow-400 text-sm">{'★'.repeat(r.rating)}{'☆'.repeat(5 - r.rating)}</span>

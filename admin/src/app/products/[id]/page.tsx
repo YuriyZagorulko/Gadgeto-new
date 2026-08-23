@@ -26,7 +26,7 @@ function Field({ label, children, hint }: { label: string; children: React.React
   );
 }
 
-const inputCls = 'w-full rounded border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500';
+const inputCls = 'w-full rounded-lg border border-blue-200/50 bg-white/80 px-3 py-3 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400';
 
 function Card({ title, children }: { title?: string; children: React.ReactNode }) {
   return (

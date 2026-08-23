@@ -32,6 +32,13 @@ app.add_middleware(
 )
 
 # Serve uploaded media files
+import mimetypes
+# Ensure modern image formats are served with correct Content-Type
+# (slim Python images may lack these in /etc/mime.types)
+mimetypes.add_type("image/webp", ".webp")
+mimetypes.add_type("image/avif", ".avif")
+mimetypes.add_type("image/svg+xml", ".svg")
+
 media_dir = config.settings.MEDIA_DIR
 os.makedirs(media_dir, exist_ok=True)
 app.mount("/media", StaticFiles(directory=media_dir), name="media")

@@ -6,6 +6,8 @@ const nextConfig = {
   async rewrites() {
     return [
       { source: '/api/:path*', destination: `${API_URL}/api/v1/admin/:path*` },
+      // Serve uploaded media through the backend static mount
+      { source: '/media/:path*', destination: `${API_URL}/media/:path*` },
     ];
   },
 };

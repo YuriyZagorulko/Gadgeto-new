@@ -444,23 +444,18 @@ async def upload_image(
     file: UploadFile = File(...),
     user: dict = Depends(require_admin),
 ):
-    if file.content_type not in ALLOWED_MIME:
-        raise HTTPException(400, "Дозволено лише JPG, PNG, WEBP")
+    """Upload an image, register it in the Media Library and attach to product."""
+    from app.api.admin.media import detect_mime, save_upload
+
     body = await file.read()
-    if len(body) > MAX_SIZE:
+    if len(body) > 10 * 1024 * 1024:
         raise HTTPException(400, "Файл завеликий (макс. 10 MB)")
+    mime = detect_mime(body)
+    if not mime:
+        raise HTTPException(400, "Дозволено лише JPG, PNG, WEBP або GIF зображення")
 
-    from app.core.config import settings
-    ext = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[file.content_type]
-    filename = f"{uuid.uuid4().hex}{ext}"
-    rel_path = f"products/{filename}"
-    abs_path = os.path.join(settings.MEDIA_DIR, rel_path)
-    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-    with open(abs_path, "wb") as f:
-        f.write(body)
-
-    base_url = (settings.MEDIA_BASE_URL or "/media").rstrip("/")
-    url = f"{base_url}/{rel_path}"
+    # Creates media_files record + physical file (shared Media Library entry)
+    media = save_upload(body, mime)
 
     conn, cur = db()
     try:
@@ -470,11 +465,12 @@ async def upload_image(
         cur.execute("SELECT COUNT(*) AS cnt FROM product_images WHERE product_id=%s AND is_primary=true", (product_id,))
         has_primary = cur.fetchone()["cnt"] > 0
         cur.execute(
-            "INSERT INTO product_images (product_id, url, sort_order, is_primary) VALUES (%s,%s,%s,%s) RETURNING id",
-            (product_id, url, max_order + 1, not has_primary),
+            "INSERT INTO product_images (product_id, url, sort_order, is_primary, media_id) "
+            "VALUES (%s,%s,%s,%s,%s) RETURNING id",
+            (product_id, media["url"], max_order + 1, not has_primary, media["id"]),
         )
         img_id = cur.fetchone()["id"]
-        return {"ok": True, "id": img_id, "url": url}
+        return {"ok": True, "id": img_id, "media_id": media["id"], "url": media["url"]}
     finally:
         conn.close()
 
