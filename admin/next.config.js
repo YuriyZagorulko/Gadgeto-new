@@ -9,6 +9,15 @@ if (process.env.NODE_ENV !== 'production') {
 
 const nextConfig = {
   output: 'standalone',
+  // Allow overriding the build dir (e.g. when .next is owned by the Docker dev container).
+  distDir: process.env.NEXT_DIST_DIR || '.next',
+  async redirects() {
+    return [
+      // Suppliers/mappings moved under the "Імпорт" section (admin sidebar).
+      { source: '/mappings', destination: '/imports/mappings', permanent: false },
+      { source: '/suppliers', destination: '/imports/suppliers', permanent: false },
+    ];
+  },
   async rewrites() {
     return [
       { source: '/api/:path*', destination: `${API_URL}/api/v1/admin/:path*` },

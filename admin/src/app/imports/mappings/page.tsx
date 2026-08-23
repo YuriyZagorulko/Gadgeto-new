@@ -1,27 +1,48 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api, qs } from '@/lib/api';
-import { PageHeader, Button, Input, Select, Table, Th, Td, Badge, LoadingState, ErrorState, EmptyState, Modal, ConfirmDialog, useToast } from '@/components/ui';
+import { PageHeader, Button, Input, Select, Table, Th, Td, Badge, LoadingState, ErrorState, EmptyState, Pagination, Modal, ConfirmDialog, useToast } from '@/components/ui';
 
-type Kind = 'categories' | 'attributes' | 'values';
+type Kind = 'attributes' | 'values' | 'categories';
 const KIND_LABELS: Record<Kind, string> = {
-  categories: 'Категорії', attributes: 'Атрибути', values: 'Значення',
+  attributes: 'Маппінг атрибутів',
+  values: 'Маппінг значень атрибутів',
+  categories: 'Маппінг категорій',
 };
 const PICKER_PATH: Record<Kind, string> = {
   categories: '/mappings/supplier-categories',
   attributes: '/mappings/supplier-attributes',
   values: '/mappings/supplier-values',
 };
+// Field names returned by GET /mappings/{kind} (see backend _KINDS map).
+const SUPPLIER_FK: Record<Kind, string> = {
+  categories: 'supplier_category_id',
+  attributes: 'supplier_attribute_id',
+  values: 'supplier_attribute_value_id',
+};
+const CATALOG_FK: Record<Kind, string> = {
+  categories: 'category_id',
+  attributes: 'attribute_id',
+  values: 'attribute_value_id',
+};
 
-type MappingRow = { id: number; is_active: boolean; supplier_name: string; catalog_name: string | null };
+type MappingRow = {
+  id: number;
+  is_active: boolean;
+  supplier_name: string;
+  catalog_name: string | null;
+} & Partial<Record<string, number | null>>;
 type SupplierItem = { id: number; supplier_name?: string; supplier_value?: string };
 type Opt = { id: number; name: string };
 type ValueOpt = { id: number; value: string };
 
+type SortKey = 'id' | 'supplier' | 'catalog' | 'status';
+type SortDir = 'asc' | 'desc';
+
 export default function MappingsPage() {
   const toast = useToast();
-  const [kind, setKind] = useState<Kind>('categories');
+  const [kind, setKind] = useState<Kind>('attributes');
   const [supplierId, setSupplierId] = useState('');
   const [q, setQ] = useState('');
   const [appliedQ, setAppliedQ] = useState('');
@@ -31,16 +52,23 @@ export default function MappingsPage() {
 
   const [maps, setMaps] = useState<MappingRow[]>([]);
   const [mapTotal, setMapTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(20);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [tick, setTick] = useState(0);
+
+  // Client-side sorting of the loaded page.
+  const [sortKey, setSortKey] = useState<SortKey>('id');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
 
   const [items, setItems] = useState<SupplierItem[]>([]);
   const [itemsLoading, setItemsLoading] = useState(false);
   const [itemsQ, setItemsQ] = useState('');
 
-  // Mapping modal
+  // Mapping modal (create from the picker or edit an existing row)
   const [mappingItem, setMappingItem] = useState<SupplierItem | null>(null);
+  const [editing, setEditing] = useState<MappingRow | null>(null);
   const [targetAttrId, setTargetAttrId] = useState('');   // for values kind
   const [targetId, setTargetId] = useState('');
   const [targetValues, setTargetValues] = useState<ValueOpt[]>([]);
@@ -58,13 +86,40 @@ export default function MappingsPage() {
     let cancelled = false;
     setLoading(true); setError('');
     api.get<{ items: MappingRow[]; total: number }>(`/mappings/${kind}` + qs({
-      page: 1, per_page: 50, supplier_id: supplierId || undefined, q: appliedQ || undefined,
+      page, per_page: perPage, supplier_id: supplierId || undefined, q: appliedQ || undefined,
     }))
       .then((d) => { if (!cancelled) { setMaps(d.items || []); setMapTotal(d.total); } })
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, [kind, supplierId, appliedQ, tick]);
+  }, [kind, supplierId, appliedQ, page, perPage, tick]);
+
+  // Filters changed — go back to the first page.
+  useEffect(() => { setPage(1); }, [kind, supplierId, appliedQ]);
+
+  const sortedMaps = useMemo(() => {
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const val = (m: MappingRow): string | number => {
+      switch (sortKey) {
+        case 'id': return m.id;
+        case 'supplier': return (m.supplier_name || '').toLowerCase();
+        case 'catalog': return (m.catalog_name || '').toLowerCase();
+        case 'status': return m.is_active ? 1 : 0;
+      }
+    };
+    return [...maps].sort((a, b) => {
+      const av = val(a);
+      const bv = val(b);
+      if (av < bv) return -dir;
+      if (av > bv) return dir;
+      return a.id - b.id; // stable tiebreaker
+    });
+  }, [maps, sortKey, sortDir]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -80,8 +135,21 @@ export default function MappingsPage() {
   }, [kind, supplierId, itemsQ]);
 
   const openMapping = (item: SupplierItem) => {
+    setEditing(null);
     setMappingItem(item);
     setTargetId(''); setTargetAttrId(''); setTargetValues([]);
+  };
+
+  const openEdit = (m: MappingRow) => {
+    setMappingItem(null);
+    setEditing(m);
+    setTargetId(String(m[CATALOG_FK[kind]] ?? ''));
+    setTargetAttrId(''); setTargetValues([]);
+  };
+
+  const closeMappingModal = () => {
+    setMappingItem(null);
+    setEditing(null);
   };
 
   const loadCatalogValues = async (attrId: string) => {
@@ -94,22 +162,27 @@ export default function MappingsPage() {
   };
 
   const saveMapping = async () => {
-    const catalogItemId = kind === 'values' ? Number(targetId) : Number(targetId);
-    if (!mappingItem) return;
+    const catalogItemId = Number(targetId);
     if (kind !== 'values' && !catalogItemId) { toast.push('error', 'Оберіть об\'єкт каталогу'); return; }
     if (kind === 'values' && !catalogItemId) { toast.push('error', 'Оберіть значення каталогу'); return; }
     setSaving(true);
     try {
-      await api.post(`/mappings/${kind}`, {
-        supplier_item_id: mappingItem.id,
-        catalog_item_id: catalogItemId,
-        is_active: true,
-      });
-      toast.push('success', 'Відповідність збережено');
-      setMappingItem(null);
+      if (editing) {
+        await api.put(`/mappings/${kind}/${editing.id}`, { catalog_item_id: catalogItemId });
+        toast.push('success', 'Відповідність оновлено');
+      } else {
+        if (!mappingItem) return;
+        await api.post(`/mappings/${kind}`, {
+          supplier_item_id: mappingItem.id,
+          catalog_item_id: catalogItemId,
+          is_active: true,
+        });
+        toast.push('success', 'Відповідність збережено');
+        // refresh picker list
+        setItems((prev) => prev.filter((i) => i.id !== mappingItem.id));
+      }
+      closeMappingModal();
       setTick((t) => t + 1);
-      // refresh picker list
-      setItems((prev) => prev.filter((i) => i.id !== mappingItem.id));
     } catch (e: unknown) {
       toast.push('error', (e as Error).message);
     } finally { setSaving(false); }
@@ -140,7 +213,7 @@ export default function MappingsPage() {
 
   return (
     <div>
-      <PageHeader title="Відповідності" />
+      <PageHeader title="Маппінг" />
 
       {/* Tabs */}
       <div className="flex gap-1 mb-4 border-b border-gray-200">
@@ -181,22 +254,60 @@ export default function MappingsPage() {
           {!error && loading && <LoadingState />}
           {!error && !loading && maps.length === 0 && <EmptyState title="Відповідностей немає" hint="Прив'яжіть записи постачальника праворуч." />}
           {!error && maps.length > 0 && (
-            <Table head={<tr><Th>Постачальник</Th><Th>Каталог</Th><Th>Стан</Th><Th className="w-24"></Th></tr>}>
-              {maps.map((m) => (
-                <tr key={m.id} className="hover:bg-gray-50">
-                  <Td className="text-sm">{m.supplier_name}</Td>
-                  <Td className="text-sm">{m.catalog_name || <span className="text-gray-400">—</span>}</Td>
-                  <Td>
-                    <button onClick={() => toggleActive(m)} className="cursor-pointer" title="Перемкнути">
-                      <Badge tone={m.is_active ? 'green' : 'gray'}>{m.is_active ? 'Активна' : 'Вимкнена'}</Badge>
+            <>
+              <Table head={
+                <tr>
+                  <Th>
+                    <button type="button" onClick={() => toggleSort('id')} className="inline-flex items-center gap-1 uppercase tracking-wide hover:text-gray-800">
+                      #<span className="text-[10px]" aria-hidden>{sortKey === 'id' ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}</span>
                     </button>
-                  </Td>
-                  <Td>
-                    <Button size="sm" variant="ghost" className="text-red-600" onClick={() => setDeleting(m)}>✕</Button>
-                  </Td>
+                  </Th>
+                  <Th>
+                    <button type="button" onClick={() => toggleSort('supplier')} className="inline-flex items-center gap-1 uppercase tracking-wide hover:text-gray-800">
+                      Постачальник<span className="text-[10px]" aria-hidden>{sortKey === 'supplier' ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </Th>
+                  <Th>
+                    <button type="button" onClick={() => toggleSort('catalog')} className="inline-flex items-center gap-1 uppercase tracking-wide hover:text-gray-800">
+                      Каталог<span className="text-[10px]" aria-hidden>{sortKey === 'catalog' ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </Th>
+                  <Th>
+                    <button type="button" onClick={() => toggleSort('status')} className="inline-flex items-center gap-1 uppercase tracking-wide hover:text-gray-800">
+                      Стан<span className="text-[10px]" aria-hidden>{sortKey === 'status' ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </Th>
+                  <Th className="w-28"></Th>
                 </tr>
-              ))}
-            </Table>
+              }>
+                {sortedMaps.map((m) => (
+                  <tr key={m.id} className="hover:bg-gray-50">
+                    <Td className="font-mono text-xs text-gray-400">{m.id}</Td>
+                    <Td className="text-sm">{m.supplier_name}</Td>
+                    <Td className="text-sm">{m.catalog_name || <span className="text-gray-400">—</span>}</Td>
+                    <Td>
+                      <button onClick={() => toggleActive(m)} className="cursor-pointer" title="Перемкнути">
+                        <Badge tone={m.is_active ? 'green' : 'gray'}>{m.is_active ? 'Активна' : 'Вимкнена'}</Badge>
+                      </button>
+                    </Td>
+                    <Td>
+                      <div className="flex gap-1">
+                        <Button size="sm" variant="secondary" onClick={() => openEdit(m)}>Змінити</Button>
+                        <Button size="sm" variant="ghost" className="text-red-600" onClick={() => setDeleting(m)}>✕</Button>
+                      </div>
+                    </Td>
+                  </tr>
+                ))}
+              </Table>
+              <Pagination
+                page={page}
+                pages={Math.max(1, Math.ceil(mapTotal / perPage))}
+                total={mapTotal}
+                onPage={(p) => setPage(p)}
+                pageSize={perPage}
+                onPageSizeChange={(n) => { setPerPage(n); setPage(1); }}
+              />
+            </>
           )}
         </section>
 
@@ -228,13 +339,17 @@ export default function MappingsPage() {
         </section>
       </div>
 
-      {/* Mapping modal */}
-      <Modal open={!!mappingItem} title="Нова відповідність" onClose={() => setMappingItem(null)}>
+      {/* Mapping modal (create / edit) */}
+      <Modal
+        open={!!mappingItem || !!editing}
+        title={editing ? `Редагувати відповідність #${editing.id}` : 'Нова відповідність'}
+        onClose={closeMappingModal}
+      >
         <div className="space-y-4">
           <div>
             <label className="block text-xs text-gray-500 mb-1">Запис постачальника</label>
             <div className="text-sm font-medium bg-gray-50 border border-gray-100 rounded px-3 py-2">
-              {mappingItem ? itemLabel(mappingItem) : ''}
+              {editing ? editing.supplier_name : mappingItem ? itemLabel(mappingItem) : ''}
             </div>
           </div>
 
@@ -273,8 +388,8 @@ export default function MappingsPage() {
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" onClick={() => setMappingItem(null)}>Скасувати</Button>
-            <Button loading={saving} onClick={saveMapping}>Зберегти</Button>
+            <Button variant="secondary" onClick={closeMappingModal}>Скасувати</Button>
+            <Button loading={saving} onClick={saveMapping}>{editing ? 'Зберегти зміни' : 'Зберегти'}</Button>
           </div>
         </div>
       </Modal>

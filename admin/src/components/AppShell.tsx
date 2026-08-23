@@ -6,20 +6,49 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from './AuthProvider';
 import { LoadingState } from './ui';
 
-const navItems = [
+type NavChild = { href: string; label: string };
+type NavItem = {
+  href?: string;
+  label: string;
+  icon: string;
+  children?: NavChild[];
+};
+
+const navItems: NavItem[] = [
   { href: '/dashboard', label: 'Панель керування', icon: '📊' },
   { href: '/products', label: 'Товари', icon: '📦' },
   { href: '/categories', label: 'Категорії', icon: '📁' },
   { href: '/attributes', label: 'Атрибути', icon: '🏷️' },
   { href: '/brands', label: 'Бренди', icon: '™️' },
-  { href: '/suppliers', label: 'Постачальники', icon: '🚚' },
   { href: '/filters', label: 'Фільтри', icon: '🔽' },
-  { href: '/mappings', label: 'Відповідності', icon: '🔗' },
-  { href: '/imports', label: 'Імпорти', icon: '📥' },
+  {
+    label: 'Імпорт',
+    icon: '📥',
+    children: [
+      { href: '/imports/mappings', label: 'Маппінг' },
+      { href: '/imports/suppliers', label: 'Постачальники' },
+    ],
+  },
   { href: '/orders', label: 'Замовлення', icon: '🧾' },
   { href: '/users', label: 'Користувачі', icon: '👤' },
-  { href: '/settings', label: 'Налаштування', icon: '⚙️' },
+  {
+    label: 'Налаштування',
+    icon: '⚙️',
+    children: [
+      { href: '/settings/global-actions', label: 'Глобальні дії' },
+    ],
+  },
 ];
+
+/** Routes that are reachable by URL but no longer have their own menu entry. */
+const LEGACY_LABELS: Record<string, string> = {
+  '/imports': 'Імпорт — історія завдань',
+  '/settings': 'Налаштування',
+};
+
+function isActivePath(href: string, pathname: string): boolean {
+  return pathname === href || pathname.startsWith(href + '/');
+}
 
 /**
  * Authenticated application shell: responsive sidebar, header with the
@@ -31,6 +60,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  // Collapsible menu groups (label → expanded). Groups whose child page is
+  // active are expanded automatically (also on direct URL load / refresh).
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   const isLoginPage = pathname === '/login';
 
@@ -40,6 +72,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // Close the mobile menu on navigation.
   useEffect(() => setMenuOpen(false), [pathname]);
+
+  // Keep the parent of the active child page expanded.
+  useEffect(() => {
+    const group = navItems.find((i) => i.children?.some((c) => isActivePath(c.href, pathname)));
+    if (group) setOpenGroups((prev) => (prev[group.label] ? prev : { ...prev, [group.label]: true }));
+  }, [pathname]);
 
   if (!ready) {
     return (
@@ -58,25 +96,83 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     await logout();
   };
 
+  // Header label: prefer the most specific nav entry (children included),
+  // falling back to legacy route labels.
+  const flatNav = navItems.flatMap((i) =>
+    i.children ? i.children.map((c) => c) : [{ href: i.href as string, label: i.label }],
+  );
+  const legacyLabel =
+    Object.entries(LEGACY_LABELS)
+      .sort((a, b) => b[0].length - a[0].length)
+      .find(([href]) => isActivePath(href, pathname))?.[1];
   const activeLabel =
-    [...navItems].sort((a, b) => b.href.length - a.href.length).find((i) => pathname.startsWith(i.href))?.label ||
+    [...flatNav].sort((a, b) => b.href.length - a.href.length).find((i) => isActivePath(i.href, pathname))?.label ||
+    legacyLabel ||
     'Панель керування';
 
   const sidebar = (
     <nav className="flex-1 overflow-y-auto py-2" aria-label="Розділи адмінпанелі">
       {navItems.map((item) => {
-        const active = pathname === item.href || pathname.startsWith(item.href + '/');
+        if (!item.children) {
+          const active = isActivePath(item.href as string, pathname);
+          return (
+            <Link
+              key={item.label}
+              href={item.href as string}
+              className={`flex items-center gap-3 px-5 py-2.5 text-sm transition-colors ${
+                active ? 'bg-blue-600 text-white font-medium' : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+              }`}
+            >
+              <span className="text-base w-5 text-center">{item.icon}</span>
+              <span>{item.label}</span>
+            </Link>
+          );
+        }
+
+        // Expandable/collapsible group (e.g. Імпорт, Налаштування).
+        const groupActive = item.children.some((c) => isActivePath(c.href, pathname));
+        const open = !!openGroups[item.label];
         return (
-          <Link
-            key={item.href}
-            href={item.href}
-            className={`flex items-center gap-3 px-5 py-2.5 text-sm transition-colors ${
-              active ? 'bg-blue-600 text-white font-medium' : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-            }`}
-          >
-            <span className="text-base w-5 text-center">{item.icon}</span>
-            <span>{item.label}</span>
-          </Link>
+          <div key={item.label}>
+            <button
+              type="button"
+              onClick={() => setOpenGroups((prev) => ({ ...prev, [item.label]: !prev[item.label] }))}
+              aria-expanded={open}
+              className={`w-full flex items-center gap-3 px-5 py-2.5 text-sm transition-colors ${
+                groupActive ? 'text-white' : 'text-gray-300'
+              } hover:bg-gray-800 hover:text-white`}
+            >
+              <span className="text-base w-5 text-center">{item.icon}</span>
+              <span className="flex-1 text-left">{item.label}</span>
+              <span
+                className={`text-[10px] text-gray-400 transition-transform ${open ? 'rotate-90' : ''}`}
+                aria-hidden
+              >
+                ▶
+              </span>
+            </button>
+            {open && (
+              <div>
+                {item.children.map((child) => {
+                  const childActive = isActivePath(child.href, pathname);
+                  return (
+                    <Link
+                      key={child.href}
+                      href={child.href}
+                      aria-current={childActive ? 'page' : undefined}
+                      className={`flex items-center gap-3 pl-12 pr-5 py-2 text-sm transition-colors ${
+                        childActive
+                          ? 'bg-blue-600 text-white font-medium'
+                          : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+                      }`}
+                    >
+                      <span>{child.label}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         );
       })}
     </nav>

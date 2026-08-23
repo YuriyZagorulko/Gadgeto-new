@@ -5,8 +5,7 @@ import json
 from datetime import datetime
 from typing import Optional
 
-from app.imports.itlink import ITLinkImporter
-from app.imports.dclink import DCLinkImporter
+from app.imports.registry import SUPPLIERS
 
 
 def run_import(supplier_code: str, import_type: str = "full") -> dict:
@@ -14,21 +13,19 @@ def run_import(supplier_code: str, import_type: str = "full") -> dict:
     Run a supplier import synchronously.
 
     Args:
-        supplier_code: 'itlink' or 'dclink'
-        import_type: 'full' or 'delta'
+        supplier_code: one of the fixed system integrations ('itlink' or 'dclink')
+        import_type: 'full' or delta types ('prices'/'stock')
 
     Returns:
         Import statistics dict
     """
     try:
-        if supplier_code == "itlink":
-            importer = ITLinkImporter()
-            stats = importer.run(import_type)
-        elif supplier_code == "dclink":
-            importer = DCLinkImporter()
-            stats = importer.run(import_type)
-        else:
+        entry = SUPPLIERS.get(supplier_code)
+        if not entry:
             raise ValueError(f"Unknown supplier: {supplier_code}")
+
+        importer = entry["importer"]()
+        stats = importer.run(import_type)
 
         return {
             "success": True,

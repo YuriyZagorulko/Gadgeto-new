@@ -21,6 +21,8 @@ venv/
 # Node
 node_modules/
 .next/
+# Verification builds (NEXT_DIST_DIR=.next-verify) — used by admin/ and frontend/
+.next-verify/
 out/
 dist/
 build/

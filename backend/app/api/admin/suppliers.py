@@ -1,13 +1,19 @@
-"""Admin suppliers API."""
+"""Admin suppliers API (read-only).
+
+Suppliers are FIXED system integrations defined in ``app.imports.registry``.
+Their rows in the ``suppliers`` table are SYSTEM DATA created by the idempotent
+seed migration (012_system_suppliers). Administrators can view them and run
+their imports but must never create/edit/delete them.
+"""
 import json
 import psycopg2
 import psycopg2.extras
 from fastapi import APIRouter, HTTPException, Query, Depends
-from pydantic import BaseModel
 from typing import Optional
 
 from app.api.admin.deps import require_admin
 from app.core.db_connect import DB
+from app.imports.registry import SUPPLIERS as SYSTEM_SUPPLIERS
 
 router = APIRouter()
 
@@ -17,13 +23,6 @@ def db():
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     return conn, cur
-
-
-class SupplierIn(BaseModel):
-    code: str
-    name: str
-    enabled: bool = True
-    config: Optional[dict] = None
 
 
 @router.get("/suppliers")
@@ -80,65 +79,9 @@ async def get_supplier(sid: int, user: dict = Depends(require_admin)):
             WHERE supplier_id = %s GROUP BY status
         """, (sid,))
         row["imports_by_status"] = {r["status"]: r["c"] for r in cur.fetchall()}
+        row["is_system"] = row["code"] in SYSTEM_SUPPLIERS
         return row
     finally:
         conn.close()
 
-
-@router.post("/suppliers")
-async def create_supplier(data: SupplierIn, user: dict = Depends(require_admin)):
-    if not data.code.strip() or not data.name.strip():
-        raise HTTPException(status_code=400, detail="Код та назва обов'язкові")
-    conn, cur = db()
-    try:
-        try:
-            cur.execute(
-                "INSERT INTO suppliers (code, name, enabled, config_json) VALUES (%s,%s,%s,%s) RETURNING id",
-                (data.code.strip(), data.name.strip(), data.enabled,
-                 json.dumps(data.config) if data.config is not None else None),
-            )
-        except psycopg2.errors.UniqueViolation:
-            raise HTTPException(status_code=409, detail="Постачальник з таким кодом вже існує")
-        return {"ok": True, "id": cur.fetchone()["id"]}
-    finally:
-        conn.close()
-
-
-@router.put("/suppliers/{sid}")
-async def update_supplier(sid: int, data: SupplierIn, user: dict = Depends(require_admin)):
-    conn, cur = db()
-    try:
-        cur.execute("SELECT id FROM suppliers WHERE id = %s", (sid,))
-        if not cur.fetchone():
-            raise HTTPException(status_code=404, detail="Постачальника не знайдено")
-        try:
-            cur.execute(
-                "UPDATE suppliers SET code=%s, name=%s, enabled=%s, config_json=%s WHERE id=%s",
-                (data.code.strip(), data.name.strip(), data.enabled,
-                 json.dumps(data.config) if data.config is not None else None, sid),
-            )
-        except psycopg2.errors.UniqueViolation:
-            raise HTTPException(status_code=409, detail="Постачальник з таким кодом вже існує")
-        return {"ok": True}
-    finally:
-        conn.close()
-
-
-@router.delete("/suppliers/{sid}")
-async def delete_supplier(sid: int, user: dict = Depends(require_admin)):
-    conn, cur = db()
-    try:
-        cur.execute("SELECT (SELECT COUNT(*) FROM products WHERE supplier_id=%s)"
-                    " + (SELECT COUNT(*) FROM import_jobs WHERE supplier_id=%s) AS c", (sid, sid))
-        if cur.fetchone()["c"]:
-            raise HTTPException(status_code=409,
-                                detail="Постачальника не можна видалити: існують пов'язані товари або імпорти")
-        cur.execute("DELETE FROM supplier_attribute_values sav USING supplier_attributes sa"
-                    " WHERE sav.supplier_attribute_id = sa.id AND sa.supplier_id = %s", (sid,))
-        cur.execute("DELETE FROM supplier_attributes WHERE supplier_id = %s", (sid,))
-        cur.execute("DELETE FROM supplier_categories WHERE supplier_id = %s", (sid,))
-        cur.execute("DELETE FROM suppliers WHERE id = %s", (sid,))
-        return {"ok": True}
-    finally:
-        conn.close()
 
