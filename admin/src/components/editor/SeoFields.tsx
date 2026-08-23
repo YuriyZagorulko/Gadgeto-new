@@ -53,7 +53,7 @@ export default function SeoFields({ value, onChange }: SeoFieldsProps) {
         </label>
         <input
           type="text"
-          className="input-field"
+          className="input-field w-full"
           value={v.seo_title}
           onChange={set('seo_title')}
           placeholder="Використовується в <title> та результатах пошуку"
@@ -68,7 +68,7 @@ export default function SeoFields({ value, onChange }: SeoFieldsProps) {
           </span>
         </label>
         <textarea
-          className="input-field min-h-[80px]"
+          className="input-field min-h-[80px] w-full"
           value={v.seo_description}
           onChange={set('seo_description')}
           placeholder="Короткий опис сторінки для пошукових систем"
@@ -79,7 +79,7 @@ export default function SeoFields({ value, onChange }: SeoFieldsProps) {
         <label className="block text-sm font-medium mb-1">Ключова фраза</label>
         <input
           type="text"
-          className="input-field"
+          className="input-field w-full"
           value={v.focus_keyphrase}
           onChange={set('focus_keyphrase')}
           placeholder="напр. ноутбук asus vivobook"
@@ -94,7 +94,7 @@ export default function SeoFields({ value, onChange }: SeoFieldsProps) {
             <label className="block text-sm font-medium mb-1">OG заголовок</label>
             <input
               type="text"
-              className="input-field"
+              className="input-field w-full"
               value={v.og_title}
               onChange={set('og_title')}
               placeholder="Якщо порожньо — використовується назва товару"
@@ -104,7 +104,7 @@ export default function SeoFields({ value, onChange }: SeoFieldsProps) {
           <div>
             <label className="block text-sm font-medium mb-1">OG опис</label>
             <textarea
-              className="input-field min-h-[60px]"
+              className="input-field min-h-[60px] w-full"
               value={v.og_description}
               onChange={set('og_description')}
               placeholder="Якщо порожньо — використовується мета-опис"
@@ -115,7 +115,7 @@ export default function SeoFields({ value, onChange }: SeoFieldsProps) {
             <label className="block text-sm font-medium mb-1">OG зображення (URL)</label>
             <input
               type="url"
-              className="input-field"
+              className="input-field w-full"
               value={v.og_image_url}
               onChange={set('og_image_url')}
               placeholder="https://..."
@@ -134,7 +134,7 @@ export default function SeoFields({ value, onChange }: SeoFieldsProps) {
             <label className="block text-sm font-medium mb-1">Canonical URL</label>
             <input
               type="url"
-              className="input-field"
+              className="input-field w-full"
               value={v.seo_canonical_url}
               onChange={set('seo_canonical_url')}
               placeholder="https://gadgeto.ua/product/slug (якщо відрізняється від стандартного)"

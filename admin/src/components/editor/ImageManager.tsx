@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 
 export interface EditorImage {
   id?: number;
@@ -9,26 +9,43 @@ export interface EditorImage {
   sort_order?: number;
 }
 
-/**
- * WooCommerce-style gallery manager (controlled).
- * Drag & drop to reorder, click to set featured, paste URL to add.
- */
 export default function ImageManager({
   images,
   onChange,
+  productId,
 }: {
   images: EditorImage[];
   onChange: (next: EditorImage[]) => void;
+  productId?: number;
 }) {
   const [url, setUrl] = useState('');
   const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  const add = () => {
+  const addUrl = () => {
     const u = url.trim();
     if (!u) return;
-    const next = [...images, { url: u, is_primary: images.length === 0 }];
-    onChange(next);
+    onChange([...images, { url: u, is_primary: images.length === 0 }]);
     setUrl('');
+  };
+
+  const upload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !productId) return;
+    setUploading(true);
+    try {
+      const t = localStorage.getItem('admin_token') || localStorage.getItem('auth_token') || '';
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/products/' + productId + '/images/upload', { method: 'POST', headers: { Authorization: 'Bearer ' + t }, body: fd });
+      if (!res.ok) throw new Error('Upload failed');
+      const data = await res.json();
+      onChange([...images, { id: data.id, url: data.url, is_primary: images.length === 0 }]);
+    } catch { /* ignore */ } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
   };
 
   const remove = (i: number) => {
@@ -52,62 +69,45 @@ export default function ImageManager({
   return (
     <div className="space-y-3">
       <div className="flex gap-2">
-        <input
-          type="url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), add())}
+        <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={upload} className="hidden" />
+        <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading || !productId}
+          className="rounded bg-green-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-600 disabled:opacity-50">
+          {uploading ? 'Завантаження…' : "Завантажити з комп'ютера"}
+        </button>
+        <input type="url" value={url} onChange={(e) => setUrl(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addUrl())}
           placeholder="https://… URL зображення"
-          className="flex-1 rounded border border-gray-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-        />
-        <button type="button" onClick={add} className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
-          Додати
+          className="flex-1 rounded border border-gray-600 bg-gray-800 px-2 py-1.5 text-sm text-white placeholder-gray-500" />
+        <button type="button" onClick={addUrl} className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
+          Додати URL
         </button>
       </div>
 
       {images.length === 0 ? (
-        <p className="text-sm text-gray-500">Зображень немає. Додайте перше за URL.</p>
+        <p className="text-sm text-gray-500">Зображень немає. Завантажте файл або додайте за URL.</p>
       ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
           {images.map((img, i) => (
-            <div
-              key={`${img.url}-${i}`}
-              draggable
-              onDragStart={() => setDragIdx(i)}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={() => { if (dragIdx !== null) moveTo(dragIdx, i); setDragIdx(null); }}
-              className={`group relative overflow-hidden rounded border-2 bg-gray-100 ${
-                img.is_primary ? 'border-blue-600' : 'border-transparent'
-              }`}
-              title={img.url}
-            >
+            <div key={img.id ?? `${img.url}-${i}`} draggable onDragStart={() => setDragIdx(i)}
+              onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragIdx !== null) moveTo(dragIdx, i); setDragIdx(null); }}
+              className={`group relative overflow-hidden rounded border-2 bg-gray-800 ${img.is_primary ? 'border-blue-500' : 'border-transparent'}`}>
               <img src={img.url} alt="" className="aspect-square w-full object-cover" loading="lazy" />
-              <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-black/60 px-1 py-0.5 opacity-0 transition group-hover:opacity-100">
+              <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-black/70 px-1 py-0.5 opacity-0 transition group-hover:opacity-100">
                 <div className="flex gap-1">
-                  <button type="button" onClick={() => moveTo(i, i - 1)} disabled={i === 0}
-                    className="px-1 text-xs text-white disabled:opacity-30">←</button>
-                  <button type="button" onClick={() => moveTo(i, i + 1)} disabled={i === images.length - 1}
-                    className="px-1 text-xs text-white disabled:opacity-30">→</button>
+                  <button type="button" onClick={() => moveTo(i, i - 1)} disabled={i === 0} className="px-1 text-xs text-white disabled:opacity-30">←</button>
+                  <button type="button" onClick={() => moveTo(i, i + 1)} disabled={i === images.length - 1} className="px-1 text-xs text-white disabled:opacity-30">→</button>
                 </div>
                 <div className="flex gap-1">
-                  {!img.is_primary && (
-                    <button type="button" onClick={() => makePrimary(i)}
-                      className="px-1 text-xs text-yellow-300" title="Зробити головним">★</button>
-                  )}
-                  <button type="button" onClick={() => remove(i)}
-                    className="px-1 text-xs text-red-400" title="Видалити">✕</button>
+                  {!img.is_primary && <button type="button" onClick={() => makePrimary(i)} className="px-1 text-xs text-yellow-300" title="Головне">★</button>}
+                  <button type="button" onClick={() => remove(i)} className="px-1 text-xs text-red-400" title="Видалити">✕</button>
                 </div>
               </div>
-              {img.is_primary && (
-                <span className="absolute left-1 top-1 rounded bg-blue-600 px-1 text-[10px] font-semibold text-white">
-                  Головне
-                </span>
-              )}
+              {img.is_primary && <span className="absolute left-1 top-1 rounded bg-blue-600 px-1 text-[10px] font-semibold text-white">Головне</span>}
             </div>
           ))}
         </div>
       )}
-      <p className="text-xs text-gray-400">Перетягніть, щоб змінити порядок. ★ — головне зображення.</p>
+      <p className="text-xs text-gray-500">Перетягніть, щоб змінити порядок. ★ — головне зображення.</p>
     </div>
   );
 }

@@ -4,13 +4,16 @@ All routes are nested under /products/{product_id}/... so they never clash
 with the flat CRUD routes in products.py.
 """
 import json
+import os
+import hashlib
+import uuid
 import re
 from itertools import product as cartesian
 from typing import Optional, List
 
 import psycopg2
 import psycopg2.extras
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Body as FBody
 from pydantic import BaseModel
 
 from app.api.admin.deps import require_admin
@@ -150,7 +153,7 @@ def _apply_update(product_id: int, mapping: dict, payload: dict):
     con.close()
 
 
-@router.put("/{product_id}/pricing")
+@router.put("/products/{product_id}/pricing")
 async def ed_pricing(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     _apply_update(product_id, {
         "price": "price", "regularPrice": "price",
@@ -162,7 +165,7 @@ async def ed_pricing(product_id: int, payload: dict = _Body(...), _u=Depends(req
     return {"ok": True}
 
 
-@router.put("/{product_id}/inventory")
+@router.put("/products/{product_id}/inventory")
 async def ed_inventory(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     _apply_update(product_id, {
         "stock": "stock", "quantity": "stock",
@@ -178,7 +181,7 @@ async def ed_inventory(product_id: int, payload: dict = _Body(...), _u=Depends(r
     return {"ok": True}
 
 
-@router.put("/{product_id}/seo")
+@router.put("/products/{product_id}/seo")
 async def ed_seo(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     _apply_update(product_id, {
         "seo_title": "seo_title", "seoTitle": "seo_title",
@@ -192,7 +195,7 @@ async def ed_seo(product_id: int, payload: dict = _Body(...), _u=Depends(require
     return {"ok": True}
 
 
-@router.put("/{product_id}/general")
+@router.put("/products/{product_id}/general")
 async def ed_general(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     _apply_update(product_id, {
         "name": "name", "slug": "slug", "sku": "sku",
@@ -205,7 +208,7 @@ async def ed_general(product_id: int, payload: dict = _Body(...), _u=Depends(req
     return {"ok": True}
 
 
-@router.put("/{product_id}/categories")
+@router.put("/products/{product_id}/categories")
 async def ed_categories(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     ids = payload.get("category_ids") or payload.get("ids") or []
     con = _ed_conn()
@@ -225,7 +228,7 @@ async def ed_categories(product_id: int, payload: dict = _Body(...), _u=Depends(
     return {"ok": True, "count": len(ids)}
 
 
-@router.put("/{product_id}/attributes")
+@router.put("/products/{product_id}/attributes")
 async def ed_attributes(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     rows = payload.get("rows") or []
     con = _ed_conn()
@@ -255,7 +258,7 @@ async def ed_attributes(product_id: int, payload: dict = _Body(...), _u=Depends(
     return {"ok": True, "count": n}
 
 
-@router.put("/{product_id}/images")
+@router.put("/products/{product_id}/images")
 async def ed_images(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     rows = payload.get("images") or []
     con = _ed_conn()
@@ -294,7 +297,7 @@ async def ed_images(product_id: int, payload: dict = _Body(...), _u=Depends(requ
     return {"ok": True}
 
 
-@router.get("/{product_id}/custom-fields")
+@router.get("/products/{product_id}/custom-fields")
 async def cf_get(product_id: int, _u=Depends(require_admin)):
     con = _ed_conn()
     cur = con.cursor()
@@ -313,7 +316,7 @@ async def cf_get(product_id: int, _u=Depends(require_admin)):
     return {"items": out}
 
 
-@router.put("/{product_id}/custom-fields")
+@router.put("/products/{product_id}/custom-fields")
 async def cf_put(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     fields = payload.get("fields") or []
     clean = [{"name": str(f.get("name", "")).strip(), "value": str(f.get("value", ""))} for f in fields if str(f.get("name", "")).strip()]
@@ -358,56 +361,7 @@ def _rv_norm(cols, r):
     }
 
 
-@router.get("/{product_id}/reviews")
-async def rv_list(product_id: int, _u=Depends(require_admin)):
-    con = _ed_conn()
-    cur = con.cursor()
-    cols = _tcols(cur, "product_reviews")
-    cur.execute("SELECT * FROM product_reviews WHERE product_id=%s ORDER BY id DESC LIMIT 200", (product_id,))
-    items = [_rv_norm(cols, r) for r in _rows_dict(cur)]
-    cur.close()
-    con.close()
-    return {"items": items}
-
-
-@router.post("/{product_id}/reviews")
-async def rv_create(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
-    con = _ed_conn()
-    cur = con.cursor()
-    cols = _tcols(cur, "product_reviews")
-    m = {"author": _pick(_RV_NAME, cols), "email": _pick(_RV_EMAIL, cols), "text": _pick(_RV_TEXT, cols)}
-    collist, vals = ["product_id"], [product_id]
-    if m["author"] and payload.get("author"):
-        collist.append(m["author"])
-        vals.append(payload["author"])
-    if m["email"] and payload.get("email"):
-        collist.append(m["email"])
-        vals.append(payload["email"])
-    if "rating" in cols and payload.get("rating"):
-        collist.append("rating")
-        vals.append(max(1, min(5, int(payload["rating"]))))
-    if m["text"] and payload.get("text"):
-        collist.append(m["text"])
-        vals.append(payload["text"])
-    if "status" in cols and payload.get("status"):
-        collist.append("status")
-        vals.append(payload["status"])
-    ph = ",".join(["%s"] * len(collist))
-    cur.execute(f"INSERT INTO product_reviews ({','.join(collist)}) VALUES ({ph}) RETURNING id", vals)
-    rid = cur.fetchone()[0]
-    cur.close()
-    con.close()
-    return {"ok": True, "id": rid}
-
-
-@router.delete("/{product_id}/reviews/{review_id}")
-async def rv_delete(product_id: int, review_id: int, _u=Depends(require_admin)):
-    con = _ed_conn()
-    cur = con.cursor()
-    cur.execute("DELETE FROM product_reviews WHERE id=%s AND product_id=%s", (review_id, product_id))
-    cur.close()
-    con.close()
-    return {"ok": True}
+# ---- Review CRUD (see below for moderation endpoints) ----
 
 
 def _vr_norm(cols, r):
@@ -431,7 +385,7 @@ def _vr_norm(cols, r):
     }
 
 
-@router.get("/{product_id}/variations")
+@router.get("/products/{product_id}/variations")
 async def vr_list(product_id: int, _u=Depends(require_admin)):
     con = _ed_conn()
     cur = con.cursor()
@@ -443,7 +397,7 @@ async def vr_list(product_id: int, _u=Depends(require_admin)):
     return {"items": items}
 
 
-@router.put("/{product_id}/variations")
+@router.put("/products/{product_id}/variations")
 async def vr_put(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     rows = payload.get("rows") or []
     con = _ed_conn()
@@ -478,6 +432,131 @@ async def vr_put(product_id: int, payload: dict = _Body(...), _u=Depends(require
             vals.append(_json.dumps(r.get("attributes") or {}, ensure_ascii=False))
         ph = ",".join(["%s"] * len(collist))
         cur.execute(f"INSERT INTO product_variations ({','.join(collist)}) VALUES ({ph})", vals)
+# ---- Image upload ----
+
+ALLOWED_MIME = {"image/jpeg", "image/png", "image/webp"}
+MAX_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
+@router.post("/products/{product_id}/images/upload")
+async def upload_image(
+    product_id: int,
+    file: UploadFile = File(...),
+    user: dict = Depends(require_admin),
+):
+    if file.content_type not in ALLOWED_MIME:
+        raise HTTPException(400, "Дозволено лише JPG, PNG, WEBP")
+    body = await file.read()
+    if len(body) > MAX_SIZE:
+        raise HTTPException(400, "Файл завеликий (макс. 10 MB)")
+
+    from app.core.config import settings
+    ext = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[file.content_type]
+    filename = f"{uuid.uuid4().hex}{ext}"
+    rel_path = f"products/{filename}"
+    abs_path = os.path.join(settings.MEDIA_DIR, rel_path)
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    with open(abs_path, "wb") as f:
+        f.write(body)
+
+    base_url = (settings.MEDIA_BASE_URL or "/media").rstrip("/")
+    url = f"{base_url}/{rel_path}"
+
+    conn, cur = db()
+    try:
+        _get_or_404(cur, product_id)
+        cur.execute("SELECT MAX(sort_order) FROM product_images WHERE product_id=%s", (product_id,))
+        max_order = (cur.fetchone()["max"] or 0)
+        cur.execute("SELECT COUNT(*) AS cnt FROM product_images WHERE product_id=%s AND is_primary=true", (product_id,))
+        has_primary = cur.fetchone()["cnt"] > 0
+        cur.execute(
+            "INSERT INTO product_images (product_id, url, sort_order, is_primary) VALUES (%s,%s,%s,%s) RETURNING id",
+            (product_id, url, max_order + 1, not has_primary),
+        )
+        img_id = cur.fetchone()["id"]
+        return {"ok": True, "id": img_id, "url": url}
+    finally:
+        conn.close()
+
+
+# ---- Review moderation ----
+
+
+@router.get("/products/{product_id}/reviews")
+async def rv_list(product_id: int, _u=Depends(require_admin)):
+    con = _ed_conn(); cur = con.cursor()
+    cur.execute(
+        "SELECT id, product_id, user_id, author_name, author_email, rating, content, status, created_at, updated_at "
+        "FROM product_reviews WHERE product_id=%s ORDER BY created_at DESC LIMIT 500", (product_id,))
+    items = _rows_dict(cur); cur.close(); con.close()
+    return {"items": items}
+
+
+@router.put("/products/{product_id}/reviews/{review_id}/moderate")
+async def rv_moderate(product_id: int, review_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
+    status = payload.get("status", "").strip()
+    if status not in ("published", "pending", "hidden"):
+        raise HTTPException(400, "Невірний статус")
+    con = _ed_conn(); cur = con.cursor()
+    cur.execute("UPDATE product_reviews SET status=%s, updated_at=NOW() WHERE id=%s AND product_id=%s", (status, review_id, product_id))
+    cur.close(); con.close()
+    return {"ok": True}
+
+
+@router.put("/products/{product_id}/reviews/{review_id}")
+async def rv_update(product_id: int, review_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
+    allowed = {"author_name", "author_email", "rating", "content", "status"}
+    sets, params = [], []
+    for key in allowed:
+        val = payload.get(key)
+        if val is not None:
+            sets.append(f"{key}=%s"); params.append(val)
+    if not sets:
+        return {"ok": True}
+    params.extend([review_id, product_id])
+    con = _ed_conn(); cur = con.cursor()
+    cur.execute(f"UPDATE product_reviews SET {', '.join(sets)}, updated_at=NOW() WHERE id=%s AND product_id=%s", params)
+    cur.close(); con.close()
+    return {"ok": True}
+
+
+# ---- Storefront reviews API (no auth required) ----
+
+
+@router.post("/products/{product_id}/storefront-reviews")
+async def storefront_create_review(product_id: int, payload: dict = FBody(...)):
+    rating = payload.get("rating")
+    text = (payload.get("content") or payload.get("text") or "").strip()
+    user_id = payload.get("user_id")
+    if not rating or not isinstance(rating, int) or rating < 1 or rating > 5:
+        raise HTTPException(400, "Оцінка має бути від 1 до 5")
+    if not text:
+        raise HTTPException(400, "Текст відгуку обов'язковий")
+    if not user_id:
+        raise HTTPException(400, "Необхідна автентифікація")
+    con = _ed_conn(); cur = con.cursor()
+    _get_or_404(cur, product_id)
+    cur.execute("SELECT full_name, email FROM users WHERE id=%s", (user_id,))
+    u = cur.fetchone()
+    if not u:
+        raise HTTPException(400, "Користувача не знайдено")
+    cur.execute(
+        "INSERT INTO product_reviews (product_id, user_id, author_name, author_email, rating, content, status, created_at, updated_at) "
+        "VALUES (%s,%s,%s,%s,%s,%s,'pending',NOW(),NOW()) RETURNING id",
+        (product_id, user_id, u["full_name"], u["email"] or "", rating, text))
+    rid = cur.fetchone()[0]
+    cur.close(); con.close()
+    return {"ok": True, "id": rid, "status": "pending"}
+
+
+@router.get("/products/{product_id}/storefront-reviews")
+async def storefront_list_reviews(product_id: int):
+    con = _ed_conn(); cur = con.cursor()
+    cur.execute(
+        "SELECT id, author_name, rating, content, created_at FROM product_reviews "
+        "WHERE product_id=%s AND status='published' ORDER BY created_at DESC LIMIT 200", (product_id,))
+    items = _rows_dict(cur); cur.close(); con.close()
+    return {"items": items, "count": len(items)}
     cur.close()
     con.close()
     return {"ok": True, "count": len(rows)}
