@@ -94,12 +94,12 @@ export default function ImageManager({
               <img src={img.url} alt="" className="aspect-square w-full object-cover" loading="lazy" />
               <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-black/70 px-1 py-0.5 opacity-0 transition group-hover:opacity-100">
                 <div className="flex gap-1">
-                  <button type="button" onClick={() => moveTo(i, i - 1)} disabled={i === 0} className="px-1 text-xs text-white disabled:opacity-30">←</button>
-                  <button type="button" onClick={() => moveTo(i, i + 1)} disabled={i === images.length - 1} className="px-1 text-xs text-white disabled:opacity-30">→</button>
+                  <button type="button" onClick={() => moveTo(i, i - 1)} disabled={i === 0} className="inline-flex items-center justify-center w-10 h-10 text-3xl leading-none text-white disabled:opacity-30">{'<'}</button>
+                  <button type="button" onClick={() => moveTo(i, i + 1)} disabled={i === images.length - 1} className="px-1 text-3xl text-white disabled:opacity-30">{'>'}</button>
                 </div>
                 <div className="flex gap-1">
-                  {!img.is_primary && <button type="button" onClick={() => makePrimary(i)} className="px-1 text-xs text-yellow-300" title="Головне">★</button>}
-                  <button type="button" onClick={() => remove(i)} className="px-1 text-xs text-red-400" title="Видалити">✕</button>
+                  {!img.is_primary && <button type="button" onClick={() => makePrimary(i)} className="px-1 text-3xl text-yellow-300" title="Головне">★</button>}
+                  <button type="button" onClick={() => remove(i)} className="px-1 text-3xl text-red-400" title="Видалити">✕</button>
                 </div>
               </div>
               {img.is_primary && <span className="absolute left-1 top-1 rounded bg-blue-600 px-1 text-[10px] font-semibold text-white">Головне</span>}
