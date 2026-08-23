@@ -139,9 +139,17 @@ async def update_product(pid: int, data: ProductUpdate, user: dict = Depends(req
     sets, params = [], []
     for f in ["name","slug","sku","price","old_price","stock_qty","stock_status",
               "status","description","short_description","brand_id",
-              "seo_title","seo_description","focus_keyphrase"]:
+              "seo_title","seo_description","focus_keyphrase",
+              "barcode","low_stock_threshold","manage_stock","allow_backorders",
+              "purchase_cost","warehouse","supplier_sku"]:
         v = getattr(data, f, None)
         if v is not None: sets.append(f"{f}=%s"); params.append(v)
+    # Nullable text/datetime fields: empty string means "clear the value"
+    for f in ["sale_start_at", "sale_end_at", "canonical_url", "og_title", "og_description", "og_image_url"]:
+        v = getattr(data, f, None)
+        if v is not None:
+            sets.append(f"{f}=%s")
+            params.append(v if v != "" else None)
     if sets:
         params.append(pid)
         cur.execute(f"UPDATE products SET {','.join(sets)}, updated_at=NOW() WHERE id=%s", params)

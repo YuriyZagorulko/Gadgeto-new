@@ -70,3 +70,33 @@ class ProductAttribute(Base):
     attribute = relationship("Attribute", back_populates="product_attributes")
     attribute_value = relationship("AttributeValue", back_populates="product_attributes")
     __table_args__ = (UniqueConstraint('product_id', 'attribute_id', name='uq_product_attribute'),)
+
+
+class ProductReview(Base):
+    """Customer review managed from the admin panel (migration 007)."""
+    __tablename__ = "product_reviews"
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    author_name = Column(String(255), nullable=False)
+    author_email = Column(String(255), nullable=True)
+    rating = Column(Integer, nullable=False, default=5)
+    content = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default='published')
+    product = relationship("Product", backref="reviews")
+
+
+class ProductVariation(Base):
+    """Variable-product combination (migration 007). attrs_json maps attribute_id -> value text."""
+    __tablename__ = "product_variations"
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    sku = Column(String(255), nullable=True)
+    attrs_json = Column(Text, nullable=False, default='{}')
+    price = Column(Integer, nullable=True)
+    sale_price = Column(Integer, nullable=True)
+    stock_qty = Column(Integer, nullable=False, default=0)
+    stock_status = Column(String(50), nullable=False, default='in_stock')
+    image_url = Column(String(1000), nullable=True)
+    barcode = Column(String(64), nullable=True)
+    supplier_sku = Column(String(255), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    product = relationship("Product", backref="variations")
+
