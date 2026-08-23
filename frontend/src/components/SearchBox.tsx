@@ -1,8 +1,8 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { useLocale, useTranslations } from 'next-intl';
+import { useTranslations } from 'next-intl';
 import { useRouter } from '@/i18n/navigation';
-import { formatPrice } from '@/lib/format';
+import PriceDisplay from '@/components/PriceDisplay';
 
 interface Suggestion {
   id: number;
@@ -40,7 +40,6 @@ export default function SearchBox({
   placeholder,
 }: SearchBoxProps) {
   const t = useTranslations('search');
-  const locale = useLocale();
   const router = useRouter();
 
   const [query, setQuery] = useState('');
@@ -228,9 +227,7 @@ export default function SearchBox({
                     </span>
                   )}
                   <span className="flex-1 min-w-0 truncate">{p.name}</span>
-                  <span className="flex-shrink-0 font-semibold text-blue-700 whitespace-nowrap">
-                    {formatPrice(p.price, locale)}
-                  </span>
+                  <PriceDisplay price={p.price} oldPrice={p.old_price} variant="inline" />
                 </button>
               ))
             ) : (

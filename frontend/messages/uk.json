@@ -54,6 +54,8 @@
     "sku": "Артикул: {sku}",
     "brand": "Бренд: {brand}",
     "addToCart": "Додати в кошик",
+    "addedToCart": "Додано",
+    "addToCartError": "Помилка",
     "specifications": "Характеристики",
     "description": "Опис"
   },
@@ -65,7 +67,13 @@
     "total": "Разом: {total}",
     "proceedToCheckout": "Оформити замовлення",
     "noImage": "Немає фото",
-    "sku": "Артикул: {sku}"
+    "sku": "Артикул: {sku}",
+    "close": "Закрити",
+    "items": "товар(и)",
+    "totalLabel": "Сума:",
+    "viewCart": "Переглянути кошик",
+    "decreaseQty": "Зменшити кількість",
+    "increaseQty": "Збільшити кількість"
   },
   "checkout": {
     "title": "Оформлення замовлення",

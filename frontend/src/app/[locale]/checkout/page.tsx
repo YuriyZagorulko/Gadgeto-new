@@ -3,19 +3,25 @@ import { useState, useEffect } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { useRouter } from '@/i18n/navigation';
 import { formatPrice } from '@/lib/format';
+import { useCartStore, useCartTotalItems, useCartSubtotal } from '@/lib/cart-store';
 
 export default function CheckoutPage() {
   const t = useTranslations('checkout');
   const locale = useLocale();
   const router = useRouter();
-  const [cart, setCart] = useState<any>(null);
+  const items = useCartStore((s) => s.items);
+  const sessionToken = useCartStore((s) => s.sessionToken);
+  const refreshFromAPI = useCartStore((s) => s.refreshFromAPI);
+  const totalItems = useCartTotalItems();
+  const subtotal = useCartSubtotal();
   const [form, setForm] = useState({first_name:'',last_name:'',phone:'',email:'',city:'',branch:'',notes:''});
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    fetch('/api/cart').then(r=>r.json()).then(d=>setCart(d));
-  }, []);
+    refreshFromAPI().then(() => setLoaded(true)).catch(() => setLoaded(true));
+  }, [refreshFromAPI]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); setError(''); setSubmitting(true);
@@ -24,7 +30,7 @@ export default function CheckoutPage() {
       const res = await fetch('/api/checkout', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
-          session_token: cart?.session_token||'',
+          session_token: sessionToken||'',
           first_name: form.first_name, last_name: form.last_name,
           phone: form.phone, email: form.email,
           city_name: form.city, city_ref: form.city,
@@ -39,8 +45,8 @@ export default function CheckoutPage() {
     } catch (err:any) { setError(err.message); setSubmitting(false); }
   };
 
-  if (!cart) return <div className="p-8 text-center">{t('processing')}</div>;
-  if (!cart.items?.length) return <div className="p-8 text-center">{t('emptyCart')}</div>;
+  if (!loaded) return <div className="p-8 text-center">{t('processing')}</div>;
+  if (!items.length) return <div className="p-8 text-center">{t('emptyCart')}</div>;
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
@@ -64,8 +70,8 @@ export default function CheckoutPage() {
         </div>
 
         <div className="card p-4 text-right space-y-2">
-          <div>{t('itemsCount', { count: cart.items.length })}</div>
-          <div className="text-xl font-bold">{t('total', { total: formatPrice(cart.subtotal, locale) })}</div>
+          <div>{t('itemsCount', { count: totalItems })}</div>
+          <div className="text-xl font-bold">{t('total', { total: formatPrice(subtotal, locale) })}</div>
           <button type="submit" disabled={submitting} className="btn-primary w-full text-lg">{submitting ? t('processing') : t('placeOrder')}</button>
         </div>
       </form>

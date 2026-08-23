@@ -1,10 +1,11 @@
 import { useLocale, useTranslations } from 'next-intl';
 import { Link } from '@/i18n/navigation';
 import ProductCard from '@/components/ProductCard';
+import PriceDisplay from '@/components/PriceDisplay';
+import AddToCartButton from '@/components/AddToCartButton';
 import { routing, type Locale } from '@/i18n/routing';
 import { notFound } from 'next/navigation';
 import { getTranslations, setRequestLocale } from 'next-intl/server';
-import { formatPrice } from '@/lib/format';
 import { hasLocale } from 'next-intl';
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://backend:8000').replace(/\/+$/, '');
@@ -59,14 +60,9 @@ export default async function ProductPage({
   const product = await getProduct(slug);
   if (!product) notFound();
 
-  const price = formatPrice(product.price, locale);
-  const oldPrice = product.old_price ? formatPrice(product.old_price, locale) : null;
-
   return (
     <ProductView
       product={product}
-      price={price}
-      oldPrice={oldPrice}
       catalogLabel={tCatalog('title')}
     />
   );
@@ -74,13 +70,9 @@ export default async function ProductPage({
 
 function ProductView({
   product,
-  price,
-  oldPrice,
   catalogLabel,
 }: {
   product: any;
-  price: string;
-  oldPrice: string | null;
   catalogLabel: string;
 }) {
   const t = useTranslations('product');
@@ -116,8 +108,9 @@ function ProductView({
           {product.sku && <div className="text-sm text-gray-500 mb-2">{t('sku', { sku: product.sku })}</div>}
           {product.brand && <div className="text-sm text-gray-500 mb-2">{t('brand', { brand: product.brand })}</div>}
 
-          <div className="text-3xl font-bold text-blue-700 my-4">{price}</div>
-          {oldPrice && <div className="text-lg text-gray-400 line-through">{oldPrice}</div>}
+          <div className="my-4">
+            <PriceDisplay price={product.price} oldPrice={product.old_price} variant="detail" />
+          </div>
 
           <div className="mb-4">
             {product.stock_status === 'in_stock' ? (
@@ -127,7 +120,16 @@ function ProductView({
             )}
           </div>
 
-          <button className="bg-blue-600 text-white w-full text-lg py-3 rounded-lg hover:bg-blue-700 transition font-medium">{t('addToCart')}</button>
+          <AddToCartButton product={{
+            id: product.id,
+            name: product.name,
+            slug: product.slug,
+            sku: product.sku,
+            price: product.price,
+            old_price: product.old_price,
+            image: product.images?.[0]?.url || '',
+            stock_status: product.stock_status,
+          }} />
 
           {product.attributes?.length > 0 && (
             <div className="mt-6 border-t pt-4">

@@ -6,8 +6,9 @@ from typing import Optional
 from datetime import datetime, timedelta
 
 router = APIRouter()
-from app.core.db_connect import get_cursor as _db
-# DB connection via app.core.db_connect
+from app.core.db_connect import DB, connect
+import psycopg2
+import psycopg2.extras
 
 class CartItemRequest(BaseModel):
     product_id: int
@@ -33,7 +34,7 @@ async def get_cart(session_token: str = ""):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cart_id, token = get_or_create_cart(cur, session_token)
     cur.execute("""
-        SELECT ci.id, ci.product_id, ci.qty, ci.price_at_addition, p.name, p.sku, p.price, p.stock_status,
+        SELECT ci.id, ci.product_id, ci.qty, ci.price_at_addition, p.name, p.sku, p.slug, p.price, p.stock_status,
                (SELECT url FROM product_images WHERE product_id=p.id AND is_primary=true LIMIT 1) as image
         FROM cart_items ci JOIN products p ON p.id=ci.product_id WHERE ci.cart_id=%s ORDER BY ci.id
     """, (cart_id,))
@@ -61,16 +62,15 @@ async def add_to_cart(req: CartItemRequest, session_token: str = ""):
     existing = cur.fetchone()
     if existing:
         new_qty = existing["qty"] + req.qty
-        cur.execute("UPDATE cart_items SET qty=%s WHERE id=%s", (new_qty, existing["id"]))
+        cur.execute("UPDATE cart_items SET qty=%s, updated_at=NOW() WHERE id=%s", (new_qty, existing["id"]))
     else:
-        cur.execute("INSERT INTO cart_items (cart_id, product_id, qty, price_at_addition) VALUES (%s, %s, %s, %s)", (cart_id, req.product_id, req.qty, product["price"]))
+        cur.execute("INSERT INTO cart_items (cart_id, product_id, qty, price_at_addition, created_at, updated_at) VALUES (%s, %s, %s, %s, NOW(), NOW())", (cart_id, req.product_id, req.qty, product["price"]))
     conn.commit()
     conn.close()
     return {"ok": True, "session_token": token}
 
 @router.put("/cart/items/{item_id}")
 async def update_cart_item(item_id: int, req: CartItemUpdate):
-    import psycopg2
     conn = psycopg2.connect(DB)
     conn.autocommit = True
     cur = conn.cursor()
@@ -84,7 +84,6 @@ async def update_cart_item(item_id: int, req: CartItemUpdate):
 
 @router.delete("/cart/items/{item_id}")
 async def remove_cart_item(item_id: int):
-    import psycopg2
     conn = psycopg2.connect(DB)
     cur = conn.cursor()
     cur.execute("DELETE FROM cart_items WHERE id=%s", (item_id,))
