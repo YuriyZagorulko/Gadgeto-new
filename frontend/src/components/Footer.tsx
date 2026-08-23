@@ -1,32 +1,53 @@
 import { useTranslations } from 'next-intl';
 import { Link } from '@/i18n/navigation';
 
+const buyersLinks = [
+  { href: '/dostavka-i-oplata', label: 'Доставка та оплата' },
+  { href: '/return-instruction', label: 'Умови повернення товару' },
+  { href: '/dogovir-oferty', label: 'Договір публічної оферти' },
+];
+
+const infoLinks = [
+  { href: '/about-us', label: 'Про нас' },
+  { href: '/privacy_policy', label: 'Політика конфіденційності' },
+  { href: '/guarantee', label: 'Гарантія' },
+  { href: '/questions-faq', label: 'Питання FAQ' },
+];
+
 export default function Footer() {
   const t = useTranslations('footer');
 
+  const columns = [
+    { title: t('buyers'), links: buyersLinks },
+    { title: t('information'), links: infoLinks },
+    {
+      title: t('contacts'),
+      links: [{ href: '/contacts', label: t('contacts') }],
+    },
+  ];
+
   return (
-    <footer className="bg-gray-800 text-gray-300 py-8 mt-auto">
-      <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8">
-        <div>
-          <h3 className="text-white font-bold mb-3">Gadgeto</h3>
-          <p className="text-sm">{t('tagline')}</p>
+    <footer className="bg-gray-800 text-gray-300 mt-auto">
+      <div className="max-w-7xl mx-auto px-4 py-12">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-10">
+          {columns.map((column) => (
+            <div key={column.title}>
+              <h3 className="text-white font-semibold mb-4">{column.title}</h3>
+              <ul className="text-sm space-y-2.5">
+                {column.links.map((link) => (
+                  <li key={link.href}>
+                    <Link
+                      href={link.href}
+                      className="hover:text-white transition"
+                    >
+                      {link.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </div>
-        <div>
-          <h3 className="text-white font-bold mb-3">{t('information')}</h3>
-          <ul className="text-sm space-y-1">
-            <li><Link href="/catalog" className="hover:text-white">{t('catalog')}</Link></li>
-            <li><Link href="/search" className="hover:text-white">{t('search')}</Link></li>
-            <li><Link href="/cart" className="hover:text-white">{t('cart')}</Link></li>
-          </ul>
-        </div>
-        <div>
-          <h3 className="text-white font-bold mb-3">{t('contact')}</h3>
-          <p className="text-sm">{t('address')}</p>
-          <p className="text-sm">{t('delivery')}</p>
-        </div>
-      </div>
-      <div className="border-t border-gray-700 mt-6 pt-4 text-center text-sm">
-        {t('copyright', { year: new Date().getFullYear() })}
       </div>
     </footer>
   );
