@@ -44,12 +44,27 @@ class ProductCreate(ProductUpdate):
 PRODUCT_STATUSES = ("DRAFT", "PUBLISHED", "HIDDEN", "ARCHIVED")
 STOCK_STATUSES = ("in_stock", "out_of_stock", "pre_order")
 
+# Whitelisted sort keys -> SQL expressions (identifiers only, never user input).
+# Used by the admin products table for server-side sorting.
+SORT_COLUMNS = {
+    "name": "p.name",
+    "sku": "NULLIF(p.sku, '')",
+    "category": "(SELECT MIN(c.name) FROM product_categories pc JOIN categories c ON c.id = pc.category_id WHERE pc.product_id = p.id)",
+    "brand": "b.name",
+    "price": "p.price",
+    "stock": "p.stock_qty",
+    "status": "p.status",
+    "updated": "p.updated_at",
+}
+
 @router.get("/products")
 async def list_products(page: int = Query(1,ge=1), per_page: int = Query(20,ge=1,le=100),
     search: Optional[str] = None, category_id: Optional[int] = None,
     brand_id: Optional[int] = None, status: Optional[str] = None,
     stock: Optional[str] = None,
     no_image: bool = False, no_price: bool = False,
+    sort: Optional[str] = Query(None, pattern="^(" + "|".join(SORT_COLUMNS) + ")$"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
     user: dict = Depends(require_admin)):
     conn, cur = db()
     conds, params = ["1=1"], []
@@ -71,6 +86,14 @@ async def list_products(page: int = Query(1,ge=1), per_page: int = Query(20,ge=1
         conds.append("(p.price IS NULL OR p.price = 0)")
     where = " AND ".join(conds)
     offset = (page - 1) * per_page
+    # Server-side sorting on the full dataset (DB-level ORDER BY + LIMIT/OFFSET).
+    # p.id is always appended as a stable tiebreaker so OFFSET pagination
+    # never skips or repeats rows with equal sort values.
+    if sort:
+        direction = "ASC" if order == "asc" else "DESC"
+        order_by = f"{SORT_COLUMNS[sort]} {direction} NULLS LAST, p.id {direction}"
+    else:
+        order_by = "p.updated_at DESC, p.id DESC"
     cur.execute(f"SELECT count(*) FROM products p WHERE {where}", params)
     total = cur.fetchone()["count"]
     cur.execute(f"""
@@ -80,7 +103,7 @@ async def list_products(page: int = Query(1,ge=1), per_page: int = Query(20,ge=1
                (SELECT url FROM product_images WHERE product_id=p.id AND is_primary=true LIMIT 1) as image,
                (SELECT string_agg(c.name, ', ') FROM product_categories pc JOIN categories c ON c.id=pc.category_id WHERE pc.product_id=p.id) as categories
         FROM products p LEFT JOIN brands b ON b.id=p.brand_id
-        WHERE {where} ORDER BY p.updated_at DESC LIMIT %s OFFSET %s
+        WHERE {where} ORDER BY {order_by} LIMIT %s OFFSET %s
     """, params + [per_page, offset])
     items = cur.fetchall(); conn.close()
     return {"items": items, "total": total, "page": page, "per_page": per_page,

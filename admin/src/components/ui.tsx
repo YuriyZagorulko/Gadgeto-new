@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useCallback, useContext, useState } from 'react';
+import React, { createContext, isValidElement, useCallback, useContext, useState } from 'react';
 
 /* ------------------------------------------------------------------ */
 /* Toast notifications                                                 */
@@ -224,13 +224,30 @@ export function Badge({
 /* Table primitives                                                    */
 /* ------------------------------------------------------------------ */
 
-export function Table({ head, children }: { head: React.ReactNode; children: React.ReactNode }) {
+export function Table({
+  head,
+  children,
+  tableClassName = '',
+}: {
+  head: React.ReactNode;
+  children: React.ReactNode;
+  /** Extra classes for the <table> element, e.g. "table-fixed min-w-[1280px]". */
+  tableClassName?: string;
+}) {
+  // Callers pass a full <tr> here. Render its cells inside the single styled
+  // header row so <thead> never ends up with nested <tr> elements — nested
+  // rows produce invalid DOM and break header/body column alignment.
+  const headIsRow =
+    isValidElement<{ className?: string; children?: React.ReactNode }>(head) && head.type === 'tr';
+  const headProps = headIsRow ? head.props : undefined;
   return (
     <div className="bg-white border border-gray-200 rounded-lg overflow-x-auto">
-      <table className="w-full text-sm min-w-[640px]">
+      <table className={`w-full text-sm ${tableClassName || 'min-w-[640px]'}`}>
         <thead>
-          <tr className="text-left text-xs uppercase tracking-wide text-gray-500 border-b border-gray-200 bg-gray-50">
-            {head}
+          <tr
+            className={`text-left text-xs uppercase tracking-wide text-gray-500 border-b border-gray-200 bg-gray-50 ${headProps?.className ?? ''}`}
+          >
+            {headProps ? headProps.children : head}
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">{children}</tbody>
@@ -251,51 +268,156 @@ export function Td({ children, className = '' }: { children?: React.ReactNode; c
 /* Pagination                                                          */
 /* ------------------------------------------------------------------ */
 
+type PageItem = number | '…';
+
+/**
+ * Builds the visible page list with an ellipsis strategy, e.g. for
+ * page=15, pages=47 -> [1, '…', 13, 14, 15, 16, 17, '…', 47].
+ */
+function buildPageItems(page: number, pages: number): PageItem[] {
+  const delta = 2;
+  const wanted = new Set<number>([1, pages]);
+  for (let p = page - delta; p <= page + delta; p++) {
+    if (p >= 1 && p <= pages) wanted.add(p);
+  }
+  const items: PageItem[] = [];
+  let prev = 0;
+  for (const p of [...wanted].sort((a, b) => a - b)) {
+    if (prev && p - prev > 1) items.push('…');
+    items.push(p);
+    prev = p;
+  }
+  return items;
+}
+
 export function Pagination({
   page,
   pages,
   total,
   onPage,
+  onGoToPage,
+  pageSize,
+  onPageSizeChange,
+  pageSizeOptions = [25, 50, 100],
 }: {
   page: number;
   pages: number;
   total?: number;
   onPage: (p: number) => void;
+  /** When provided, renders a compact "go to page" input (Enter submits). */
+  onGoToPage?: (p: number) => void;
+  /** When provided (with onPageSizeChange), renders a page-size selector. */
+  pageSize?: number;
+  onPageSizeChange?: (n: number) => void;
+  pageSizeOptions?: number[];
 }) {
-  if (pages <= 1) {
-    return total !== undefined ? (
-      <div className="text-sm text-gray-500 mt-3">Всього: {total}</div>
-    ) : null;
-  }
-  const win = 2;
-  const nums: number[] = [];
-  for (let p = Math.max(1, page - win); p <= Math.min(pages, page + win); p++) nums.push(p);
-  return (
-    <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
-      <div className="text-sm text-gray-500">
+  const [gotoValue, setGotoValue] = useState('');
+  const [gotoInvalid, setGotoInvalid] = useState(false);
+
+  const submitGoto = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onGoToPage) return;
+    const n = parseInt(gotoValue.trim(), 10);
+    if (!Number.isFinite(n)) {
+      setGotoInvalid(true); // non-numeric input — show error, don't navigate
+      return;
+    }
+    // Clamp to the valid range so an out-of-range request never hits the API.
+    onGoToPage(Math.min(Math.max(n, 1), pages));
+    setGotoValue('');
+    setGotoInvalid(false);
+  };
+
+  const info = (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-500">
+      <span>
         Сторінка {page} з {pages}
-        {total !== undefined ? ` · Всього: ${total}` : ''}
-      </div>
-      <div className="flex items-center gap-1">
+        {total !== undefined ? <> · Всього: {total.toLocaleString('uk-UA')}</> : null}
+      </span>
+      {onPageSizeChange && (
+        <label className="flex items-center gap-1.5">
+          Показувати:
+          <select
+            value={pageSize}
+            onChange={(e) => onPageSizeChange(Number(e.target.value))}
+            className="px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            {pageSizeOptions.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {onGoToPage && pages > 1 && (
+        <form onSubmit={submitGoto} className="flex items-center gap-1.5">
+          <label htmlFor="products-goto-page" className="whitespace-nowrap">
+            До сторінки:
+          </label>
+          <input
+            id="products-goto-page"
+            type="text"
+            inputMode="numeric"
+            value={gotoValue}
+            placeholder={String(page)}
+            onChange={(e) => {
+              setGotoValue(e.target.value.replace(/[^0-9]/g, ''));
+              setGotoInvalid(false);
+            }}
+            className={`w-16 px-2 py-1 text-xs border rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+              gotoInvalid ? 'border-red-400' : 'border-gray-300'
+            }`}
+          />
+          <Button size="sm" variant="secondary" type="submit">
+            Перейти
+          </Button>
+        </form>
+      )}
+    </div>
+  );
+
+  if (pages <= 1) {
+    if (total === undefined && !onPageSizeChange && !onGoToPage) return null;
+    return <div className="mt-3">{info}</div>;
+  }
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+      {info}
+      <div className="flex flex-wrap items-center gap-1">
+        <Button size="sm" variant="secondary" disabled={page <= 1} onClick={() => onPage(1)}>
+          Перша
+        </Button>
         <Button size="sm" variant="secondary" disabled={page <= 1} onClick={() => onPage(page - 1)}>
           Назад
         </Button>
-        {nums.map((n) => (
-          <button
-            key={n}
-            type="button"
-            onClick={() => onPage(n)}
-            className={`min-w-[32px] px-2 py-1.5 text-xs rounded-md border transition ${
-              n === page
-                ? 'bg-blue-600 text-white border-blue-600'
-                : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-            }`}
-          >
-            {n}
-          </button>
-        ))}
+        {buildPageItems(page, pages).map((it, i) =>
+          it === '…' ? (
+            <span key={`ellipsis-${i}`} className="px-1.5 text-xs text-gray-400 select-none" aria-hidden>
+              …
+            </span>
+          ) : (
+            <button
+              key={it}
+              type="button"
+              onClick={() => onPage(it)}
+              aria-current={it === page ? 'page' : undefined}
+              className={`min-w-[32px] px-2 py-1.5 text-xs rounded-md border transition ${
+                it === page
+                  ? 'bg-blue-600 text-white border-blue-600 font-medium'
+                  : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              {it}
+            </button>
+          ),
+        )}
         <Button size="sm" variant="secondary" disabled={page >= pages} onClick={() => onPage(page + 1)}>
           Далі
+        </Button>
+        <Button size="sm" variant="secondary" disabled={page >= pages} onClick={() => onPage(pages)}>
+          Остання
         </Button>
       </div>
     </div>
