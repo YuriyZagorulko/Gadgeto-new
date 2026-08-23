@@ -1,16 +1,18 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTranslations } from 'next-intl';
-import { Link } from '@/i18n/navigation';
+import { Link, usePathname } from '@/i18n/navigation';
 import SearchBox from '@/components/SearchBox';
 import CartModal from '@/components/CartModal';
 import { useCartStore, useCartTotalItems } from '@/lib/cart-store';
 
 export default function Header() {
   const t = useTranslations('header');
+  const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const [categories, setCategories] = useState<any[]>([]);
   const [user, setUser] = useState<any>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const initSession = useCartStore((s) => s.initSession);
   const refreshFromAPI = useCartStore((s) => s.refreshFromAPI);
   const cartCount = useCartTotalItems();
@@ -18,17 +20,61 @@ export default function Header() {
   const openCartModal = useCartStore((s) => s.openCartModal);
   const closeCartModal = useCartStore((s) => s.closeCartModal);
 
+  const fetchUser = useCallback(() => {
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+      setUser(null);
+      setAuthLoading(false);
+      return;
+    }
+    setAuthLoading(true);
+    fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => {
+        if (!r.ok) {
+          // Token invalid/expired — clean up
+          localStorage.removeItem('auth_token');
+          setUser(null);
+          return null;
+        }
+        return r.json();
+      })
+      .then(d => {
+        if (d) setUser(d);
+      })
+      .catch(() => {
+        // Network error — keep current user state to avoid flash
+      })
+      .finally(() => {
+        setAuthLoading(false);
+      });
+  }, []);
+
   useEffect(() => {
     fetch('/api/categories').then(r => r.json()).then(d => setCategories(d.items || [])).catch(() => {});
-    const token = localStorage.getItem('auth_token');
-    if (token) {
-      fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
-        .then(r => r.json()).then(d => setUser(d)).catch(() => {});
-    }
+    fetchUser();
+
     // Initialise cart session and sync with backend
     initSession();
     refreshFromAPI().catch(() => {});
-  }, [initSession, refreshFromAPI]);
+  }, [fetchUser, initSession, refreshFromAPI, pathname]);
+
+  // Listen for auth changes (login in another tab, custom auth events)
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'auth_token') {
+        fetchUser();
+      }
+    };
+    const onFocus = () => {
+      fetchUser();
+    };
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [fetchUser]);
 
   return (
     <>
@@ -48,10 +94,20 @@ export default function Header() {
               placeholder={t('searchPlaceholder')}
             />
             <div className="flex items-center gap-3 sm:gap-4">
-              {user ? (
-                <Link href="/account" className="hidden sm:inline text-sm hover:text-blue-600">{t('account')}</Link>
+              {authLoading ? null : user ? (
+                <Link href="/account" className="hidden sm:inline-flex items-center hover:text-blue-600 p-1.5 rounded-lg">
+                  <svg className="h-6 w-6 text-gray-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
+                    <circle cx="12" cy="7" r="4" />
+                  </svg>
+                </Link>
               ) : (
-                <Link href="/login" className="hidden sm:inline text-sm hover:text-blue-600">{t('signIn')}</Link>
+                <Link href="/login" className="hidden sm:inline-flex items-center hover:text-blue-600 p-1.5 rounded-lg" aria-label={t('signIn')}>
+                  <svg className="h-6 w-6 text-gray-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
+                    <circle cx="12" cy="7" r="4" />
+                  </svg>
+                </Link>
               )}
               <button
                 onClick={openCartModal}

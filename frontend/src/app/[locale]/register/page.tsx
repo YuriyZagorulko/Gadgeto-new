@@ -1,17 +1,29 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { Link } from '@/i18n/navigation';
+import { Link, useRouter } from '@/i18n/navigation';
 
 const API_BASE = '/api/auth';
 
 export default function RegisterPage() {
   const t = useTranslations('auth');
+  const router = useRouter();
   const [form, setForm] = useState({email:'',password:'',confirm:'',full_name:'',phone:''});
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [registered, setRegistered] = useState(false);
   const [registeredEmail, setRegisteredEmail] = useState('');
+
+  useEffect(() => {
+    const token = localStorage.getItem('auth_token');
+    if (token) {
+      fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
+        .then(r => {
+          if (r.ok) router.push('/account');
+        })
+        .catch(() => {});
+    }
+  }, [router]);
 
   const validateForm = () => {
     if (!form.full_name.trim()) { setError(t('fullName') + ' є обов\'язковим'); return false; }

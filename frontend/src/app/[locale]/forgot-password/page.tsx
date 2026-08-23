@@ -34,7 +34,6 @@ export default function ForgotPasswordPage() {
       });
 
       if (!res.ok) {
-        // Always show a generic user-friendly message — never leak raw API errors
         setError(t('errorGenericRequest'));
         return;
       }
@@ -51,7 +50,12 @@ export default function ForgotPasswordPage() {
     return (
       <div className="max-w-md mx-auto px-4 py-12 text-center">
         <div className="card p-8">
-          <div className="text-green-500 text-5xl mb-4">\u2713</div>
+          <div className="flex justify-center mb-4">
+            <svg className="w-12 h-12 text-green-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M8 12l2 2 4-4" />
+            </svg>
+          </div>
           <h1 className="text-2xl font-bold mb-4">{t('forgotPasswordTitle')}</h1>
           <p className="text-gray-600 mb-6">{t('forgotPasswordSuccess')}</p>
           <Link href="/login" className="btn-primary inline-block px-6 py-2 rounded-lg">{t('signIn')}</Link>
