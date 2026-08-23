@@ -1,16 +1,15 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { useTranslations } from 'next-intl';
-import { Link, useRouter } from '@/i18n/navigation';
+import { Link } from '@/i18n/navigation';
+import SearchBox from '@/components/SearchBox';
 
 export default function Header() {
   const t = useTranslations('header');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [searchQ, setSearchQ] = useState('');
   const [categories, setCategories] = useState<any[]>([]);
   const [cartCount, setCartCount] = useState(0);
   const [user, setUser] = useState<any>(null);
-  const router = useRouter();
 
   useEffect(() => {
     fetch('/api/categories').then(r => r.json()).then(d => setCategories(d.items || [])).catch(() => {});
@@ -25,11 +24,6 @@ export default function Header() {
     }
   }, []);
 
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (searchQ.trim()) router.push(`/search?q=${encodeURIComponent(searchQ.trim())}`);
-  };
-
   return (
     <header className="bg-white shadow-sm sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4">
@@ -40,10 +34,12 @@ export default function Header() {
               <Link key={c.slug} href={`/catalog/${c.slug}`} className="hover:text-blue-600 transition">{c.name}</Link>
             ))}
           </nav>
-          <form onSubmit={handleSearch} className="hidden md:flex items-center gap-2">
-            <input type="search" value={searchQ} onChange={e => setSearchQ(e.target.value)}
-              placeholder={t('searchPlaceholder')} className="input-field w-48 lg:w-64 text-sm" />
-          </form>
+          <SearchBox
+            wrapperClassName="hidden md:flex items-center gap-2"
+            formClassName="flex items-center"
+            inputClassName="input-field w-48 lg:w-64 text-sm"
+            placeholder={t('searchPlaceholder')}
+          />
           <div className="flex items-center gap-3 sm:gap-4">
             {user ? (
               <Link href="/account" className="hidden sm:inline text-sm hover:text-blue-600">{t('account')}</Link>
@@ -61,10 +57,12 @@ export default function Header() {
             {categories.slice(0, 6).map((c: any) => (
               <Link key={c.slug} href={`/catalog/${c.slug}`} className="block px-2 py-1 hover:bg-gray-100 rounded">{c.name}</Link>
             ))}
-            <form onSubmit={handleSearch} className="flex gap-2 mt-2">
-              <input type="search" value={searchQ} onChange={e => setSearchQ(e.target.value)}
-                placeholder={t('searchPlaceholderMobile')} className="input-field flex-1 text-sm" />
-            </form>
+            <SearchBox
+              wrapperClassName="mt-2"
+              formClassName="flex gap-2"
+              inputClassName="input-field flex-1 text-sm"
+              placeholder={t('searchPlaceholderMobile')}
+            />
           </div>
         )}
       </div>
