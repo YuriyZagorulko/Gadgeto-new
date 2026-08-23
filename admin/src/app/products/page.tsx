@@ -342,7 +342,7 @@ function ProductsInner() {
                   <SortableTh label="Наявність" sortKey="stock" active={q.sort === 'stock'} order={q.order} onSort={toggleSort} className="w-28" />
                   <SortableTh label="Статус" sortKey="status" active={q.sort === 'status'} order={q.order} onSort={toggleSort} className="w-28" />
                   <SortableTh label="Оновлено" sortKey="updated" active={q.sort === 'updated'} order={q.order} onSort={toggleSort} className="w-36" />
-                  <Th className="w-40">Дії</Th>
+                                    <Th className="w-40">Товар у магазині</Th>
                 </tr>
               }
             >
@@ -380,11 +380,17 @@ function ProductsInner() {
                 </Td>
                 <Td><Badge tone={r.status === 'PUBLISHED' ? 'green' : r.status === 'ARCHIVED' ? 'gray' : 'yellow'}>{PRODUCT_STATUS_LABELS[r.status] || r.status}</Badge></Td>
                 <Td className="whitespace-nowrap text-xs text-gray-500 tabular-nums">{formatDateTime(r.updated_at)}</Td>
-                <Td className="whitespace-nowrap">
-                  <div className="flex gap-1">
-                    <Link href={`/products/${r.id}`}><Button size="sm" variant="secondary">Змінити</Button></Link>
-                    <Button size="sm" variant="ghost" className="text-red-600" onClick={() => setConfirm({ kind: 'delete', ids: [r.id] })}>✕</Button>
-                  </div>
+                                                <Td className="whitespace-nowrap">
+                  {r.slug ? (
+                    <a
+                      href={process.env.NEXT_PUBLIC_STORE_URL + '/product/' + encodeURIComponent(r.slug)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center justify-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-50 hover:border-gray-400 transition-colors"
+                    >Відкрити</a>
+                  ) : (
+                    <span className="inline-flex items-center justify-center px-3 py-1.5 text-sm text-gray-400 border border-gray-200 rounded">Недоступно</span>
+                  )}
                 </Td>
               </tr>
             ))}

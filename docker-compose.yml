@@ -35,7 +35,7 @@ services:
       - "3000:3000"
     depends_on:
       backend:
-        condition: service_healthy
+                condition: service_healthy
 
   admin:
     build:
@@ -43,6 +43,7 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: "http://backend:8000"
+        NEXT_PUBLIC_STORE_URL: "https://gadgeto.ua"
     container_name: gadgeto-admin
     ports:
       - "3001:3000"
