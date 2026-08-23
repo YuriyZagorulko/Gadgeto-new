@@ -5,7 +5,7 @@ from app.models.base import Base, main_metadata
 
 class Category(Base):
     __tablename__ = "categories"
-    
+
     legacy_id = Column(Integer, nullable=True, index=True)
     parent_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
     name = Column(String(255), nullable=False)
@@ -15,12 +15,20 @@ class Category(Base):
     seo_description = Column(Text, nullable=True)
     seo_focus_keyphrase = Column(String(255), nullable=True)
     image = Column(String(500), nullable=True)
-    is_active = Column(Boolean, default=True, nullable=False)
+    is_active = Column(Boolean, default=0, nullable=False)
     sort_order = Column(Integer, default=0, nullable=False)
-    
-    parent = relationship("Category", remote_side=[id], backref="children")
+
     products = relationship("ProductCategory", back_populates="category")
     filters = relationship("CategoryFilter", back_populates="category")
+
+
+# Define parent relationship AFTER class creation to properly reference Category.id
+Category.parent = relationship(
+    "Category",
+    foreign_keys=[Category.parent_id],
+    remote_side=[Category.id],
+    backref="children",
+)
 
 
 # CategoryClosure must be registered with main_metadata

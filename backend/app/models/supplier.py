@@ -22,7 +22,6 @@ class SupplierCategory(Base):
     is_removed = Column(Boolean, default=False, nullable=False)
     supplier = relationship("Supplier", back_populates="supplier_categories")
     category_mappings = relationship("CategoryMapping", back_populates="supplier_category")
-    category = relationship("Category", backref="supplier_categories_rel")
 
 class SupplierAttribute(Base):
     __tablename__ = "supplier_attributes"

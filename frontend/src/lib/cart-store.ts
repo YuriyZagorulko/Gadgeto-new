@@ -26,6 +26,10 @@ export interface CartState {
   sessionToken: string;
   syncing: boolean;
   error: string | null;
+  cartModalOpen: boolean;
+  openCartModal: () => void;
+  closeCartModal: () => void;
+  /** Adds product ONLY if not already in cart. Never creates duplicates. */
   addItem: (product: {
     id: number; name: string; slug: string;
     sku?: string; price: number; old_price?: number | null;
@@ -73,6 +77,10 @@ export const useCartStore = create<CartState>()(
       sessionToken: '',
       syncing: false,
       error: null,
+      cartModalOpen: false,
+
+      openCartModal: () => set({ cartModalOpen: true }),
+      closeCartModal: () => set({ cartModalOpen: false }),
 
       initSession: () => {
         const tok = getSessionToken();
@@ -81,45 +89,41 @@ export const useCartStore = create<CartState>()(
 
       addItem: async (product) => {
         const { items } = get();
+        // ENSURE: never duplicate — if product already in cart, do nothing
         const existing = items.find((i) => i.product_id === product.id);
-
         if (existing) {
-          const updated = items.map((i) =>
-            i.product_id === product.id ? { ...i, qty: i.qty + 1 } : i,
-          );
-          set({ items: updated, error: null });
-          try {
-            await apiCart('/items', {
-              method: 'POST',
-              body: JSON.stringify({ product_id: product.id, qty: 1 }),
-            });
-          } catch (e: any) {
-            set({ error: e.message, items });
-          }
-        } else {
-          const newItem: CartItem = {
-            id: 0,
-            product_id: product.id,
-            name: product.name,
-            slug: product.slug,
-            sku: product.sku || '',
-            price: product.price,
-            old_price: product.old_price ?? null,
-            image: product.image || '',
-            qty: 1,
-            stock_status: product.stock_status || 'in_stock',
-          };
-          set({ items: [...items, newItem], error: null });
-          try {
-            await apiCart('/items', {
-              method: 'POST',
-              body: JSON.stringify({ product_id: product.id, qty: 1 }),
-            });
-            await get().refreshFromAPI();
-          } catch (e: any) {
-            set({ error: e.message, items: items.filter((i) => i.product_id !== product.id) });
-          }
+          // Already in cart — just open the modal, do not touch quantity
+          get().openCartModal();
+          return;
         }
+
+        // Fresh add: create new cart line with qty 1
+        const newItem: CartItem = {
+          id: 0,
+          product_id: product.id,
+          name: product.name,
+          slug: product.slug,
+          sku: product.sku || '',
+          price: product.price,
+          old_price: product.old_price ?? null,
+          image: product.image || '',
+          qty: 1,
+          stock_status: product.stock_status || 'in_stock',
+        };
+        set({ items: [...items, newItem], error: null });
+
+        try {
+          await apiCart('/items', {
+            method: 'POST',
+            body: JSON.stringify({ product_id: product.id, qty: 1 }),
+          });
+          await get().refreshFromAPI();
+        } catch (e: any) {
+          set({ error: e.message, items: items.filter((i) => i.product_id !== product.id) });
+        }
+
+        // Open cart modal after successful add
+        get().openCartModal();
       },
 
       updateQuantity: async (productId, qty) => {
@@ -219,4 +223,9 @@ export function useCartTotalItems(): number {
 export function useCartSubtotal(): number {
   const items = useCartStore((s) => s.items);
   return items.reduce((sum, i) => sum + i.qty * i.price, 0);
+}
+
+/** Check if a given product is already in the cart (by product_id). */
+export function useIsInCart(productId: number): boolean {
+  return useCartStore((s) => s.items.some((i) => i.product_id === productId));
 }

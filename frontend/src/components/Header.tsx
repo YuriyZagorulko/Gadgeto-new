@@ -10,11 +10,13 @@ export default function Header() {
   const t = useTranslations('header');
   const [menuOpen, setMenuOpen] = useState(false);
   const [categories, setCategories] = useState<any[]>([]);
-  const [cartOpen, setCartOpen] = useState(false);
   const [user, setUser] = useState<any>(null);
   const initSession = useCartStore((s) => s.initSession);
   const refreshFromAPI = useCartStore((s) => s.refreshFromAPI);
   const cartCount = useCartTotalItems();
+  const cartModalOpen = useCartStore((s) => s.cartModalOpen);
+  const openCartModal = useCartStore((s) => s.openCartModal);
+  const closeCartModal = useCartStore((s) => s.closeCartModal);
 
   useEffect(() => {
     fetch('/api/categories').then(r => r.json()).then(d => setCategories(d.items || [])).catch(() => {});
@@ -52,7 +54,7 @@ export default function Header() {
                 <Link href="/login" className="hidden sm:inline text-sm hover:text-blue-600">{t('signIn')}</Link>
               )}
               <button
-                onClick={() => setCartOpen(true)}
+                onClick={openCartModal}
                 className="relative p-1.5 rounded-lg hover:bg-gray-100 transition"
                 aria-label={t('cart')}
               >
@@ -92,7 +94,7 @@ export default function Header() {
         </div>
       </header>
 
-      <CartModal open={cartOpen} onClose={() => setCartOpen(false)} />
+      <CartModal open={cartModalOpen} onClose={closeCartModal} />
     </>
   );
 }

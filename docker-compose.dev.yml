@@ -2,15 +2,11 @@
 # Enables hot reload for all services without docker compose build
 #
 # USAGE:
-#   # First time / after dependency changes:
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml build
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
-#
-#   # Normal start (no rebuild needed):
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#   docker compose up -d
+#   # Frontend and backend now work with hot reload out of the box
 #
 #   # Stop:
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+#   docker compose down
 #
 # Source code changes on the host are immediately reflected.
 
@@ -23,22 +19,6 @@ services:
     volumes:
       - ./backend/app:/app/app
       - ./migrations:/app/migrations
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.dev
-      args:
-        NEXT_PUBLIC_API_URL: "http://backend:8000"
-    # Mount source code, keep node_modules and .next in named volumes
-    volumes:
-      - ./frontend:/app
-      - frontend_node_modules:/app/node_modules
-      - frontend_next:/app/.next
-    environment:
-      - NEXT_PUBLIC_API_URL=http://backend:8000
-    depends_on:
-      - backend
 
   admin:
     build:
@@ -57,7 +37,5 @@ services:
       - backend
 
 volumes:
-  frontend_node_modules:
-  frontend_next:
   admin_node_modules:
   admin_next:

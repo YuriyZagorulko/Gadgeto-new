@@ -3,7 +3,7 @@ Database configuration and session management.
 """
 
 import asyncio
-from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
 from sqlalchemy import MetaData
 from sqlalchemy.ext.asyncio import (
@@ -36,9 +36,8 @@ session_factory = async_sessionmaker(
 metadata = MetaData()
 
 
-@asynccontextmanager
-async def get_session() -> AsyncSession:
-    """Get database session context manager."""
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """Get database session (FastAPI dependency)."""
     async with session_factory() as session:
         try:
             yield session

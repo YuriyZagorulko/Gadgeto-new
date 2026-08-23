@@ -171,19 +171,18 @@ export default function CartModal({ open, onClose }: CartModalProps) {
               <span className="text-xl font-bold">{formatPrice(subtotal, locale)}</span>
             </div>
             <div className="flex gap-2">
+              <button
+                onClick={onClose}
+                className="flex-1 btn-outline text-center text-sm py-2.5"
+              >
+                {t('continueShopping')}
+              </button>
               <Link
                 href="/checkout"
                 onClick={onClose}
                 className="flex-1 btn-primary text-center text-sm py-2.5"
               >
                 {t('proceedToCheckout')}
-              </Link>
-              <Link
-                href="/cart"
-                onClick={onClose}
-                className="flex-1 btn-outline text-center text-sm py-2.5"
-              >
-                {t('viewCart')}
               </Link>
             </div>
           </div>
