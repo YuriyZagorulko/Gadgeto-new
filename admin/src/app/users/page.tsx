@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { api, qs } from '@/lib/api';
 import { formatDateTime, USER_ROLE_LABELS, USER_STATUS_LABELS } from '@/lib/format';
-import { PageHeader, Button, Input, Select, Table, Th, Td, Badge, Pagination, LoadingState, ErrorState, EmptyState, Modal, useToast } from '@/components/ui';
+import { PageHeader, Button, Input, Select, Table, Th, Td, Badge, Pagination, LoadingState, ErrorState, EmptyState, Modal, ConfirmDialog, useToast } from '@/components/ui';
 
 type Row = {
   id: number; email: string; full_name: string | null; phone: string | null;
@@ -19,6 +19,19 @@ const STATUSES = ['ACTIVE', 'INACTIVE', 'PENDING', 'BANNED'];
 const roleTone = (r: string): 'blue' | 'yellow' | 'gray' => (r === 'ADMIN' ? 'blue' : r === 'STAFF' ? 'yellow' : 'gray');
 const statusTone = (s: string): 'green' | 'red' | 'yellow' | 'gray' => (s === 'ACTIVE' ? 'green' : s === 'BANNED' ? 'red' : s === 'PENDING' ? 'yellow' : 'gray');
 
+/** Sortable column descriptor */
+type SortCol = 'email' | 'name' | 'phone' | 'role' | 'status' | 'orders' | 'last_login' | 'registered';
+const SORTABLE: { key: SortCol; label: string }[] = [
+  { key: 'email', label: 'Email' },
+  { key: 'name', label: "Ім'я" },
+  { key: 'phone', label: 'Телефон' },
+  { key: 'role', label: 'Роль' },
+  { key: 'status', label: 'Статус' },
+  { key: 'orders', label: 'Замовлень' },
+  { key: 'last_login', label: 'Останній вхід' },
+  { key: 'registered', label: 'Зареєстровано' },
+];
+
 export default function UsersPage() {
   const toast = useToast();
   const [q, setQ] = useState('');
@@ -26,6 +39,8 @@ export default function UsersPage() {
   const [role, setRole] = useState('');
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
+  const [sortBy, setSortBy] = useState<SortCol | null>(null);
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [data, setData] = useState<ListResp | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -36,18 +51,39 @@ export default function UsersPage() {
   const [editStatus, setEditStatus] = useState('');
   const [saving, setSaving] = useState(false);
 
+  const [deleteTarget, setDeleteTarget] = useState<Row | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setError('');
     api.get<ListResp>('/users' + qs({
       page, per_page: 20, q: appliedQ || undefined,
       role: role || undefined, status: status || undefined,
+      sort_by: sortBy || undefined, sort_order: sortOrder,
     }))
       .then((d) => !cancelled && setData(d))
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, [page, appliedQ, role, status, tick]);
+  }, [page, appliedQ, role, status, sortBy, sortOrder, tick]);
+
+  /** Click handler for sortable column headers. */
+  const handleSort = (col: SortCol) => {
+    if (sortBy === col) {
+      setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(col);
+      setSortOrder('desc');
+    }
+    setPage(1);
+  };
+
+  /** Render a sort arrow for a column header. */
+  const sortArrow = (col: SortCol): string => {
+    if (sortBy !== col) return '';
+    return sortOrder === 'asc' ? ' ↑' : ' ↓';
+  };
 
   const openDetail = async (u: Row) => {
     try {
@@ -71,6 +107,24 @@ export default function UsersPage() {
     } catch (e: unknown) {
       toast.push('error', (e as Error).message);
     } finally { setSaving(false); }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api.delete(`/users/${deleteTarget.id}`);
+      toast.push('success', `Користувача ${deleteTarget.email} видалено.`);
+      setDeleteTarget(null);
+      // If we deleted the only item on the current page, go back one page
+      if (data && data.items.length === 1 && page > 1) {
+        setPage(page - 1);
+      }
+      setTick((t) => t + 1);
+    } catch (e: unknown) {
+      toast.push('error', (e as Error).message);
+      setDeleteTarget(null);
+    } finally { setDeleting(false); }
   };
 
   return (
@@ -107,7 +161,14 @@ export default function UsersPage() {
       {!error && data?.items.length === 0 && <EmptyState title="Користувачів не знайдено" />}
       {data && data.items.length > 0 && (
         <>
-          <Table head={<tr><Th>Email</Th><Th>Ім'я</Th><Th>Телефон</Th><Th>Роль</Th><Th>Статус</Th><Th>Замовлень</Th><Th>Останній вхід</Th><Th>Зареєстровано</Th></tr>}>
+          <Table head={<tr>{SORTABLE.map(({ key, label }) => (
+                <Th key={key}>
+                  <button type="button" onClick={() => handleSort(key)}
+                    className="cursor-pointer select-none hover:text-gray-900 transition-colors w-full text-left font-medium">
+                    {label}<span className="text-blue-500 text-xs ml-1">{sortArrow(key)}</span>
+                  </button>
+                </Th>
+              ))}<Th className="text-right">Дії</Th></tr>}>
             {data.items.map((u) => (
               <tr key={u.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => openDetail(u)}>
                 <Td className="font-medium text-blue-600">{u.email}</Td>
@@ -118,6 +179,18 @@ export default function UsersPage() {
                 <Td>{u.orders_count}</Td>
                 <Td className="whitespace-nowrap text-xs text-gray-500">{formatDateTime(u.last_login_at)}</Td>
                 <Td className="whitespace-nowrap text-xs text-gray-500">{formatDateTime(u.created_at)}</Td>
+                  <Td className="text-right">
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setDeleteTarget(u); }}
+                      className="text-red-500 hover:text-red-700 hover:bg-red-50 rounded p-1 transition-colors"
+                      title="Видалити користувача"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                        <path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c-.84 0-1.673.025-2.5.075V3.75c0-.69.56-1.25 1.25-1.25h2.5c.69 0 1.25.56 1.25 1.25v.325C11.673 4.025 10.84 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z" clipRule="evenodd" />
+                      </svg>
+                    </button>
+                  </Td>
               </tr>
             ))}
           </Table>
@@ -170,6 +243,22 @@ export default function UsersPage() {
           </div>
         )}
       </Modal>
+
+      {/* Delete confirmation dialog */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Видалити користувача?"
+        message={
+          deleteTarget
+            ? `Ви впевнені, що хочете видалити користувача ${deleteTarget.email}? Цю дію неможливо скасувати.`
+            : ''
+        }
+        confirmLabel="Видалити"
+        danger
+        busy={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 
-from app.api.admin.deps import require_admin
+from app.api.admin.deps import require_admin, require_admin_role
 from app.core.db_connect import DB
 
 router = APIRouter()
@@ -22,6 +22,18 @@ USER_ROLES = ("CUSTOMER", "STAFF", "ADMIN")
 # Must match the DB enum userstatus: {ACTIVE, INACTIVE, PENDING, BANNED}
 USER_STATUSES = ("ACTIVE", "INACTIVE", "PENDING", "BANNED")
 
+# Whitelist of sortable column names → SQL expressions
+SORT_COLUMNS = {
+    "email": "u.email",
+    "name": "u.full_name",
+    "phone": "u.phone",
+    "role": "u.role",
+    "status": "u.status",
+    "orders": "orders_count",
+    "last_login": "u.last_login_at",
+    "registered": "u.created_at",
+}
+
 
 class UserUpdate(BaseModel):
     role: Optional[str] = None
@@ -35,9 +47,11 @@ async def list_users(
     q: Optional[str] = None,
     role: Optional[str] = None,
     status: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = Query("desc"),
     user: dict = Depends(require_admin),
 ):
-    """Paginated user list. Never exposes password hashes."""
+    """Paginated user list with sorting, search and filtering. Never exposes password hashes."""
     conn, cur = db()
     try:
         conds, params = ["1=1"], []
@@ -53,6 +67,18 @@ async def list_users(
             params.append(status)
         where = " AND ".join(conds)
 
+        # Validate and build ORDER BY
+        if sort_by and sort_by not in SORT_COLUMNS:
+            raise HTTPException(status_code=400, detail=f"Невірне поле для сортування: {sort_by}")
+        if sort_order not in ("asc", "desc"):
+            sort_order = "desc"
+
+        if sort_by:
+            order_expr = SORT_COLUMNS[sort_by]
+            order_clause = f"{order_expr} {sort_order.upper()}"
+        else:
+            order_clause = "u.created_at DESC"
+
         cur.execute(f"SELECT COUNT(*) AS c FROM users u WHERE {where}", params)
         total = cur.fetchone()["c"]
 
@@ -65,7 +91,7 @@ async def list_users(
                    (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id) AS orders_count
             FROM users u
             WHERE {where}
-            ORDER BY u.created_at DESC
+            ORDER BY {order_clause}
             LIMIT %s OFFSET %s
             """,
             params + [per_page, offset],
@@ -141,3 +167,90 @@ async def update_user(
     finally:
         conn.close()
 
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    user: dict = Depends(require_admin_role),
+):
+    """Delete a user. Only ADMIN role can delete users.
+
+    - Self-deletion is forbidden.
+    - The last administrator in the system cannot be deleted.
+    - Related sessions, carts, cart items and shipping addresses are deleted.
+    - Orders are preserved (user_id set to NULL to keep financial records).
+    - Product reviews are preserved (ON DELETE SET NULL in DB).
+    - Mapping audit records (created_by_user_id) are set to NULL.
+    """
+    conn, cur = db()
+    try:
+        # 1. Prevent self-deletion
+        if user["id"] == user_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Неможливо видалити поточний обліковий запис адміністратора.",
+            )
+
+        # 2. Load target user
+        cur.execute(
+            "SELECT id, email, role, status FROM users WHERE id = %s",
+            (user_id,),
+        )
+        target = cur.fetchone()
+        if not target:
+            raise HTTPException(status_code=404, detail="Користувача не знайдено")
+
+        # 3. Prevent deleting the last ADMIN
+        if target["role"] == "ADMIN":
+            cur.execute(
+                "SELECT COUNT(*) AS c FROM users WHERE role = 'ADMIN' AND status = 'ACTIVE'",
+            )
+            admin_count = cur.fetchone()["c"]
+            if admin_count <= 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Неможливо видалити останнього адміністратора системи.",
+                )
+
+        # 4. Handle related records
+
+        # 4a. Delete sessions (ephemeral, safe to remove)
+        cur.execute("DELETE FROM sessions WHERE user_id = %s", (user_id,))
+
+        # 4b. Delete carts and their items
+        cur.execute("SELECT id FROM carts WHERE user_id = %s", (user_id,))
+        cart_ids = [r["id"] for r in cur.fetchall()]
+        for cid in cart_ids:
+            cur.execute("DELETE FROM cart_items WHERE cart_id = %s", (cid,))
+            cur.execute("DELETE FROM carts WHERE id = %s", (cid,))
+
+        # 4c. Delete shipping addresses (exclusive to the user)
+        cur.execute("DELETE FROM shipping_addresses WHERE user_id = %s", (user_id,))
+
+        # 4d. Set orders.user_id to NULL (preserve financial/business records)
+        cur.execute(
+            "UPDATE orders SET user_id = NULL, updated_at = NOW() WHERE user_id = %s",
+            (user_id,),
+        )
+
+        # 4e. Set mapping created_by_user_id to NULL (audit trail integrity)
+        cur.execute(
+            "UPDATE category_mappings SET created_by_user_id = NULL WHERE created_by_user_id = %s",
+            (user_id,),
+        )
+        cur.execute(
+            "UPDATE attribute_mappings SET created_by_user_id = NULL WHERE created_by_user_id = %s",
+            (user_id,),
+        )
+        cur.execute(
+            "UPDATE attribute_value_mappings SET created_by_user_id = NULL WHERE created_by_user_id = %s",
+            (user_id,),
+        )
+
+        # 4f. Product reviews: ON DELETE SET NULL is handled at DB level; no action needed.
+
+        # 5. Finally delete the user
+        cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+
+        return {"ok": True, "detail": f"Користувача {target['email']} видалено."}
+    finally:
+        conn.close()

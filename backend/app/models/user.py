@@ -28,6 +28,8 @@ class User(Base):
     verification_token_expires_at = Column(DateTime, nullable=True)
     last_login_at = Column(DateTime, nullable=True)
     login_count = Column(Integer, default=0)
+    password_reset_token_hash = Column(String(64), nullable=True, index=True)
+    password_reset_token_expires_at = Column(DateTime, nullable=True)
 
     orders = relationship("Order", back_populates="user")
     sessions = relationship("UserSession", back_populates="user")

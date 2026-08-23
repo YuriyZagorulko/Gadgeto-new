@@ -138,7 +138,22 @@
     "errorEmailFormat": "Введіть коректну електронну пошту.",
     "errorPhoneFormat": "Введіть коректний номер телефону.",
     "errorPasswordLetter": "Пароль має містити хоча б одну літеру.",
-    "errorPasswordDigit": "Пароль має містити хоча б одну цифру."
+    "errorPasswordDigit": "Пароль має містити хоча б одну цифру.",
+    "forgotPasswordTitle": "Відновлення пароля",
+    "forgotPasswordDescription": "Введіть email, який ви використовували під час реєстрації.",
+    "forgotPasswordEmail": "Електронна пошта",
+    "forgotPasswordSubmit": "Надіслати посилання",
+    "forgotPasswordSuccess": "Якщо обліковий запис із цією електронною поштою існує, ми надіслали посилання для відновлення пароля.",
+    "forgotPasswordLink": "Забули пароль?",
+    "resetPasswordTitle": "Новий пароль",
+    "resetPasswordNewPassword": "Новий пароль",
+    "resetPasswordConfirmPassword": "Підтвердіть пароль",
+    "resetPasswordSubmit": "Змінити пароль",
+    "resetPasswordSuccess": "Пароль успішно змінено.",
+    "resetPasswordInvalidToken": "Посилання для відновлення пароля недійсне або застаріло.",
+    "resetPasswordRequestNew": "Запросити нове посилання",
+    "sending": "Надсилання...",
+    "errorGenericRequest": "Не вдалося виконати запит. Спробуйте ще раз."
   },
   "verifyEmail": {
     "title": "Підтвердження email",

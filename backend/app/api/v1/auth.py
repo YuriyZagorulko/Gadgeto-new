@@ -3,6 +3,7 @@ Customer authentication API (separate from admin auth).
 
 Provides registration with email verification, login, logout, and profile.
 """
+import asyncio
 import hashlib
 import logging
 import re
@@ -12,7 +13,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from pydantic import BaseModel, field_validator, model_validator
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
@@ -21,7 +22,7 @@ from app.core.security import get_password_hash, verify_password
 from app.core.ratelimit import rate_limiter
 from app.models.user import User, UserStatus, UserRole
 from app.models.session import UserSession
-from app.services.email import send_verification_email
+from app.services.email import send_password_reset_email, send_verification_email
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +154,56 @@ class UserProfile(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("email is required")
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", v):
+            raise ValueError("invalid email format")
+        if ".." in v:
+            raise ValueError("invalid email format")
+        if v.count("@") != 1:
+            raise ValueError("invalid email format")
+        return v
+
+
+class ForgotPasswordResponse(BaseModel):
+    message: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+    confirm_password: str
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if not v:
+            raise ValueError("password is required")
+        if len(v) < 8:
+            raise ValueError("password must be at least 8 characters")
+        if len(v) > 128:
+            raise ValueError("password too long")
+        if not re.search(r"[A-Za-z]", v):
+            raise ValueError("password must contain at least one letter")
+        if not re.search(r"[0-9]", v):
+            raise ValueError("password must contain at least one digit")
+        return v
+
+    @model_validator(mode="after")
+    def passwords_match(self) -> "ResetPasswordRequest":
+        if self.password != self.confirm_password:
+            raise ValueError("passwords do not match")
+        return self
+
 
 
 # Helpers
@@ -508,7 +559,149 @@ async def me(user: User = Depends(_get_user_from_bearer_token)):
     )
 
 
+
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordResponse)
+async def forgot_password(
+    req: ForgotPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+):
+    """Request a password reset email.
+
+    Rate-limited: strict 60-second cooldown per IP+email combination.
+    Always returns the same response regardless of whether the email exists.
+    """
+    rl_key = rate_limiter._get_key(request, f"forgot:{req.email}")
+    rate_limiter.check(rl_key, cooldown_seconds=60)
+
+    # Always use the same generic message
+    generic_message = (
+        "Якщо обліковий запис із цією електронною поштою існує, "
+        "ми надіслали посилання для відновлення пароля."
+    )
+
+    result = await db.execute(
+        select(User).where(func.lower(User.email) == func.lower(req.email))
+    )
+    user = result.scalar_one_or_none()
+
+    if user:
+        # Generate secure reset token (48 bytes raw -> 64 chars URL-safe)
+        raw_token = secrets.token_urlsafe(48)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        expires_at = datetime.utcnow() + timedelta(hours=1)
+
+        user.password_reset_token_hash = token_hash
+        user.password_reset_token_expires_at = expires_at
+        await db.commit()
+
+        # Build reset URL
+        reset_url = f"{settings.FRONTEND_URL}/reset-password?token={raw_token}"
+
+        try:
+            email_sent = await send_password_reset_email(
+                to_email=user.email,
+                to_name=user.full_name or user.email,
+                reset_url=reset_url,
+            )
+        except Exception as e:
+            logger.error(
+                "Exception sending password reset email for user %d (%s): %s",
+                user.id, user.email, e,
+            )
+            email_sent = False
+
+        if not email_sent:
+            logger.warning(
+                "Failed to send password reset email for user %d (%s).",
+                user.id, user.email,
+            )
+    else:
+        # Prevent timing-based enumeration by performing a dummy operation
+        await asyncio.sleep(0.05)
+
+    return ForgotPasswordResponse(message=generic_message)
+
+
+@router.post("/reset-password", response_model=MessageResponse)
+async def reset_password(
+    req: ResetPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+):
+    """Reset password using a reset token.
+
+    Rate-limited: max 5 attempts per IP per 60 seconds.
+    """
+    rate_limiter.check(
+        rate_limiter._get_key(request, "reset-password"),
+        max_requests=5,
+        window_seconds=60,
+    )
+
+    if not req.token or len(req.token) < 10:
+        raise HTTPException(
+            status_code=400,
+            detail="Недійсне або застаріле посилання для відновлення пароля.",
+        )
+
+    token_hash = hashlib.sha256(req.token.encode()).hexdigest()
+
+    # Find user with this reset token hash
+    result = await db.execute(
+        select(User).where(User.password_reset_token_hash == token_hash)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail="Посилання для відновлення пароля недійсне або застаріло.",
+        )
+
+    # Check expiration
+    if (user.password_reset_token_expires_at is None
+            or user.password_reset_token_expires_at < datetime.utcnow()):
+        # Clean up expired token
+        user.password_reset_token_hash = None
+        user.password_reset_token_expires_at = None
+        await db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail="Посилання для відновлення пароля недійсне або застаріло.",
+        )
+
+    # Hash new password
+    new_password_hash = get_password_hash(req.password)
+
+    # Update user password
+    user.password_hash = new_password_hash
+
+    # Invalidate reset token immediately (single-use)
+    user.password_reset_token_hash = None
+    user.password_reset_token_expires_at = None
+
+    # Invalidate all existing sessions for this user
+    await db.execute(
+        delete(UserSession).where(UserSession.user_id == user.id)
+    )
+
+    await db.commit()
+
+    logger.info(
+        "Password reset successful for user %d (%s). All sessions revoked.",
+        user.id, user.email,
+    )
+
+    return MessageResponse(
+        message="Пароль успішно змінено."
+    )
+
+
 @router.get("/me/raw")
+
 async def me_raw(user: User = Depends(_get_user_from_bearer_token)):
     """Return the raw user dict (backward compatibility for Header/footer)."""
     return {

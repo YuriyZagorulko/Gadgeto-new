@@ -53,17 +53,24 @@ services:
   admin:
     build:
       context: ./admin
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
       args:
         NEXT_PUBLIC_API_URL: "http://backend:8000"
-        NEXT_PUBLIC_STORE_URL: "https://gadgeto.ua"
     container_name: gadgeto-admin
+    volumes:
+      - ./admin:/app
+      - admin_node_modules:/app/node_modules
+      - admin_next:/app/.next
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8000
+      - NEXT_PUBLIC_STORE_URL=http://localhost:3000
     ports:
       - "3001:3000"
     depends_on:
-      backend:
-        condition: service_healthy
+      - backend
 
 volumes:
   frontend_node_modules:
   frontend_next:
+  admin_node_modules:
+  admin_next:

@@ -71,6 +71,9 @@ export default function LoginPage() {
         {resendSent && <div className="bg-green-100 text-green-700 p-3 rounded text-sm">{t('resendSuccess')}</div>}
         <div><label className="block text-sm font-medium mb-1">{t('email')}</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="input-field" required /></div>
         <div><label className="block text-sm font-medium mb-1">{t('password')}</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} className="input-field" required /></div>
+        <div className="text-right -mt-2">
+          <Link href="/forgot-password" className="text-sm text-blue-600 hover:underline">{t('forgotPasswordLink')}</Link>
+        </div>
         <button type="submit" disabled={loading} className="btn-primary w-full disabled:opacity-50">{loading ? '...' : t('signIn')}</button>
         {emailNotVerified && (
           <div className="text-center">
