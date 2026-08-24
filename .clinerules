@@ -1,16 +1,24 @@
 # Cline Project Rules
 
-## Git
+## 1. Git
 
-* NEVER create a Git commit automatically.
-* NEVER run `git commit` without explicit permission from the user.
-* NEVER run `git push` without explicit permission from the user.
-* NEVER run `git push --force` without explicit permission from the user.
-* NEVER run `git reset --hard` without explicit permission from the user.
-* You may freely inspect Git state with safe read-only commands such as `git status`, `git diff`, and `git log`.
-* If you think a commit should be created, STOP and ask the user for permission first.
+- NEVER create a Git commit automatically.
+- NEVER run `git commit` without explicit permission from the user.
+- NEVER run `git push` without explicit permission from the user.
+- NEVER run `git push --force` without explicit permission from the user.
+- NEVER run `git reset --hard` without explicit permission from the user.
+- NEVER rewrite Git history.
+- You may freely inspect Git state with safe read-only commands such as:
+  - `git status`
+  - `git diff`
+  - `git log`
+  - `git show`
 
-## Command Execution
+If you think a commit should be created, STOP and ask the user for permission first.
+
+---
+
+## 2. Command Execution
 
 Use SAFE COMMANDS ONLY automatically.
 
@@ -24,86 +32,456 @@ Safe commands can be executed automatically when they are clearly read-only, dia
 
 Examples of generally safe commands:
 
-* `pwd`
-* `ls`
-* `find`
-* `cat`
-* `grep`
-* `head`
-* `tail`
-* `git status`
-* `git diff`
-* `git log`
-* `docker ps`
-* `docker compose ps`
-* `docker compose logs`
-* `docker inspect`
-* project tests
-* linters
-* type checking
-* normal builds
+- `pwd`
+- `ls`
+- `find`
+- `cat`
+- `grep`
+- `head`
+- `tail`
+- `git status`
+- `git diff`
+- `git log`
+- `docker ps`
+- `docker compose ps`
+- `docker compose logs`
+- `docker inspect`
+- project tests
+- linters
+- type checking
+- normal builds
+- normal development server operations
 
 If a command can delete data, overwrite important data, modify system configuration, modify production infrastructure, or otherwise cause potentially irreversible changes, ASK FOR USER PERMISSION FIRST.
 
 Examples:
 
-* `rm`
-* `rm -rf`
-* `docker system prune`
-* `docker volume rm`
-* `docker compose down -v`
-* database deletion
-* destructive database migrations
-* `git commit`
-* `git push`
-* `git push --force`
-* `git reset --hard`
-* firewall changes
-* SSH configuration changes
-* system user/permission changes
-* production infrastructure changes
-* destructive `sudo` commands
+- `rm`
+- `rm -rf`
+- `docker system prune`
+- `docker volume rm`
+- `docker compose down -v`
+- database deletion
+- destructive database migrations
+- destructive SQL (`DELETE`, `TRUNCATE`, `DROP`, etc.)
+- `git commit`
+- `git push`
+- `git push --force`
+- `git reset --hard`
+- firewall changes
+- SSH configuration changes
+- system user/permission changes
+- production infrastructure changes
+- destructive `sudo` commands
 
 If you are unsure whether a command is safe, DO NOT execute it automatically. Ask the user.
 
-## File Changes
+---
 
-You may modify project source files when necessary to complete the user's requested task.
+## 3. File Changes
 
-Do not make unrelated changes.
+- You may modify project source files when necessary to complete the user's requested task.
+- Do not make unrelated changes.
+- Do not delete important project files unless explicitly required by the task.
+- Before deleting or replacing a significant file, inspect its usage and dependencies.
+- Prefer minimal, targeted changes.
+- Preserve existing architecture unless there is a clear technical reason to change it.
+- Do not silently rewrite large parts of the project when a smaller fix is sufficient.
 
-Do not delete important project files unless explicitly required by the task.
+---
 
-## Production Safety
+## 4. Local Development vs Production
 
 Treat production as sensitive.
 
+The project may have both local/development and production environments.
+
+Before performing an operation that can modify data, determine which environment it targets.
+
+Never assume that a command is safe simply because it is being executed from the project directory.
+
 Never perform destructive production operations without explicit user approval.
 
-Never delete production data, databases, Docker volumes, or infrastructure without explicit approval.
+Never:
 
-If you cannot determine whether an operation affects development or production, ask first.
+- delete production data
+- delete production databases
+- delete production Docker volumes
+- reset production databases
+- run destructive production migrations
+- remove production media
+- restart or rebuild production infrastructure in a destructive way
 
-## Verification
+without explicit user approval.
+
+If you cannot determine whether an operation affects development or production, ASK FIRST.
+
+---
+
+## 5. Database Safety
+
+Database operations require special care.
+
+### Safe automatically
+
+You may automatically perform:
+
+- read-only SQL queries
+- schema inspection
+- checking existing tables/columns/indexes
+- test queries
+- development database migrations when they are clearly non-destructive and required by the current task
+- idempotent development migrations
+
+### Ask for permission first
+
+Ask before:
+
+- `DROP`
+- `TRUNCATE`
+- mass `DELETE`
+- resetting a database
+- deleting a database
+- deleting a Docker database volume
+- destructive migrations
+- modifying production data
+- bulk updates whose impact is uncertain
+
+Before running a migration, inspect what it does.
+
+Prefer idempotent migrations whenever possible.
+
+Never silently delete existing production data to make a migration succeed.
+
+---
+
+## 6. Import System Safety
+
+This project contains supplier import functionality.
+
+Supplier imports can modify large amounts of product/catalog data.
+
+Therefore:
+
+- NEVER automatically run "Import all products".
+- NEVER automatically run a full supplier import against production.
+- NEVER perform a bulk product update/delete without explicit user approval.
+- NEVER delete existing products simply because they are missing from a supplier feed unless the user explicitly requested that behavior.
+- Prefer dry-run, validation, parsing, statistics, or preview modes when available.
+- When testing imports, use dry-run or test fixtures whenever possible.
+
+If a task requires a real full import, STOP and ask the user for explicit permission before executing it.
+
+---
+
+## 7. Suppliers
+
+The project currently has predefined suppliers:
+
+- IT-Link (`itlink`)
+- DC-Link (`dclink`)
+
+These suppliers are system-defined.
+
+Important architectural rule:
+
+- Do NOT create arbitrary suppliers from the admin UI.
+- Do NOT add "Create supplier" functionality.
+- Do NOT add "Delete supplier" functionality.
+- Do NOT add a supplier CRUD interface.
+- Supplier selection in mapping/import interfaces must be limited to the predefined system suppliers.
+- Do not create test suppliers just to satisfy automated tests.
+
+If a new supplier is required in the future, it should be explicitly added to the application code and database architecture by the user/developer.
+
+---
+
+## 8. Mapping System
+
+The mapping system contains three types of mappings:
+
+1. Attribute mappings
+2. Attribute value mappings
+3. Category mappings
+
+The mapping system must support:
+
+- search
+- sorting
+- pagination
+- create
+- edit
+- delete
+- enable/disable
+- unresolved mappings
+
+Excluded attributes/values should be represented as mappings marked as:
+
+`Не імпортувати`
+
+Do NOT create a separate "Remove" mapping system unless explicitly requested.
+
+Deleting a mapping must NOT delete the underlying:
+
+- category
+- attribute
+- attribute value
+- supplier catalog entity
+
+Only the mapping rule itself may be deleted.
+
+---
+
+## 9. Data Integrity
+
+Before changing database models or mappings:
+
+- inspect existing schema
+- inspect existing relationships
+- inspect foreign keys
+- inspect indexes
+- inspect existing import logic
+- inspect existing migrations
+
+Do not create duplicate tables/models if an existing structure can be safely reused.
+
+Do not duplicate existing catalog data unnecessarily.
+
+When importing legacy mapping files:
+
+- preserve existing mappings
+- avoid duplicates
+- prefer idempotent upserts
+- do not overwrite valid mappings with empty values
+- do not automatically invent internal categories/attributes/values when a match cannot be established
+
+Unresolved mappings should remain visible and editable.
+
+---
+
+## 10. Authentication & Security
+
+Never expose secrets.
+
+Never:
+
+- commit `.env`
+- print API keys unnecessarily
+- expose `BREVO_API_KEY` to frontend code
+- create `NEXT_PUBLIC_` variables containing secrets
+- hardcode production credentials
+- log passwords
+- log raw authentication/reset tokens
+
+Authentication changes must preserve:
+
+- password hashing
+- token hashing
+- expiration
+- session invalidation
+- email verification
+- password reset security
+- rate limiting
+
+When changing authentication, run relevant tests before reporting completion.
+
+---
+
+## 11. Environment Variables
+
+Never hardcode environment-specific values when they should come from environment variables.
+
+Use `.env` / environment configuration for:
+
+- API keys
+- database credentials
+- SMTP/Brevo credentials
+- secret keys
+- production URLs
+- environment-specific configuration
+
+`.env.example` may contain placeholders but MUST NOT contain real secrets.
+
+---
+
+## 12. Docker
+
+Docker is used for local development and deployment.
+
+Before modifying Docker configuration:
+
+- inspect `docker-compose.yml`
+- inspect relevant Dockerfiles
+- inspect environment configuration
+- inspect service dependencies
+
+Safe automatically:
+
+- `docker compose ps`
+- `docker compose logs`
+- `docker inspect`
+- normal image builds
+- normal container recreation when required for the current development task
+
+Ask before:
+
+- `docker compose down -v`
+- removing volumes
+- deleting images/containers containing potentially important data
+- `docker system prune`
+- destructive Docker cleanup
+
+Never remove database volumes just to solve a development issue without asking.
+
+---
+
+## 13. Frontend / UI
+
+When modifying UI:
+
+- preserve existing functionality
+- maintain responsive behavior
+- use existing design system/components where possible
+- avoid introducing unnecessary dependencies
+- keep translations in the existing translation system
+- do not hardcode user-facing Ukrainian text in random components if the project already uses i18n
+
+Before changing a shared component, inspect where it is used.
+
+---
+
+## 14. API Changes
+
+Before modifying an existing API endpoint:
+
+- inspect all frontend consumers
+- inspect admin consumers
+- inspect backend dependencies
+- preserve backwards compatibility when reasonably possible
+
+Do not silently change response formats if existing clients depend on them.
+
+When adding an endpoint:
+
+- implement proper authentication/authorization
+- validate input
+- return appropriate HTTP status codes
+- use Ukrainian user-facing error messages where the project expects Ukrainian UI/API messages
+
+---
+
+## 15. Testing & Verification
 
 After making code changes:
 
-1. Run appropriate SAFE tests/checks automatically.
-2. Inspect the results.
-3. Fix problems when possible.
-4. Report what was changed and what was verified.
-5. Do NOT create a Git commit.
+1. Run appropriate safe tests/checks automatically.
+2. Run type checking where applicable.
+3. Run linting where applicable.
+4. Verify affected API endpoints.
+5. Verify affected frontend pages.
+6. Check Docker/container health if relevant.
+7. Inspect the results.
+8. Fix problems when possible.
+9. Report exactly what was changed and what was verified.
 
-## Final Rule
+Do not claim something was tested if it was only inspected statically.
 
-The approval policy is:
+Distinguish clearly between:
 
-SAFE → execute automatically.
+- static verification
+- unit tests
+- integration tests
+- end-to-end tests
+- real external service tests
 
-UNSAFE / DESTRUCTIVE → ask the user.
+---
 
-GIT COMMIT → always ask.
+## 16. External Services
 
-GIT PUSH → always ask.
+For services such as Brevo:
 
-If there is any doubt about safety → ask.
+- do not use fake credentials
+- do not expose API keys
+- do not send large numbers of real emails during testing
+- prefer a single controlled test email
+- do not perform bulk email operations without explicit permission
+
+When credentials are unavailable, test the integration structurally and clearly state that real delivery was not tested.
+
+---
+
+## 17. Production Deployments
+
+Never deploy to production automatically unless the user explicitly requested deployment.
+
+Never:
+
+- push to production
+- restart production services
+- run production migrations
+- modify production environment variables
+- delete production data
+- rebuild production infrastructure
+
+without explicit approval.
+
+If a task might affect production, clearly tell the user before doing it.
+
+---
+
+## 18. No Unrelated Work
+
+The agent must stay focused on the requested task.
+
+Do not:
+
+- refactor unrelated code
+- rename unrelated files
+- change unrelated UI
+- upgrade dependencies without a reason
+- change architecture unnecessarily
+- clean up unrelated technical debt
+
+If an unrelated issue is discovered, report it separately instead of silently fixing it.
+
+---
+
+## 19. Final Response
+
+After completing a task, provide a concise report containing:
+
+### Changed
+What files/features were changed.
+
+### Verified
+What tests/checks were actually executed.
+
+### Not Tested
+Anything that could not be realistically tested.
+
+### Important Notes
+Any unresolved issues, migrations, environment variables, manual steps, or potential risks.
+
+Do NOT claim success based solely on HTTP 200 responses.
+
+---
+
+## Final Approval Policy
+
+**SAFE → execute automatically.**
+
+**UNSAFE / DESTRUCTIVE → ask for permission.**
+
+**GIT COMMIT → always ask.**
+
+**GIT PUSH → always ask.**
+
+**FULL PRODUCT IMPORT → always ask.**
+
+**PRODUCTION DATA MODIFICATION → always ask.**
+
+**DATABASE DESTRUCTION → always ask.**
+
+**SUPPLIER CREATION → never do automatically.**
+
+**If there is any doubt about safety → ask.**
