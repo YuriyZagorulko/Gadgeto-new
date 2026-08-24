@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { api, qs } from '@/lib/api';
 import { formatDateTime, IMPORT_STATUS_LABELS, importStatusTone } from '@/lib/format';
 import {
   PageHeader, Button, Select, Table, Th, Td, Badge,
-  Pagination, LoadingState, ErrorState, EmptyState, Modal, useToast,
+  Pagination, LoadingState, ErrorState, EmptyState, Modal, ConfirmDialog, useToast,
 } from '@/components/ui';
 
 type Job = {
@@ -37,6 +37,19 @@ export default function ImportHistoryPage() {
   const [tick, setTick] = useState(0);
   const [detail, setDetail] = useState<(Job & { logs?: Log[] }) | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [confirmDelete, setConfirmDelete] = useState<{ ids: number[]; count: number; bulk: boolean } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const loadData = useCallback(() => {
+    setLoading(true); setError('');
+    api.get<ListResp>('/imports/jobs' + qs({
+      page, per_page: PER_PAGE, status: status || undefined, supplier_id: supplierId || undefined,
+    }))
+      .then((d) => setData(d))
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [page, status, supplierId]);
 
   useEffect(() => {
     api.get<{ items: Sup[] }>('/suppliers' + qs({ per_page: 100 }))
@@ -44,16 +57,8 @@ export default function ImportHistoryPage() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true); setError('');
-    api.get<ListResp>('/imports/jobs' + qs({
-      page, per_page: PER_PAGE, status: status || undefined, supplier_id: supplierId || undefined,
-    }))
-      .then((d) => !cancelled && setData(d))
-      .catch((e) => !cancelled && setError(e.message))
-      .finally(() => !cancelled && setLoading(false));
-    return () => { cancelled = true; };
-  }, [page, status, supplierId, tick]);
+    loadData();
+  }, [loadData, tick]);
 
   useEffect(() => {
     const hasActive = data?.items.some((j) => j.status === 'queued' || j.status === 'running');
@@ -61,6 +66,29 @@ export default function ImportHistoryPage() {
     const t = setInterval(() => setTick((x) => x + 1), 5000);
     return () => clearInterval(t);
   }, [data]);
+
+  // Reset selection when data changes (page switch, filter change)
+  useEffect(() => { setSelected(new Set()); }, [data]);
+
+  const allVisibleIds = data?.items.map((j) => j.id) || [];
+  const allVisibleSelected = allVisibleIds.length > 0 && allVisibleIds.every((id) => selected.has(id));
+
+  const toggleSelect = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (allVisibleSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(allVisibleIds));
+    }
+  };
 
   const openDetail = async (j: Job) => {
     setDetail(j); setDetailLoading(true);
@@ -71,6 +99,30 @@ export default function ImportHistoryPage() {
       toast.push('error', (e as Error).message);
       setDetail(null);
     } finally { setDetailLoading(false); }
+  };
+
+  const handleDelete = async (ids: number[], bulk: boolean) => {
+    setDeleting(true);
+    try {
+      if (ids.length === 1) {
+        await api.delete('/imports/jobs/' + ids[0]);
+        toast.push('success', `Імпорт #${ids[0]} видалено.`);
+      } else {
+        const res = await api.post<{ deleted: number; skipped: number; detail: string }>('/imports/jobs/bulk-delete', { ids });
+        toast.push('success', `Видалено: ${res.deleted}, пропущено: ${res.skipped}.`);
+      }
+      setSelected(new Set());
+      if (data && data.items.length <= ids.length && page > 1) {
+        setPage((p) => p - 1);
+      } else {
+        loadData();
+      }
+    } catch (e: unknown) {
+      toast.push('error', (e as Error).message);
+    } finally {
+      setDeleting(false);
+      setConfirmDelete(null);
+    }
   };
 
   const pages = data ? Math.max(1, Math.ceil(data.total / data.per_page)) : 1;
@@ -95,6 +147,17 @@ export default function ImportHistoryPage() {
           </Select>
         </div>
         <Button variant="ghost" onClick={() => { setStatus(''); setSupplierId(''); setPage(1); }}>Скинути</Button>
+        {selected.size > 0 && (
+          <div className="flex items-center gap-2 ml-auto">
+            <span className="text-xs text-gray-500">Обрано: {selected.size}</span>
+            <Button size="sm" variant="danger" onClick={() => setConfirmDelete({ ids: Array.from(selected), count: selected.size, bulk: true })}>
+              Видалити обрані
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+              Скасувати вибір
+            </Button>
+          </div>
+        )}
       </div>
 
       {error && <ErrorState message={error} onRetry={() => setTick((x) => x + 1)} />}
@@ -102,18 +165,27 @@ export default function ImportHistoryPage() {
       {!error && data?.items.length === 0 && <EmptyState title="Імпортів не знайдено" />}
       {data && data.items.length > 0 && (
         <>
-          <Table head={<tr><Th>ID</Th><Th>Постачальник</Th><Th>Тип</Th><Th>Статус</Th><Th>Створено</Th><Th>Завершено</Th><Th></Th></tr>}>
+          <Table head={<tr><Th className="w-10"><input type="checkbox" className="rounded" checked={allVisibleSelected} onChange={toggleSelectAll} title="Обрати всі на сторінці" /></Th><Th>ID</Th><Th>Постачальник</Th><Th>Тип</Th><Th>Статус</Th><Th>Створено</Th><Th>Завершено</Th><Th></Th></tr>}>
             {data.items.map((j) => {
-              const status = normalizeStatus(j.status);
+              const ns = normalizeStatus(j.status);
+              const isActive = ns === 'queued' || ns === 'running';
               return (
                 <tr key={j.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => openDetail(j)}>
+                  <Td onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" className="rounded" checked={selected.has(j.id)} onChange={() => toggleSelect(j.id)} />
+                  </Td>
                   <Td className="font-mono text-xs">{j.id}</Td>
                   <Td className="text-sm font-medium">{j.supplier_name || '—'}</Td>
                   <Td className="text-sm">{TYPE_LABELS[j.import_type] || j.import_type}</Td>
-                  <Td><Badge tone={importStatusTone(status)}>{IMPORT_STATUS_LABELS[status] || j.status}</Badge></Td>
+                  <Td><Badge tone={importStatusTone(ns)}>{IMPORT_STATUS_LABELS[ns] || j.status}</Badge></Td>
                   <Td className="whitespace-nowrap text-xs text-gray-500">{formatDateTime(j.created_at)}</Td>
                   <Td className="whitespace-nowrap text-xs text-gray-500">{formatDateTime(j.finished_at)}</Td>
-                  <Td><Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openDetail(j); }}>Деталі</Button></Td>
+                  <Td>
+                    <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+                      <Button size="sm" variant="ghost" onClick={() => openDetail(j)}>Деталі</Button>
+                      <Button size="sm" variant="ghost" className="text-red-600 hover:text-red-800" disabled={isActive} title={isActive ? 'Активний імпорт не можна видалити' : 'Видалити'} onClick={() => setConfirmDelete({ ids: [j.id], count: 1, bulk: false })}>🗑</Button>
+                    </div>
+                  </Td>
                 </tr>
               );
             })}
@@ -174,6 +246,23 @@ export default function ImportHistoryPage() {
           </div>
         )}
       </Modal>
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Підтвердження видалення"
+        message={
+          confirmDelete
+            ? confirmDelete.count === 1
+              ? `Ви впевнені, що хочете видалити імпорт #${confirmDelete.ids[0]}? Це видалить лише запис історії імпорту, товари та інші дані залишаться незмінними.`
+              : `Ви впевнені, що хочете видалити ${confirmDelete.count} записів історії імпортів? Активні імпорти (QUEUED/RUNNING) буде пропущено.`
+            : ''
+        }
+        confirmLabel={confirmDelete && confirmDelete.count === 1 ? `Видалити імпорт #${confirmDelete.ids[0]}` : confirmDelete ? `Видалити ${confirmDelete.count} записів` : ''}
+        danger
+        busy={deleting}
+        onConfirm={() => confirmDelete && handleDelete(confirmDelete.ids, confirmDelete.bulk)}
+        onCancel={() => { setConfirmDelete(null); }}
+      />
     </div>
   );
 }

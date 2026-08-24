@@ -273,10 +273,16 @@ def _stats_to_jsonable(value: Any) -> Any:
 
 
 def _run_tracked_import(job_id: int, supplier_code: str, import_type: str) -> None:
-    """Background wrapper around the EXISTING ``run_import`` runner that tracks
+    """Background wrapper around the FULL import pipeline that tracks
     execution status/statistics in import_jobs (QUEUED → RUNNING → SUCCEEDED/FAILED)."""
+    # Get supplier_id from the job
     conn, cur = db()
     try:
+        cur.execute("SELECT supplier_id FROM import_jobs WHERE id=%s", (job_id,))
+        row = cur.fetchone()
+        if not row:
+            return  # job vanished — nothing to do
+        supplier_id = row["supplier_id"]
         cur.execute(
             "UPDATE import_jobs SET status='RUNNING', started_at=NOW(), updated_at=NOW() WHERE id=%s",
             (job_id,),
@@ -284,23 +290,76 @@ def _run_tracked_import(job_id: int, supplier_code: str, import_type: str) -> No
     finally:
         conn.close()
 
-    result = run_import(supplier_code, import_type)
+    # Call the FULL import pipeline that parses AND persists products
+    from app.imports.importer_service import run_full_import
+    result = run_full_import(supplier_code, job_id, supplier_id, import_type)
 
+    # Stats are already saved by run_full_import — update job status if needed
+    # (run_full_import handles status/success/failure internally)
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: list[int]
+
+
+class BulkDeleteResponse(BaseModel):
+    deleted: int
+    skipped: int
+    errors: list[dict]
+
+
+@router.delete("/imports/jobs/{jid}")
+async def delete_job(jid: int, user: dict = Depends(require_admin)):
+    """Видалити окремий запис історії імпорту."""
     conn, cur = db()
     try:
-        if result.get("success"):
-            stats = _stats_to_jsonable(result.get("stats"))
-            cur.execute(
-                "UPDATE import_jobs SET status='SUCCEEDED', finished_at=NOW(), updated_at=NOW(),"
-                " stats_json=%s WHERE id=%s",
-                (json.dumps(stats, ensure_ascii=False), job_id),
+        cur.execute("SELECT id, status FROM import_jobs WHERE id = %s", (jid,))
+        job = cur.fetchone()
+        if not job:
+            raise HTTPException(status_code=404, detail="Імпорт не знайдено")
+        if job["status"] in ("QUEUED", "RUNNING"):
+            raise HTTPException(
+                status_code=409,
+                detail="Не можна видалити активний імпорт (статус: QUEUED або RUNNING).",
             )
-        else:
-            cur.execute(
-                "UPDATE import_jobs SET status='FAILED', finished_at=NOW(), updated_at=NOW(),"
-                " error_details_json=%s WHERE id=%s",
-                (json.dumps({"error": result.get("error")}, ensure_ascii=False), job_id),
-            )
+        # Delete dependent logs first (no CASCADE on FK)
+        cur.execute("DELETE FROM import_logs WHERE job_id = %s", (jid,))
+        cur.execute("DELETE FROM import_jobs WHERE id = %s", (jid,))
+        return {"ok": True, "detail": "Імпорт #{} видалено.".format(jid)}
+    finally:
+        conn.close()
+
+
+@router.post("/imports/jobs/bulk-delete")
+async def bulk_delete_jobs(data: BulkDeleteRequest, user: dict = Depends(require_admin)):
+    """Видалити декілька записів історії імпорту (транзакційно)."""
+    if not data.ids:
+        raise HTTPException(status_code=400, detail="Список ID для видалення порожній.")
+    conn, cur = db()
+    try:
+        cur.execute(
+            "SELECT id, status FROM import_jobs WHERE id = ANY(%s)",
+            (data.ids,),
+        )
+        jobs = {r["id"]: r["status"] for r in cur.fetchall()}
+        to_delete = []
+        errors = []
+        for jid in data.ids:
+            if jid not in jobs:
+                errors.append({"id": jid, "reason": "Імпорт не знайдено."})
+            elif jobs[jid] in ("QUEUED", "RUNNING"):
+                errors.append({"id": jid, "reason": "Активний імпорт не можна видалити."})
+            else:
+                to_delete.append(jid)
+        if to_delete:
+            cur.execute("DELETE FROM import_logs WHERE job_id = ANY(%s)", (to_delete,))
+            cur.execute("DELETE FROM import_jobs WHERE id = ANY(%s)", (to_delete,))
+        return {
+            "deleted": len(to_delete),
+            "skipped": len(errors),
+            "errors": errors,
+            "detail": "Видалено: {}, пропущено: {}.".format(len(to_delete), len(errors)),
+        }
     finally:
         conn.close()
 
