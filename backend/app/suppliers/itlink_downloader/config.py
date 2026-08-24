@@ -6,17 +6,17 @@ Uses Gadgeto-new settings from app.core.config.
 import os
 from pathlib import Path
 
-from app.core.config import settings
+from app.core.config import settings as core_settings
 
 
 class Settings:
     """IT-Link downloader settings, adapted from Gadgeto-new config."""
 
     def __init__(self) -> None:
-        self.username: str = settings.SUPPLIER_ITLINK_USERNAME
-        self.password: str = settings.SUPPLIER_ITLINK_PASSWORD
-        self.price_id: str = settings.SUPPLIER_ITLINK_PRICE_ID
-        self.customer_id: str = settings.SUPPLIER_ITLINK_CUSTOMER_ID
+        self.username: str = core_settings.SUPPLIER_ITLINK_USERNAME
+        self.password: str = core_settings.SUPPLIER_ITLINK_PASSWORD
+        self.price_id: str = core_settings.SUPPLIER_ITLINK_PRICE_ID
+        self.customer_id: str = core_settings.SUPPLIER_ITLINK_CUSTOMER_ID
         self.headless: bool = True
 
     @property
@@ -33,7 +33,7 @@ class Settings:
     @property
     def target_file_path(self) -> Path:
         """Path to save the downloaded XML."""
-        feeds_dir = settings.SUPPLIER_FEEDS_DIR or "/data/feeds"
+        feeds_dir = core_settings.SUPPLIER_FEEDS_DIR or "/data/feeds"
         return Path(feeds_dir) / "itlink" / "itlink.yml"
 
 

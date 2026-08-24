@@ -91,9 +91,9 @@ class ImportRunner:
                 return
             self._progress('finalizing', '\u041f\u0440\u0438\u0445\u043e\u0432\u0443\u0432\u0430\u043d\u043d\u044f \u0442\u043e\u0432\u0430\u0440\u0456\u0432, \u0432\u0456\u0434\u0441\u0443\u0442\u043d\u0456\u0445 \u0443 \u0444\u0456\u0434\u0456')
             cur.execute(
-                """UPDATE products SET status='hidden', is_visible=FALSE, is_active=FALSE,
+                """UPDATE products SET status='HIDDEN', is_visible=FALSE, is_active=FALSE,
                            updated_at=NOW()
-                   WHERE supplier_id=%s AND status!='hidden'
+                   WHERE supplier_id=%s AND status!='HIDDEN'
                      AND supplier_sku IS NOT NULL AND supplier_sku!=''
                      AND supplier_sku != ALL(%s::text[])""",
                 (self.supplier_id, skus),
@@ -244,7 +244,7 @@ class ImportRunner:
             """UPDATE products SET name=%s, slug=%s, description=%s,
                       short_description=%s, price=%s, old_price=%s,
                       stock_status=%s, is_active=TRUE, is_visible=TRUE,
-                      status='published', brand_id=%s,
+                      status='PUBLISHED', brand_id=%s,
                       seo_title=%s, seo_description=%s, focus_keyphrase=%s,
                       imported_at=NOW(), updated_at=NOW()
                WHERE id=%s""",
@@ -269,11 +269,12 @@ class ImportRunner:
             """INSERT INTO products
                (supplier_id, supplier_sku, sku, name, slug,
                 description, short_description, brand_id,
-                price, old_price, stock_status, is_active, is_visible,
+                price, old_price, currency, stock_status, stock_qty,
+                is_active, is_visible,
                 status, seo_title, seo_description, focus_keyphrase,
                 imported_at, created_at, updated_at)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE,TRUE,
-                       'published',%s,%s,%s,NOW(),NOW(),NOW())
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'UAH',%s,0,TRUE,TRUE,
+                       'PUBLISHED',%s,%s,%s,NOW(),NOW(),NOW())
                RETURNING id""",
             (self.supplier_id, prod.supplier_sku, prod.sku or '', prod.name, slug,
              prod.description, short_desc, brand_id,
@@ -304,7 +305,7 @@ class ImportRunner:
                 self.create_attribute_value(a_id, attr_value)
                 cur.execute(
                     """INSERT INTO product_attributes
-                       (product_id, attribute_id, value, created_at, updated_at)
+                       (product_id, attribute_id, value_text, created_at, updated_at)
                        VALUES (%s,%s,%s,NOW(),NOW())""",
                     (product_id, a_id, attr_value),
                 )

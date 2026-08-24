@@ -485,3 +485,79 @@ Do NOT claim success based solely on HTTP 200 responses.
 **SUPPLIER CREATION → never do automatically.**
 
 **If there is any doubt about safety → ask.**
+
+
+# Tool Execution and Failure Recovery
+
+## Never repeat failed commands blindly
+
+If a shell/tool command fails:
+
+1. Do NOT immediately retry the exact same command.
+2. Inspect the error output first.
+3. Determine why the command failed.
+4. If the command depends on an assumed file, module, function, container, service, environment variable, or CLI tool, verify that it actually exists before retrying.
+5. After one failed attempt, change the approach if the cause is uncertain.
+6. Never execute the same failing command more than twice without new information.
+7. If the tool reports repeated identical calls or an execution loop, STOP retrying that command immediately.
+
+## Database inspection
+
+When inspecting PostgreSQL:
+
+- Prefer the project's existing SQLAlchemy/database infrastructure when its actual API is known.
+- Do not invent imports such as `app.core.db_connect.DB` or `app.core.db_connect.cursor`.
+- Before importing a database helper, inspect the project and verify that the module/function actually exists.
+- If application-level database helpers are unclear, use PostgreSQL directly through the PostgreSQL Docker container and `psql`.
+- Inspect docker-compose.yml to determine the actual PostgreSQL service/container and credentials.
+- Never modify application code merely because a database inspection command failed.
+
+## Debugging before changing code
+
+When a command fails:
+
+- First determine whether the failure is caused by:
+  - wrong command;
+  - wrong module/function;
+  - wrong container;
+  - missing dependency;
+  - wrong environment;
+  - permission issue;
+  - application error;
+  - database error.
+- Do not assume the application itself is broken.
+- Do not make code changes until the actual failure is understood.
+
+## Import debugging
+
+For supplier imports, distinguish between:
+
+1. The import job failing.
+2. A diagnostic/inspection command failing.
+
+A failed diagnostic command does NOT mean that the import failed.
+
+Before restarting an import, inspect the existing import job and database state.
+
+For import job debugging, inspect:
+
+- status
+- current_stage
+- progress_json
+- stats_json
+- error_details
+- created_at
+- started_at
+- finished_at
+
+Do not rerun an expensive supplier import simply because a diagnostic command failed.
+
+## Existing project architecture
+
+Before inventing new helpers, APIs, paths, database utilities, or abstractions:
+
+- search the existing codebase;
+- identify the existing implementation;
+- reuse it when appropriate.
+
+Never assume a module/function exists based only on its name.
