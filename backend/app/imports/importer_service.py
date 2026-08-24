@@ -167,6 +167,11 @@ def run_full_import(supplier_code, job_id, supplier_id, import_type="full"):
         for w in runner.warnings:
             _log(conn, job_id, "WARNING", w)
 
+        # Log warnings from the parser/normalization phase (core-field collisions, etc.)
+        if hasattr(stats, 'warnings') and stats.warnings:
+            for w in stats.warnings:
+                _log(conn, job_id, "WARNING", w)
+
         if hasattr(stats, 'unknown_categories') and stats.unknown_categories:
             _log(conn, job_id, "WARNING",
                  f"Категорій без маппінгу: {len(stats.unknown_categories)}")

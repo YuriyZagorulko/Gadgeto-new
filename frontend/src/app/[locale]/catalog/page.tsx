@@ -8,7 +8,7 @@ const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://backend:8000').repl
 
 async function getCategories() {
   try {
-    const res = await fetch(new URL('/api/v1/categories', API_BASE).toString(), { next: { revalidate: 300 } });
+    const res = await fetch(new URL('/api/v1/categories', API_BASE).toString(), { cache: 'no-store' });
     if (!res.ok) return { items: [] };
     return res.json();
   } catch { return { items: [] }; }

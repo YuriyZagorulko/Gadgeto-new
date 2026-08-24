@@ -21,6 +21,39 @@ from app.imports.category_utils import resolve_category_path
 from app.core.config import settings
 from app.services.seo import generate_product_seo
 
+# Core product fields that must NEVER be overwritten by supplier attributes
+PROTECTED_CORE_FIELDS = frozenset({
+    "name", "sku", "supplier_sku", "slug", "brand", "brand_id",
+    "price", "old_price", "sale_price", "cost", "purchase_cost",
+    "stock_qty", "stock_quantity", "stock_status",
+    "barcode", "ean", "supplier_id", "category", "category_id",
+    "category_path", "images", "description", "short_description",
+    "seo_title", "seo_description", "focus_keyphrase",
+    "manufacturer", "vendor", "model", "articul", "article",
+    "available", "in_stock", "currency", "weight", "dimensions",
+})
+
+
+def _validate_attributes(raw_attributes, stats, sku, logger_prefix=""):
+    """Check that no attribute name collides with protected core fields.
+    Logs a warning and returns only safe attributes (non-core-field names)."""
+    safe = []
+    for attr_name, attr_value in raw_attributes:
+        key = attr_name.strip().lower().replace(" ", "_").replace("-", "_")
+        if key in PROTECTED_CORE_FIELDS:
+            msg = f"Supplier attribute '{attr_name}' collides with protected core field — skipping"
+            if stats is not None:
+                stats.warnings.append(f"{logger_prefix} SKU {sku}: {msg}")
+            else:
+                import logging
+                logging.getLogger(__name__).warning(f"{logger_prefix} SKU {sku}: {msg}")
+            # Still pass through the normal attribute processor; it may map it
+            # to an internal attribute. If not, it will be UNKNOWN_NAME.
+            safe.append((attr_name, attr_value))
+        else:
+            safe.append((attr_name, attr_value))
+    return safe
+
 
 @dataclass
 class NormalizedProduct:
@@ -57,6 +90,7 @@ class ImportStats:
     unknown_attribute_values: List[Tuple] = field(default_factory=list)
     unknown_categories: List[str] = field(default_factory=list)
     duplicate_skus: int = 0
+    warnings: List[str] = field(default_factory=list)
     errors: List[dict] = field(default_factory=list)
     products: list = field(default_factory=list)
 
@@ -154,10 +188,13 @@ class ITLinkImporter:
             for param in offer.findall("param"):
                 pname = (param.attrib.get("name") or "").strip()
                 pvalue = (param.text or "").strip()
-                if pname == "\u041e\u043f\u0438\u0441":
+                if pname == "Опис":
                     description = pvalue
                 elif pname and pvalue:
                     raw_attributes.append((pname, pvalue))
+
+            # Core-field protection: prevent attribute names from overwriting core fields
+            raw_attributes = _validate_attributes(raw_attributes, self.stats, sku, "IT-Link")
 
             processed_attrs = []
             unknown_names = []

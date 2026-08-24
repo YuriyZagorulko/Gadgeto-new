@@ -26,6 +26,38 @@ from app.core.config import settings
 from app.services.seo import generate_product_seo
 
 
+# Core product fields that must NEVER be overwritten by supplier attributes
+PROTECTED_CORE_FIELDS = frozenset({
+    "name", "sku", "supplier_sku", "slug", "brand", "brand_id",
+    "price", "old_price", "sale_price", "cost", "purchase_cost",
+    "stock_qty", "stock_quantity", "stock_status",
+    "barcode", "ean", "supplier_id", "category", "category_id",
+    "category_path", "images", "description", "short_description",
+    "seo_title", "seo_description", "focus_keyphrase",
+    "manufacturer", "vendor", "model", "articul", "article",
+    "available", "in_stock", "currency", "weight", "dimensions",
+})
+
+
+def _validate_attributes(raw_attributes, stats, sku, logger_prefix=""):
+    """Check that no attribute name collides with protected core fields.
+    Logs a warning and returns only safe attributes (non-core-field names)."""
+    safe = []
+    for attr_name, attr_value in raw_attributes:
+        key = attr_name.strip().lower().replace(" ", "_").replace("-", "_")
+        if key in PROTECTED_CORE_FIELDS:
+            msg = f"Supplier attribute '{attr_name}' collides with protected core field — skipping"
+            if stats is not None:
+                stats.warnings.append(f"{logger_prefix} SKU {sku}: {msg}")
+            else:
+                import logging
+                logging.getLogger(__name__).warning(f"{logger_prefix} SKU {sku}: {msg}")
+            safe.append((attr_name, attr_value))
+        else:
+            safe.append((attr_name, attr_value))
+    return safe
+
+
 BASE_URL = "https://cerebro.dclink.ua"
 
 # Category IDs for the full product catalog
@@ -70,6 +102,7 @@ class ImportStats:
     unknown_categories: List[str] = field(default_factory=list)
     duplicate_skus: int = 0
     empty_skus: int = 0
+    warnings: List[str] = field(default_factory=list)
     errors: List[dict] = field(default_factory=list)
     products: list = field(default_factory=list)
 
@@ -278,6 +311,9 @@ class DCLinkImporter:
                 if opt_name and opt_value:
                     raw_attributes.append((opt_name, opt_value))
 
+            # Core-field protection: prevent attribute names from overwriting core fields
+            raw_attributes = _validate_attributes(raw_attributes, self.stats, sku, "DC-Link")
+
             processed, unknown_names, unknown_values = self._process_attributes(raw_attributes)
             merged_list = list(merge_attributes(processed).items())
 
@@ -312,16 +348,16 @@ class DCLinkImporter:
         processed = []
         unknown_names = []
         unknown_values = []
-        for name, value in raw_attrs:
-            result = process_attribute(name, value)
+        for attr_name, attr_value in raw_attrs:
+            result = process_attribute(attr_name, attr_value)
             if isinstance(result, tuple) and len(result) == 2:
                 processed.append(result)
             elif result == ATTR_SKIP:
                 pass
             elif result == ATTR_UNKNOWN_NAME:
-                unknown_names.append((name, name, ""))
+                unknown_names.append((attr_name, attr_name, ""))
             elif result == ATTR_UNKNOWN_VALUE:
-                unknown_values.append((name, value, ""))
+                unknown_values.append((attr_name, attr_value, ""))
         return processed, unknown_names, unknown_values
 
     def run(self, import_type: str = "full") -> ImportStats:

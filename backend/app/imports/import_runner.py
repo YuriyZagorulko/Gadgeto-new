@@ -191,6 +191,15 @@ class ImportRunner:
         conn = psycopg2.connect(DB)
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         try:
+            # Validate product name — guard against attribute name leaking into product name
+            prod_name = (prod.name or "").strip()
+            if not prod_name:
+                self.warnings.append(f"Empty product name for SKU {prod.sku or prod.supplier_sku} — skipping")
+                self.skipped += 1
+                return ('skipped', 0)
+            if len(prod_name) < 3:
+                self.warnings.append(f"Unusually short product name '{prod_name}' for SKU {prod.sku or prod.supplier_sku}")
+
             # Resolve category path
             category_ids = []
             if prod.category_path:
