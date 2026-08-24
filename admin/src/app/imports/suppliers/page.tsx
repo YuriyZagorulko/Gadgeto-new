@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { api, qs } from '@/lib/api';
 import { formatDateTime, IMPORT_STATUS_LABELS, importStatusTone } from '@/lib/format';
 import { PageHeader, Button, Table, Th, Td, Badge, LoadingState, ErrorState, useToast } from '@/components/ui';
@@ -164,6 +165,7 @@ export default function SuppliersPage() {
   const isRunning = importProgress?.status === 'RUNNING' || importProgress?.status === 'QUEUED';
   const isDone = importProgress?.status === 'SUCCEEDED';
   const isFailed = importProgress?.status === 'FAILED';
+  const isTerminal = !isRunning && !!importProgress?.status;
 
   const logLines = importProgress?.logs || [];
 
@@ -305,6 +307,18 @@ export default function SuppliersPage() {
                   <div className="mb-3 p-3 bg-green-50 border border-green-200 rounded text-sm">
                     <strong>Статистика:</strong>
                     <pre className="mt-1 text-xs whitespace-pre-wrap">{JSON.stringify(importProgress.stats, null, 2)}</pre>
+                  </div>
+                )}
+
+                {/* Link to full report on terminal state */}
+                {isTerminal && importProgress && (
+                  <div className="mt-3">
+                    <Link
+                      href={`/imports/${importProgress.id}`}
+                      className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition bg-blue-600 text-white hover:bg-blue-700"
+                    >
+                      📋 Переглянути повний звіт
+                    </Link>
                   </div>
                 )}
               </div>

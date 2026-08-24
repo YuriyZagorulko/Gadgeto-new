@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import Link from 'next/link';
 import { api, qs } from '@/lib/api';
 import { formatDateTime, IMPORT_STATUS_LABELS, importStatusTone } from '@/lib/format';
 import {
@@ -285,6 +286,7 @@ return (
                   <Td>
                     <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
                       <Button size="sm" variant="ghost" onClick={() => openDetail(j)}>Деталі</Button>
+                      <Link href={`/imports/${j.id}`} className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md transition text-blue-600 hover:bg-blue-50">Звіт</Link>
                       {isActive && (
                         <Button size="sm" variant="ghost" className="text-orange-600 hover:text-orange-800" onClick={() => setConfirmCancel(j)}>Скасувати</Button>
                       )}

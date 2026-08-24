@@ -1,6 +1,7 @@
 """Admin imports API (history, details, launching the EXISTING import runner)."""
 import json
 from dataclasses import asdict, is_dataclass
+from datetime import datetime
 
 import psycopg2
 import psycopg2.extras
@@ -507,3 +508,127 @@ async def run_all_imports(
         "detail": f"{verb} запущено для {len(suppliers)} постачальників ({names}). Завдань у черзі: {len(scheduled)}.",
     }
 
+
+
+@router.get("/imports/jobs/{jid}/report")
+async def get_job_report(jid: int, user: dict = Depends(require_admin)):
+    """Detailed import report with structured unmapped data."""
+    conn, cur = db()
+    try:
+        try:
+            reconcile_stale_jobs()
+        except Exception:
+            pass
+        cur.execute("""
+            SELECT j.*, s.name AS supplier_name FROM import_jobs j
+            LEFT JOIN suppliers s ON s.id = j.supplier_id WHERE j.id = %s
+        """, (jid,))
+        job = cur.fetchone()
+        if not job:
+            raise HTTPException(status_code=404, detail="Імпорт не знайдено")
+        job = _parse_job(job)
+        job["percent"] = _progress_percent(job)
+
+        stats = job.get("stats") or {}
+        report = _build_import_report(job, stats)
+
+        cur.execute("""SELECT id, level, message, item_ref, created_at
+                       FROM import_logs WHERE job_id = %s ORDER BY id DESC LIMIT 500""", (jid,))
+        report["logs"] = cur.fetchall()
+        return report
+    finally:
+        conn.close()
+
+
+def _build_import_report(job: dict, stats: dict) -> dict:
+    """Build standardized import report from job + stats."""
+    def _parse_legacy(d, legacy_key):
+        if d:
+            return d
+        lc = stats.get(legacy_key, 0)
+        if lc:
+            return {"*": {"count": lc, "id": None, "skus": []}}
+        return {}
+
+    report = {
+        "id": job["id"],
+        "supplier_id": job.get("supplier_id"),
+        "supplier_name": job.get("supplier_name"),
+        "import_type": job.get("import_type"),
+        "status": job.get("status"),
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "created_at": job.get("created_at"),
+        "duration": _calc_duration(job.get("started_at"), job.get("finished_at")),
+        "percent": job.get("percent"),
+        "current_stage": job.get("current_stage"),
+        "total_count": job.get("total_count", 0) or 0,
+        "processed_count": job.get("processed_count", 0) or 0,
+        "created_count": job.get("created_count", 0) or 0,
+        "updated_count": job.get("updated_count", 0) or 0,
+        "skipped_count": job.get("skipped_count", 0) or 0,
+        "failed_count": job.get("failed_count", 0) or 0,
+        "error_count": job.get("error_count", 0) or 0,
+        "warning_count": job.get("warning_count", 0) or 0,
+    }
+
+    report["unmapped_categories"] = _parse_legacy(
+        stats.get("unmapped_categories") or {}, "unknown_categories")
+    report["unmapped_attributes"] = _parse_legacy(
+        stats.get("unmapped_attributes") or {}, "unknown_attributes")
+
+    unmapped_vals = stats.get("unmapped_attribute_values") or {}
+    if not unmapped_vals and stats.get("unknown_attribute_values"):
+        uv = stats["unknown_attribute_values"]
+        unmapped_vals = {"*": {"*": {"count": uv, "skus": []}}} if uv else {}
+    report["unmapped_attribute_values"] = unmapped_vals
+
+    report["unmapped_categories_count"] = (
+        len(report["unmapped_categories"]) if report["unmapped_categories"]
+        else (stats.get("unknown_categories", 0) or 0))
+    report["unmapped_attributes_count"] = (
+        len(report["unmapped_attributes"]) if report["unmapped_attributes"]
+        else (stats.get("unknown_attributes", 0) or 0))
+    total_val_groups = 0
+    for v in report["unmapped_attribute_values"].values():
+        if isinstance(v, dict):
+            total_val_groups += len(v)
+    report["unmapped_attribute_values_count"] = (
+        total_val_groups or (stats.get("unknown_attribute_values", 0) or 0))
+
+    report["warnings"] = stats.get("warnings", []) or []
+    report["errors"] = stats.get("errors", []) or []
+    has_unmapped = (report["unmapped_categories_count"] > 0
+                    or report["unmapped_attributes_count"] > 0
+                    or report["unmapped_attribute_values_count"] > 0)
+    report["has_unmapped"] = has_unmapped
+    report["has_errors"] = bool(report["errors"])
+
+    raw = (job.get("status") or "").strip().upper()
+    if raw == "SUCCEEDED":
+        report["display_status"] = "COMPLETED_WITH_WARNINGS" if has_unmapped else "COMPLETED"
+    else:
+        report["display_status"] = raw
+
+    err = job.get("error_details")
+    if err:
+        if isinstance(err, dict) and "error" in err:
+            report["error_message"] = err["error"]
+        elif isinstance(err, str):
+            report["error_message"] = err
+        else:
+            report["error_message"] = str(err)
+
+    return report
+
+
+def _calc_duration(started: Optional[str], finished: Optional[str]) -> Optional[int]:
+    """Duration in seconds, or None."""
+    if not started:
+        return None
+    try:
+        a = datetime.fromisoformat(started)
+        b = datetime.fromisoformat(finished) if finished else datetime.utcnow()
+        return int((b - a).total_seconds())
+    except (ValueError, TypeError):
+        return None
