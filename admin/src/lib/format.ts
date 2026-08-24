@@ -79,6 +79,8 @@ export const IMPORT_STATUS_LABELS: Record<string, string> = {
   succeeded: 'Завершено',
   failed: 'Помилка',
   aborted: 'Перервано',
+  stale: 'Зависло',
+  cancelled: 'Скасовано',
 };
 
 export type BadgeTone = 'green' | 'red' | 'gray' | 'blue' | 'yellow';
@@ -97,7 +99,9 @@ export function importStatusTone(s: string): BadgeTone {
   switch (s) {
     case 'succeeded': return 'green';
     case 'running': case 'queued': return 'blue';
-    case 'failed': return 'red';
+    case 'stale': return 'yellow';
+    case 'failed': case 'aborted': return 'red';
+    case 'cancelled': return 'gray';
     default: return 'gray';
   }
 }

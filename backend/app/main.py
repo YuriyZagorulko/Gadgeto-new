@@ -46,9 +46,19 @@ app.mount("/media", StaticFiles(directory=media_dir), name="media")
 
 @app.on_event("startup")
 async def startup_event():
-    """Run on application startup."""
-    # Database connection is lazy, no need to connect here
-    pass
+    """Run on application startup.
+
+    Reconcile import jobs that were RUNNING before a process/container
+    restart. A RESTART reason is recorded so the admin sees why the job
+    did not finish. This is what prevents "RUNNING forever" jobs.
+    """
+    try:
+        from app.imports.job_health import reconcile_stale_jobs, RESTART_REASON
+        reconcile_stale_jobs(reason=RESTART_REASON)
+    except Exception:
+        # DB may not be reachable yet on first boot — staleness is also
+        # reconciled lazily on every admin history/progress request.
+        pass
 
 
 @app.on_event("shutdown")

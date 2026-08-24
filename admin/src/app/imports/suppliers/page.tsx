@@ -126,7 +126,7 @@ export default function SuppliersPage() {
 
   // Auto-poll every 3s while running
   useEffect(() => {
-    if (!importProgress || importProgress.status === 'SUCCEEDED' || importProgress.status === 'FAILED') {
+    if (!importProgress || ['SUCCEEDED', 'FAILED', 'STALE', 'CANCELLED', 'ABORTED'].includes(importProgress.status)) {
       return;
     }
     const t = setInterval(() => setImportPollTick((x) => x + 1), 3000);

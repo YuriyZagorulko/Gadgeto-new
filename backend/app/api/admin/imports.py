@@ -12,6 +12,7 @@ from app.api.admin.deps import require_admin
 from app.core.db_connect import DB
 from app.imports.registry import SUPPLIERS as SYSTEM_SUPPLIERS
 from app.imports.tasks import run_import
+from app.imports.job_health import reconcile_stale_jobs, request_cancellation
 
 router = APIRouter()
 
@@ -23,13 +24,13 @@ def db():
     return conn, cur
 
 
-IMPORT_STATUSES = ("QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "ABORTED")
+IMPORT_STATUSES = ("QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "ABORTED", "STALE", "CANCELLED")
 IMPORT_TYPES = ("full", "prices", "stock")
 
 
 def _parse_job(row: dict) -> dict:
     for src, dst in (("stats_json", "stats"), ("error_details_json", "error_details"),
-                     ("raw_config_json", "raw_config")):
+                     ("raw_config_json", "raw_config"), ("progress_json", "progress")):
         raw = row.pop(src, None)
         if raw:
             try:
@@ -51,6 +52,13 @@ async def list_jobs(
 ):
     conn, cur = db()
     try:
+        # Source of truth for staleness lives in the DB — reconcile stale
+        # jobs every time the history is viewed.
+        try:
+            reconcile_stale_jobs()
+        except Exception:
+            pass
+
         conds, params = ["1=1"], []
         if status:
             if status not in IMPORT_STATUSES:
@@ -68,7 +76,12 @@ async def list_jobs(
         cur.execute(f"""
             SELECT j.id, j.supplier_id, s.name AS supplier_name, j.import_type,
                    j.status, j.started_at, j.finished_at, j.stats_json,
-                   j.triggered_by_user_id, j.created_at
+                   j.triggered_by_user_id, j.created_at,
+                   j.progress_json, j.current_stage, j.current_item,
+                   j.heartbeat_at, j.last_activity_at,
+                   j.total_count, j.processed_count, j.created_count,
+                   j.updated_count, j.skipped_count, j.failed_count,
+                   j.error_count, j.warning_count, j.cancel_requested
             FROM import_jobs j
             LEFT JOIN suppliers s ON s.id = j.supplier_id
             WHERE {where}
@@ -76,15 +89,33 @@ async def list_jobs(
             LIMIT %s OFFSET %s
         """, params + [per_page, (page - 1) * per_page])
         items = [_parse_job(r) for r in cur.fetchall()]
+        for item in items:
+            item["percent"] = _progress_percent(item)
         return {"items": items, "total": total, "page": page, "per_page": per_page}
     finally:
         conn.close()
+
+
+def _progress_percent(item: dict) -> Optional[int]:
+    total = item.get("total_count") or 0
+    processed = item.get("processed_count") or 0
+    if total and total > 0:
+        return min(100, round(processed * 100 / total))
+    progress = item.get("progress") or {}
+    t, p = progress.get("total") or 0, progress.get("processed") or 0
+    if t and t > 0:
+        return min(100, round(p * 100 / t))
+    return None
 
 
 @router.get("/imports/jobs/{jid}")
 async def get_job(jid: int, user: dict = Depends(require_admin)):
     conn, cur = db()
     try:
+        try:
+            reconcile_stale_jobs()
+        except Exception:
+            pass
         cur.execute("""
             SELECT j.*, s.name AS supplier_name FROM import_jobs j
             LEFT JOIN suppliers s ON s.id = j.supplier_id WHERE j.id = %s
@@ -93,6 +124,7 @@ async def get_job(jid: int, user: dict = Depends(require_admin)):
         if not job:
             raise HTTPException(status_code=404, detail="Імпорт не знайдено")
         job = _parse_job(job)
+        job["percent"] = _progress_percent(job)
 
         cur.execute("""SELECT id, level, message, item_ref, created_at
                        FROM import_logs WHERE job_id = %s ORDER BY id DESC LIMIT 200""", (jid,))
@@ -184,10 +216,19 @@ async def get_import_progress(jid: int, user: dict = Depends(require_admin)):
     """Return the current progress of an import job (for frontend polling)."""
     conn, cur = db()
     try:
+        try:
+            reconcile_stale_jobs()
+        except Exception:
+            pass
         cur.execute(
             """SELECT j.id, j.status, j.stats_json, j.error_details_json,
-                      j.progress_json, j.current_stage, j.started_at,
-                      j.finished_at, s.name AS supplier_name, s.code AS supplier_code
+                      j.progress_json, j.current_stage, j.current_item,
+                      j.heartbeat_at, j.last_activity_at,
+                      j.total_count, j.processed_count, j.created_count,
+                      j.updated_count, j.skipped_count, j.failed_count,
+                      j.error_count, j.warning_count, j.cancel_requested,
+                      j.started_at, j.finished_at,
+                      s.name AS supplier_name, s.code AS supplier_code
                FROM import_jobs j
                LEFT JOIN suppliers s ON s.id=j.supplier_id
                WHERE j.id=%s""",
@@ -203,6 +244,18 @@ async def get_import_progress(jid: int, user: dict = Depends(require_admin)):
             "supplier_name": row["supplier_name"],
             "supplier_code": row["supplier_code"],
             "current_stage": row["current_stage"],
+            "current_item": row["current_item"],
+            "heartbeat_at": row["heartbeat_at"],
+            "last_activity_at": row["last_activity_at"],
+            "total_count": row["total_count"],
+            "processed_count": row["processed_count"],
+            "created_count": row["created_count"],
+            "updated_count": row["updated_count"],
+            "skipped_count": row["skipped_count"],
+            "failed_count": row["failed_count"],
+            "error_count": row["error_count"],
+            "warning_count": row["warning_count"],
+            "cancel_requested": row["cancel_requested"],
             "started_at": row["started_at"],
             "finished_at": row["finished_at"],
         }
@@ -222,6 +275,7 @@ async def get_import_progress(jid: int, user: dict = Depends(require_admin)):
                 result["error_details"] = json.loads(row["error_details_json"])
             except (ValueError, TypeError):
                 pass
+        result["percent"] = _progress_percent(result)
 
         # Include recent logs from import_logs table
         cur.execute(
@@ -254,6 +308,34 @@ GLOBAL_ACTION_TYPES: dict[str, tuple[str, ...]] = {
 }
 
 
+@router.post("/imports/jobs/{jid}/cancel")
+async def cancel_import_job(jid: int, user: dict = Depends(require_admin)):
+    """Request cancellation of a running/queued import job.
+
+    Does NOT delete the record. If the worker has a live heartbeat it will
+    stop cooperatively at the next safe point; otherwise the job is marked
+    CANCELLED immediately.
+    """
+    conn, cur = db()
+    try:
+        cur.execute("SELECT status FROM import_jobs WHERE id=%s", (jid,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Імпорт не знайдено")
+        if row["status"] not in ("QUEUED", "RUNNING", "STALE"):
+            raise HTTPException(
+                status_code=409,
+                detail="Імпорт можна скасувати лише у статусах QUEUED/RUNNING/STALE.",
+            )
+    finally:
+        conn.close()
+
+    result = request_cancellation(jid)
+    if "error" in result:
+        raise HTTPException(status_code=409, detail=result["error"])
+    return {"ok": True, "job_id": jid, **result}
+
+
 def _stats_to_jsonable(value: Any) -> Any:
     """Best-effort conversion of importer stats (dataclass / dict / list) to JSON-safe data."""
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -284,7 +366,8 @@ def _run_tracked_import(job_id: int, supplier_code: str, import_type: str) -> No
             return  # job vanished — nothing to do
         supplier_id = row["supplier_id"]
         cur.execute(
-            "UPDATE import_jobs SET status='RUNNING', started_at=NOW(), updated_at=NOW() WHERE id=%s",
+            "UPDATE import_jobs SET status='RUNNING', started_at=NOW(), "
+            "heartbeat_at=NOW(), last_activity_at=NOW(), updated_at=NOW() WHERE id=%s",
             (job_id,),
         )
     finally:

@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from sqlalchemy import Column, DateTime, Enum as SAEnum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Enum as SAEnum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 from app.models.base import Base
 
@@ -10,6 +10,8 @@ class ImportJobStatus(str, Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     ABORTED = "aborted"
+    STALE = "stale"
+    CANCELLED = "cancelled"
 
 class ImportJob(Base):
     __tablename__ = "import_jobs"
@@ -22,6 +24,23 @@ class ImportJob(Base):
     error_details_json = Column(Text, nullable=True)
     triggered_by_user_id = Column(Integer, nullable=True)
     raw_config_json = Column(Text, nullable=True)
+
+    # --- progress / lifecycle (added in 017_import_lifecycle) ---
+    progress_json = Column(Text, nullable=True)
+    current_stage = Column(String(255), nullable=True)
+    current_item = Column(String(255), nullable=True)
+    heartbeat_at = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    total_count = Column(Integer, default=0, nullable=True)
+    processed_count = Column(Integer, default=0, nullable=True)
+    created_count = Column(Integer, default=0, nullable=True)
+    updated_count = Column(Integer, default=0, nullable=True)
+    skipped_count = Column(Integer, default=0, nullable=True)
+    failed_count = Column(Integer, default=0, nullable=True)
+    error_count = Column(Integer, default=0, nullable=True)
+    warning_count = Column(Integer, default=0, nullable=True)
+    cancel_requested = Column(Boolean, default=False, nullable=True)
+
     supplier = relationship("Supplier", back_populates="import_jobs")
     logs = relationship("ImportLog", back_populates="job", cascade="all, delete-orphan")
 

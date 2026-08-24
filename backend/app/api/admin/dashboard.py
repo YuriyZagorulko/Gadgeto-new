@@ -47,6 +47,8 @@ async def stats(user: dict = Depends(require_admin)):
             "total": _count(cur, "SELECT count(*) FROM import_jobs"),
             "running": _count(cur, "SELECT count(*) FROM import_jobs WHERE status IN ('QUEUED','RUNNING')"),
             "failed": _count(cur, "SELECT count(*) FROM import_jobs WHERE status='FAILED'"),
+            "stale": _count(cur, "SELECT count(*) FROM import_jobs WHERE status='STALE'"),
+            "cancelled": _count(cur, "SELECT count(*) FROM import_jobs WHERE status='CANCELLED'"),
         }
 
         cur.execute("""SELECT number, buyer_name, email, total_amount, status,
