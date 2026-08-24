@@ -1,12 +1,12 @@
 """
 IT-Link supplier importer.
+
+Downloads the current XML price list via the IT-Link OAuth2 API,
+parses it, and returns normalized products for persistence.
 """
 
-import json
 import os
-import re
 import xml.etree.ElementTree as ET
-from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict
 
@@ -18,13 +18,8 @@ from app.imports.attribute_processor import (
     ATTR_UNKNOWN_VALUE,
 )
 from app.imports.category_utils import resolve_category_path
+from app.core.config import settings
 from app.services.seo import generate_product_seo
-
-LEGACY_CATALOG_DIR = "/home/yuri/Desktop/my/projects/gedgeto/catalog"
-ITLINK_XML_PATH = os.path.join(LEGACY_CATALOG_DIR, "IT-link", "itlink.yml")
-CATEGORY_MAPPING_PATH = os.path.join(
-    LEGACY_CATALOG_DIR, "final data mapping", "category_mapping.json"
-)
 
 
 @dataclass
@@ -45,7 +40,7 @@ class NormalizedProduct:
     seo_title: str = ""
     seo_description: str = ""
     focus_keyphrase: str = ""
-    
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -63,6 +58,7 @@ class ImportStats:
     unknown_categories: List[str] = field(default_factory=list)
     duplicate_skus: int = 0
     errors: List[dict] = field(default_factory=list)
+    products: list = field(default_factory=list)
 
 
 class ITLinkImporter:
@@ -70,18 +66,35 @@ class ITLinkImporter:
     SUPPLIER_CODE = "itlink"
     MARKUP = 1.3
 
-    def __init__(self, xml_path: str = None, category_mapping_path: str = None,
-                 category_map: dict = None):
-        self.xml_path = xml_path or ITLINK_XML_PATH
-        self.category_mapping_path = category_mapping_path or CATEGORY_MAPPING_PATH
+    def __init__(self, feed_path: str = None, category_map: dict = None):
+        self.feed_path = feed_path
         self.stats = ImportStats()
-        # DB-derived map (global + supplier overrides) takes priority;
-        # legacy JSON file is the fallback when the DB has no rules.
-        if category_map:
-            self.category_map = dict(category_map)
-        else:
-            with open(self.category_mapping_path, "r", encoding="utf-8") as f:
-                self.category_map = json.load(f)
+        self.category_map = dict(category_map) if category_map else {}
+
+    def download_feed(self) -> str:
+        """
+        Download the current IT-Link price list via OAuth2.
+        Returns the path to the downloaded XML file.
+        """
+        from app.suppliers.itlink_downloader.auth import get_access_token
+        from app.suppliers.itlink_downloader.client import download_price_list
+        from app.suppliers.itlink_downloader.exceptions import (
+            AuthenticationError, ConfigurationError, DownloadError,
+        )
+
+        try:
+            access_token = get_access_token()
+        except AuthenticationError as e:
+            raise RuntimeError(f"\u041f\u043e\u043c\u0438\u043b\u043a\u0430 \u0430\u0432\u0442\u0435\u043d\u0442\u0438\u0444\u0456\u043a\u0430\u0446\u0456\u0457 IT-Link: {e}") from e
+        except ConfigurationError as e:
+            raise RuntimeError(f"\u041f\u043e\u043c\u0438\u043b\u043a\u0430 \u043a\u043e\u043d\u0444\u0456\u0433\u0443\u0440\u0430\u0446\u0456\u0457 IT-Link: {e}") from e
+
+        try:
+            saved_path = download_price_list(access_token)
+        except DownloadError as e:
+            raise RuntimeError(f"\u041f\u043e\u043c\u0438\u043b\u043a\u0430 \u0437\u0430\u0432\u0430\u043d\u0442\u0430\u0436\u0435\u043d\u043d\u044f \u043a\u0430\u0442\u0430\u043b\u043e\u0433\u0443 IT-Link: {e}") from e
+
+        return str(saved_path)
 
     def _safe_price(self, value: str) -> int:
         try:
@@ -89,140 +102,110 @@ class ITLinkImporter:
         except (ValueError, TypeError):
             return 0
 
-    def download_feed(self) -> ET.ElementTree:
-        if not os.path.exists(self.xml_path):
-            raise FileNotFoundError(f"IT-Link XML not found: {self.xml_path}")
-        return ET.parse(self.xml_path)
+    def parse_feed(self, xml_path: str) -> ET.ElementTree:
+        if not os.path.exists(xml_path):
+            raise FileNotFoundError(
+                f"\u041a\u0430\u0442\u0430\u043b\u043e\u0433 IT-Link \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e: {xml_path}"
+            )
+        return ET.parse(xml_path)
 
     def parse_offers(self, tree: ET.ElementTree) -> List[NormalizedProduct]:
         root = tree.getroot()
         xml_categories = {cat.attrib["id"]: cat.text for cat in root.findall(".//category")}
         offers = root.findall(".//offer")
         self.stats.total_offers = len(offers)
-        
+
         products = []
         seen_skus = set()
-        
+
         for offer in offers:
+            offer_id = offer.get("id", "")
+            vendor_code = (offer.findtext("vendorCode") or "").strip()
+            if not vendor_code:
+                continue
+            sku = self.SKU_PREFIX + vendor_code
+
+            if sku in seen_skus:
+                self.stats.duplicate_skus += 1
+                continue
+            seen_skus.add(sku)
+
+            name = offer.findtext("name", "") or ""
+            vendor = offer.findtext("vendor", "") or ""
+            picture = offer.findtext("picture", "") or ""
+            available = (offer.findtext("available", "") or "").strip()
+
+            price = self._safe_price(offer.findtext("price", "0") or "0")
+            rrp = offer.findtext("rrp", "0") or "0"
+            old_price = self._safe_price(rrp) if rrp != "0" else None
+
+            category_id = offer.findtext("categoryId", "")
+            category_name = xml_categories.get(category_id, "")
             try:
-                product = self._parse_offer(offer, xml_categories)
-                if product is None:
-                    continue
-                if product.sku in seen_skus:
-                    self.stats.duplicate_skus += 1
-                    continue
-                seen_skus.add(product.sku)
-                products.append(product)
-                self.stats.processed += 1
-            except Exception as e:
+                category_path = resolve_category_path(category_name, self.category_map)
+            except (ValueError, KeyError) as e:
+                self.stats.unknown_categories.append(f"'{category_name}' (id={category_id}): {e}")
                 self.stats.failed += 1
-                self.stats.errors.append({"offer_id": offer.get("id", "unknown"), "error": str(e)})
-        
+                self.stats.errors.append({"offer_id": offer_id, "error": f"\u041d\u0435\u0432\u0456\u0434\u043e\u043c\u0430 \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0456\u044f: {category_name}"})
+                continue
+
+            description = ""
+            raw_attributes = []
+            for param in offer.findall("param"):
+                pname = (param.attrib.get("name") or "").strip()
+                pvalue = (param.text or "").strip()
+                if pname == "\u041e\u043f\u0438\u0441":
+                    description = pvalue
+                elif pname and pvalue:
+                    raw_attributes.append((pname, pvalue))
+
+            processed_attrs = []
+            unknown_names = []
+            unknown_values = []
+            for name, value in raw_attributes:
+                result = process_attribute(name, value)
+                if isinstance(result, tuple) and len(result) == 2:
+                    processed_attrs.append(result)
+                elif result == ATTR_SKIP:
+                    pass
+                elif result == ATTR_UNKNOWN_NAME:
+                    unknown_names.append((name, name, sku))
+                elif result == ATTR_UNKNOWN_VALUE:
+                    unknown_values.append((name, value, sku))
+
+            merged_attrs = merge_attributes(processed_attrs)
+            merged_list = list(merged_attrs.items())
+
+            seo = generate_product_seo({"Name": name, "Regular price": price, "Brand": vendor})
+
+            product = NormalizedProduct(
+                supplier_sku=vendor_code,
+                sku=sku,
+                name=name,
+                description=description,
+                price=price,
+                old_price=old_price,
+                category_path=category_path,
+                images=[picture] if picture else [],
+                brand=vendor,
+                in_stock=(available == "true"),
+                attributes=merged_list,
+                raw_attributes=raw_attributes,
+                seo_title=seo.get("seo_title", ""),
+                seo_description=seo.get("meta_description", ""),
+                focus_keyphrase=seo.get("focus_keyphrase", ""),
+            )
+
+            self.stats.unknown_attributes.extend(unknown_names)
+            self.stats.unknown_attribute_values.extend(unknown_values)
+            products.append(product)
+
+        self.stats.processed = len(products)
+        self.stats.products = products
         return products
 
-    def _parse_offer(self, offer: Any, xml_categories: dict) -> Optional[NormalizedProduct]:
-        offer_id = offer.get("id", "")
-        available = offer.get("available", "true")
-        
-        name = offer.findtext("name", "").strip()
-        if not name:
-            return None
-        
-        vendor = offer.findtext("vendor", "").strip()
-        vendor_code = offer.findtext("vendorCode", "").strip()
-        picture = offer.findtext("picture", "").strip()
-        
-        # SKU: use vendorCode cleaned, fall back to offer_id (matching legacy)
-        sku_base = re.sub(r"[^a-zA-Z0-9_-]", "", vendor_code) if vendor_code else offer_id
-        sku = f"{self.SKU_PREFIX}{sku_base}"
-        
-        # Price (USD * markup)
-        price = self._safe_price(offer.findtext("price", "0"))
-        rrp = offer.findtext("rrp", "0")
-        old_price = self._safe_price(rrp) if rrp and rrp != "0" else None
-        
-        # Category
-        category_id = offer.findtext("categoryId", "")
-        category_name = xml_categories.get(category_id, "")
-        try:
-            category_path = resolve_category_path(category_name, self.category_map)
-        except (ValueError, KeyError) as e:
-            self.stats.unknown_categories.append(f"'{category_name}' (id={category_id}): {e}")
-            self.stats.failed += 1
-            self.stats.errors.append({"offer_id": offer_id, "error": f"Unknown category: {category_name}"})
-            return None
-        
-        # Attributes
-        description = ""
-        raw_attributes = []
-        for param in offer.findall("param"):
-            pname = (param.attrib.get("name") or "").strip()
-            pvalue = (param.text or "").strip()
-            if pname == "Опис":
-                description = pvalue
-            elif pname and pvalue:
-                raw_attributes.append((pname, pvalue))
-        
-        # Process through mapping pipeline
-        processed_attrs = []
-        unknown_names = []
-        unknown_values = []
-        for name, value in raw_attributes:
-            result = process_attribute(name, value)
-            if isinstance(result, tuple) and len(result) == 2:
-                processed_attrs.append(result)
-            elif result == ATTR_SKIP:
-                pass
-            elif result == ATTR_UNKNOWN_NAME:
-                unknown_names.append((name, name, sku))
-            elif result == ATTR_UNKNOWN_VALUE:
-                unknown_values.append((name, value, sku))
-            elif isinstance(result, tuple) and len(result) == 2 and result[0] == ATTR_UNKNOWN_VALUE:
-                unknown_values.append((result[1], result[2], sku))
-        
-        merged_attrs = merge_attributes(processed_attrs)
-        merged_list = list(merged_attrs.items())
-        
-        # SEO
-        seo = generate_product_seo({"Name": name, "Regular price": price, "Brand": vendor})
-        
-        product = NormalizedProduct(
-            supplier_sku=vendor_code,
-            sku=sku,
-            name=name,
-            description=description,
-            price=price,
-            old_price=old_price,
-            category_path=category_path,
-            images=[picture] if picture else [],
-            brand=vendor,
-            in_stock=(available == "true"),
-            attributes=merged_list,
-            raw_attributes=raw_attributes,
-            seo_title=seo.get("seo_title", ""),
-            seo_description=seo.get("meta_description", ""),
-            focus_keyphrase=seo.get("focus_keyphrase", ""),
-        )
-        
-        self.stats.unknown_attributes.extend(unknown_names)
-        self.stats.unknown_attribute_values.extend(unknown_values)
-        
-        return product
-
     def run(self, import_type: str = "full") -> ImportStats:
-        tree = self.download_feed()
+        xml_path = self.feed_path or self.download_feed()
+        tree = self.parse_feed(xml_path)
         self.parse_offers(tree)
         return self.stats
-
-
-if __name__ == "__main__":
-    imp = ITLinkImporter()
-    stats = imp.run()
-    print(f"\nIT-Link Import Results:")
-    print(f"  Total offers: {stats.total_offers}")
-    print(f"  Processed: {stats.processed}")
-    print(f"  Failed: {stats.failed}")
-    print(f"  Duplicates: {stats.duplicate_skus}")
-    print(f"  Unknown categories: {len(stats.unknown_categories)}")
-    print(f"  Unknown attrs: {len(stats.unknown_attributes)}")
-    print(f"  Unknown values: {len(stats.unknown_attribute_values)}")

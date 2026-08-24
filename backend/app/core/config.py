@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     SUPPLIER_DCLINK_LOGIN: str = Field(default="")
     SUPPLIER_DCLINK_PASSWORD: str = Field(default="")
 
+    # Supplier feeds (temporary working storage path)
+    SUPPLIER_FEEDS_DIR: str = Field(default="/data/feeds")
+
 
 @lru_cache
 def get_settings() -> Settings:

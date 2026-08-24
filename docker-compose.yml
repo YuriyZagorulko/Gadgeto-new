@@ -16,6 +16,13 @@ services:
       - CORS_ORIGINS=["http://localhost:3000", "http://localhost:3001"]
       - FRONTEND_URL=http://localhost:3000
       - MEDIA_DIR=/app/media
+      - SUPPLIER_FEEDS_DIR=/data/feeds
+      - SUPPLIER_ITLINK_USERNAME=${SUPPLIER_ITLINK_USERNAME:-}
+      - SUPPLIER_ITLINK_PASSWORD=${SUPPLIER_ITLINK_PASSWORD:-}
+      - SUPPLIER_ITLINK_PRICE_ID=${SUPPLIER_ITLINK_PRICE_ID:-}
+      - SUPPLIER_ITLINK_CUSTOMER_ID=${SUPPLIER_ITLINK_CUSTOMER_ID:-}
+      - SUPPLIER_DCLINK_LOGIN=${SUPPLIER_DCLINK_LOGIN:-}
+      - SUPPLIER_DCLINK_PASSWORD=${SUPPLIER_DCLINK_PASSWORD:-}
       # Brevo — set these in .env or via your deployment secrets
       - BREVO_API_KEY=${BREVO_API_KEY:-}
       - BREVO_SENDER_EMAIL=${BREVO_SENDER_EMAIL:-noreply@gadgeto.com.ua}
@@ -23,6 +30,8 @@ services:
     volumes:
       # Persistent uploaded media storage (survives container recreation)
       - ./data/media:/app/media
+      # Supplier feeds (configurable via SUPPLIER_FEEDS_HOST_DIR env)
+      - ${SUPPLIER_FEEDS_HOST_DIR:-./data/feeds}:/data/feeds
     ports:
       - "8000:8000"
     healthcheck:

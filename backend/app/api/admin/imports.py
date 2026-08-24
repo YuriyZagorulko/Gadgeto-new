@@ -131,6 +131,121 @@ async def run_import_job(
     return {"ok": True, "detail": f"Імпорт '{data.import_type}' для {supplier['name']} запущено"}
 
 
+@router.post("/imports/start")
+async def start_import(
+    data: ImportRun,
+    background: BackgroundTasks,
+    user: dict = Depends(require_admin),
+):
+    """Create an import job and start it in the background with full persistence."""
+    if data.import_type not in IMPORT_TYPES:
+        raise HTTPException(status_code=400, detail="Невірний тип імпорту")
+    if data.supplier_code not in SYSTEM_SUPPLIERS:
+        raise HTTPException(status_code=400, detail="Невірний постачальник")
+
+    conn, cur = db()
+    try:
+        # Guard: no concurrent import for the same supplier
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM import_jobs j"
+            " JOIN suppliers s ON s.id=j.supplier_id"
+            " WHERE s.code=%s AND j.status IN ('QUEUED','RUNNING')",
+            (data.supplier_code,),
+        )
+        if cur.fetchone()["c"]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Імпорт {data.supplier_code} вже виконується",
+            )
+
+        cur.execute("SELECT id FROM suppliers WHERE code=%s", (data.supplier_code,))
+        supplier = cur.fetchone()
+        if not supplier:
+            raise HTTPException(status_code=404, detail="Постачальника не знайдено")
+
+        cur.execute(
+            """INSERT INTO import_jobs (supplier_id, import_type, status,
+                                        triggered_by_user_id, created_at, updated_at)
+               VALUES (%s, %s, 'QUEUED', %s, NOW(), NOW()) RETURNING id""",
+            (supplier["id"], data.import_type, user.get("id")),
+        )
+        job_id = cur.fetchone()["id"]
+    finally:
+        conn.close()
+
+    from app.imports.importer_service import run_full_import
+
+    background.add_task(run_full_import, data.supplier_code, job_id, supplier["id"], data.import_type)
+    return {"ok": True, "job_id": job_id, "detail": f"Імпорт {data.supplier_code} запущено (job #{job_id})"}
+
+
+@router.get("/imports/jobs/{jid}/progress")
+async def get_import_progress(jid: int, user: dict = Depends(require_admin)):
+    """Return the current progress of an import job (for frontend polling)."""
+    conn, cur = db()
+    try:
+        cur.execute(
+            """SELECT j.id, j.status, j.stats_json, j.error_details_json,
+                      j.progress_json, j.current_stage, j.started_at,
+                      j.finished_at, s.name AS supplier_name, s.code AS supplier_code
+               FROM import_jobs j
+               LEFT JOIN suppliers s ON s.id=j.supplier_id
+               WHERE j.id=%s""",
+            (jid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Завдання імпорту не знайдено")
+
+        result = {
+            "id": row["id"],
+            "status": row["status"],
+            "supplier_name": row["supplier_name"],
+            "supplier_code": row["supplier_code"],
+            "current_stage": row["current_stage"],
+            "started_at": row["started_at"],
+            "finished_at": row["finished_at"],
+        }
+
+        if row["progress_json"]:
+            try:
+                result["progress"] = json.loads(row["progress_json"])
+            except (ValueError, TypeError):
+                pass
+        if row["stats_json"]:
+            try:
+                result["stats"] = json.loads(row["stats_json"])
+            except (ValueError, TypeError):
+                pass
+        if row["error_details_json"]:
+            try:
+                result["error_details"] = json.loads(row["error_details_json"])
+            except (ValueError, TypeError):
+                pass
+
+        # Include recent logs from import_logs table
+        cur.execute(
+            """SELECT id, level, message, item_ref, created_at
+               FROM import_logs WHERE job_id = %s
+               ORDER BY id ASC LIMIT 500""",
+            (jid,),
+        )
+        result["logs"] = [
+            {
+                "id": r["id"],
+                "level": r["level"],
+                "message": r["message"],
+                "item_ref": r["item_ref"],
+                "created_at": r["created_at"],
+            }
+            for r in cur.fetchall()
+        ]
+
+        return result
+    finally:
+        conn.close()
+
+
 # ------------------------------------------------------------- global actions
 
 GLOBAL_ACTION_TYPES: dict[str, tuple[str, ...]] = {

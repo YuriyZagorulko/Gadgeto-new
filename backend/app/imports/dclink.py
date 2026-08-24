@@ -1,15 +1,18 @@
 """
 DC-Link supplier importer.
 
-Reads the locally cached JSON feed (dclink_products.json), applies the full
-mapping pipeline, and returns normalized products.
+Downloads the current catalog from DC-Link API (cerebro.dclink.ua),
+parses it, and returns normalized products for persistence.
 """
 
+import hashlib
 import json
 import os
-from collections import defaultdict
+import time
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict
+
+import requests
 
 from app.imports.attribute_processor import (
     process_attribute,
@@ -19,20 +22,19 @@ from app.imports.attribute_processor import (
     ATTR_UNKNOWN_VALUE,
 )
 from app.imports.category_utils import resolve_category_path
+from app.core.config import settings
 from app.services.seo import generate_product_seo
 
-# Legacy catalog paths
-LEGACY_CATALOG_DIR = "/home/yuri/Desktop/my/projects/gedgeto/catalog"
-DCLINK_PRODUCTS_PATH = os.path.join(LEGACY_CATALOG_DIR, "DC-Link", "dclink_products.json")
-DCLINK_CATEGORIES_PATH = os.path.join(LEGACY_CATALOG_DIR, "DC-Link", "dclink_categories.json")
-CATEGORY_MAPPING_PATH = os.path.join(
-    LEGACY_CATALOG_DIR, "final data mapping", "category_mapping.json"
-)
+
+BASE_URL = "https://cerebro.dclink.ua"
+
+# Category IDs for the full product catalog
+CATEGORY_IDS = [1371, 1379]
+PRODUCTS_LIMIT = 1000
 
 
 @dataclass
 class NormalizedProduct:
-    """Normalized product from supplier feed (same structure as IT-Link)."""
     supplier: str = "dclink"
     supplier_sku: str = ""
     sku: str = ""
@@ -50,14 +52,13 @@ class NormalizedProduct:
     seo_title: str = ""
     seo_description: str = ""
     focus_keyphrase: str = ""
-    
+
     def to_dict(self) -> dict:
         return asdict(self)
 
 
 @dataclass
 class ImportStats:
-    """Import statistics."""
     total_items: int = 0
     processed: int = 0
     created: int = 0
@@ -70,15 +71,13 @@ class ImportStats:
     duplicate_skus: int = 0
     empty_skus: int = 0
     errors: List[dict] = field(default_factory=list)
+    products: list = field(default_factory=list)
 
 
 class DCLinkImporter:
-    """DC-Link supplier importer."""
-    
     SKU_PREFIX = "DCL-"
     SUPPLIER_CODE = "dclink"
-    
-    # Tiered markup: (price_threshold_uah, multiplier)
+
     MARKUP_RULES = [
         (200, 1.50),
         (500, 1.45),
@@ -88,188 +87,233 @@ class DCLinkImporter:
         (15000, 1.25),
         (float("inf"), 1.20),
     ]
-    
-    def __init__(self, products_path: str = None, categories_path: str = None,
-                 category_mapping_path: str = None, category_map: dict = None):
-        self.products_path = products_path or DCLINK_PRODUCTS_PATH
-        self.categories_path = categories_path or DCLINK_CATEGORIES_PATH
-        self.category_mapping_path = category_mapping_path or CATEGORY_MAPPING_PATH
-        self.stats = ImportStats()
 
-        # DB-derived map (global + supplier overrides) takes priority;
-        # legacy JSON file is the fallback when the DB has no rules.
-        if category_map:
-            self.category_map = dict(category_map)
-        else:
-            with open(self.category_mapping_path, "r", encoding="utf-8") as f:
-                self.category_map = json.load(f)
-        
-        with open(self.categories_path, "r", encoding="utf-8") as f:
-            self.dc_categories = json.load(f)
-        
-        # Build DC-Link category ID → name map
-        self.dc_cat_map = {}
-        for c in self.dc_categories:
-            cid = str(c.get("categoryID", ""))
-            cname = c.get("name", "")
-            if cid:
-                self.dc_cat_map[cid] = cname
-    
+    def __init__(self, feed_path: str = None, categories_path: str = None,
+                 category_map: dict = None):
+        self.feed_path = feed_path
+        self.categories_path = categories_path
+        self.stats = ImportStats()
+        self.category_map = dict(category_map) if category_map else {}
+
+    def _login(self) -> str:
+        """Authenticate with DC-Link API and return session ID."""
+        login = settings.SUPPLIER_DCLINK_LOGIN or ""
+        password = settings.SUPPLIER_DCLINK_PASSWORD or ""
+        if not login or not password:
+            raise RuntimeError(
+                "\u041d\u0435 \u043d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u0456 \u043e\u0431\u043b\u0456\u043a\u043e\u0432\u0456 \u0434\u0430\u043d\u0456 DC-Link. "
+                "\u0412\u0441\u0442\u0430\u043d\u043e\u0432\u0456\u0442\u044c SUPPLIER_DCLINK_LOGIN / SUPPLIER_DCLINK_PASSWORD."
+            )
+        password_md5 = hashlib.md5(password.encode("utf-8")).hexdigest()
+        response = requests.post(
+            f"{BASE_URL}/auth",
+            json={"login": login, "password": password_md5},
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if data.get("status") != 1:
+            raise RuntimeError(f"\u041f\u043e\u043c\u0438\u043b\u043a\u0430 \u0430\u0432\u0442\u0435\u043d\u0442\u0438\u0444\u0456\u043a\u0430\u0446\u0456\u0457 DC-Link: {data}")
+        return data["result"]
+
+    def _get_categories(self, sid: str) -> List[dict]:
+        """Download supplier categories from DC-Link API."""
+        response = requests.get(
+            f"{BASE_URL}/categories/{sid}",
+            params={"lang": "ua"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()["result"]
+
+    def _get_products(self, sid: str, category_id: int) -> list:
+        """Download products for a category with pagination."""
+        products = []
+        offset = 0
+        while True:
+            response = requests.get(
+                f"{BASE_URL}/products/{category_id}/{sid}",
+                params={"lang": "ua", "limit": PRODUCTS_LIMIT, "offset": offset},
+                timeout=60,
+            )
+            response.raise_for_status()
+            result = response.json()["result"]
+            chunk = result["list"]
+            if not chunk:
+                break
+            products.extend(chunk)
+            if len(chunk) < PRODUCTS_LIMIT:
+                break
+            offset += PRODUCTS_LIMIT
+            time.sleep(0.2)
+        return products
+
+    def _get_products_content(self, sid: str, product_ids: list) -> list:
+        """Download full product details (attributes, images, descriptions)."""
+        all_content = []
+        batch_size = 500
+        for i in range(0, len(product_ids), batch_size):
+            batch = product_ids[i:i + batch_size]
+            response = requests.post(
+                f"{BASE_URL}/products/content/{sid}",
+                json={"lang": "ua", "productIDs": ",".join(map(str, batch))},
+                headers={"Content-Type": "application/json"},
+                timeout=120,
+            )
+            if response.status_code != 200:
+                continue
+            data = response.json()
+            if data.get("status") == 1:
+                all_content.extend(data["result"])
+            time.sleep(0.2)
+        return all_content
+
+    def download_feed(self) -> tuple:
+        """Download the complete DC-Link catalog.
+        Returns (products_list, categories_dict).
+        """
+        sid = self._login()
+
+        categories = self._get_categories(sid)
+        cat_dict = {str(c["categoryID"]): c["name"] for c in categories}
+
+        all_products = {}
+        for cid in CATEGORY_IDS:
+            try:
+                products = self._get_products(sid, cid)
+                for p in products:
+                    all_products[p["productID"]] = p
+            except Exception as e:
+                self.stats.errors.append({"category_id": cid, "error": str(e)})
+
+        products_list = list(all_products.values())
+        product_ids = [p["productID"] for p in products_list]
+
+        content = self._get_products_content(sid, product_ids)
+        content_map = {p["productID"]: p for p in content}
+
+        for product in products_list:
+            full = content_map.get(product["productID"])
+            if full:
+                product["description"] = full.get("description")
+                product["options"] = full.get("options", [])
+                product["images"] = full.get("images", [])
+
+        return products_list, cat_dict
+
     def _apply_markup(self, price_uah: float) -> int:
-        """Apply tiered markup rules (same as legacy)."""
         for threshold, multiplier in self.MARKUP_RULES:
             if price_uah <= threshold:
                 return round(price_uah * multiplier)
         return round(price_uah * self.MARKUP_RULES[-1][1])
-    
-    def download_feed(self) -> List[dict]:
-        """Load JSON feed from cache."""
-        if not os.path.exists(self.products_path):
-            raise FileNotFoundError(f"DC-Link products not found: {self.products_path}")
-        with open(self.products_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    
-    def parse_products(self, feed: List[dict]) -> List[NormalizedProduct]:
-        """Parse all products from JSON feed."""
+
+    def _pick_price(self, item: dict) -> int:
+        try:
+            price_uah = item.get("price_uah")
+            if price_uah not in (None, "", 0):
+                price = float(price_uah)
+            else:
+                usd = float(item.get("price", 0))
+                if usd <= 0:
+                    return 0
+                price = usd * 44.3
+            if price <= 0:
+                return 0
+            return self._apply_markup(price)
+        except (ValueError, TypeError):
+            return 0
+
+    def parse_products(self, feed: list, dc_cat_map: dict) -> List[NormalizedProduct]:
         self.stats.total_items = len(feed)
         products = []
         seen_skus = set()
-        
+
         for item in feed:
+            articul = str(item.get("articul") or "").strip()
+            if not articul:
+                self.stats.empty_skus += 1
+                continue
+            sku = self.SKU_PREFIX + articul
+            if sku in seen_skus:
+                self.stats.duplicate_skus += 1
+                continue
+            seen_skus.add(sku)
+
+            name = item.get("name") or ""
+            description = item.get("description") or ""
+            brief = item.get("brief_description") or ""
+            price = self._pick_price(item)
+
+            category_id = str(item.get("categoryID") or "").strip()
+            category_name = dc_cat_map.get(category_id, "")
             try:
-                product = self._parse_product(item)
-                if product is None:
-                    continue
-                
-                if product.sku in seen_skus:
-                    self.stats.duplicate_skus += 1
-                    continue
-                seen_skus.add(product.sku)
-                
-                products.append(product)
-                self.stats.processed += 1
-                
-            except Exception as e:
+                category_path = resolve_category_path(category_name, self.category_map)
+            except (ValueError, KeyError) as e:
+                self.stats.unknown_categories.append(f"'{category_name}' (id={category_id}): {e}")
                 self.stats.failed += 1
-                self.stats.errors.append({
-                    "sku": str(item.get("articul", "unknown")),
-                    "error": str(e),
-                })
-        
+                self.stats.errors.append({"articul": articul, "error": f"\u041d\u0435\u0432\u0456\u0434\u043e\u043c\u0430 \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0456\u044f: {category_name}"})
+                continue
+
+            images = []
+            full_image = item.get("full_image")
+            if full_image:
+                images.append(str(full_image))
+            other_images = item.get("other_images") or item.get("images") or []
+            for im in other_images:
+                if isinstance(im, dict):
+                    url = str(im.get("url") or im.get("path") or "")
+                else:
+                    url = str(im)
+                if url and url not in images:
+                    images.append(url)
+
+            stocks = item.get("stocks", [])
+            in_stock = bool(stocks) and any(s is not None for s in stocks)
+
+            raw_options = item.get("options") or []
+            raw_attributes = []
+            for opt in raw_options:
+                opt_name = (opt.get("OptionName") or "").strip()
+                opt_value = (opt.get("ValueName") or "").strip()
+                if opt_name and opt_value:
+                    raw_attributes.append((opt_name, opt_value))
+
+            processed, unknown_names, unknown_values = self._process_attributes(raw_attributes)
+            merged_list = list(merge_attributes(processed).items())
+
+            seo = generate_product_seo({"Name": name, "Regular price": price, "Brand": ""})
+
+            product = NormalizedProduct(
+                supplier_sku=articul,
+                sku=sku,
+                name=name,
+                description=description,
+                short_description=brief,
+                price=price,
+                category_path=category_path,
+                images=images,
+                in_stock=in_stock,
+                attributes=merged_list,
+                raw_attributes=raw_attributes,
+                seo_title=seo.get("seo_title", ""),
+                seo_description=seo.get("meta_description", ""),
+                focus_keyphrase=seo.get("focus_keyphrase", ""),
+            )
+
+            self.stats.unknown_attributes.extend(unknown_names)
+            self.stats.unknown_attribute_values.extend(unknown_values)
+            products.append(product)
+
+        self.stats.processed = len(products)
+        self.stats.products = products
         return products
-    
-    def _parse_product(self, item: dict) -> Optional[NormalizedProduct]:
-        """Parse a single product from JSON."""
-        articul = str(item.get("articul", "")).strip()
-        if not articul:
-            self.stats.empty_skus += 1
-            return None
-        
-        sku = f"{self.SKU_PREFIX}{articul}"
-        name = item.get("name", "").strip()
-        if not name:
-            return None
-        
-        description = item.get("description", "").strip() or item.get("brief_description", "").strip()
-        brief = item.get("brief_description", "").strip()
-        
-        # Price
-        price_uah = item.get("price_uah", 0)
-        if isinstance(price_uah, str):
-            try:
-                price_uah = float(price_uah)
-            except ValueError:
-                price_uah = 0
-        
-        price = self._apply_markup(price_uah)
-        
-        # Category
-        category_id = str(item.get("categoryID", "")).strip()
-        dc_cat_name = self.dc_cat_map.get(category_id, "")
-        
-        try:
-            category_path = resolve_category_path(dc_cat_name, self.category_map)
-        except (ValueError, KeyError) as e:
-            self.stats.unknown_categories.append(f"'{dc_cat_name}' (dc_id={category_id}): {e}")
-            self.stats.failed += 1
-            return None
-        
-        # Images
-        images = []
-        for img_key in ["full_image", "large_image", "medium_image", "small_image"]:
-            img_url = item.get(img_key, "")
-            if img_url:
-                images.append(img_url)
-        # Also check 'images' key for additional images
-        extra_images = item.get("images", [])
-        if isinstance(extra_images, list):
-            for img in extra_images:
-                if isinstance(img, dict):
-                    url = img.get("url", "") or img.get("image", "") or img.get("full_image", "")
-                    if url and url not in images:
-                        images.append(url)
-                elif isinstance(img, str) and img not in images:
-                    images.append(img)
-        
-        # Stock
-        stocks = item.get("stocks", [])
-        in_stock = bool(stocks) and any(s is not None for s in stocks)
-        
-        # Attributes
-        raw_options = item.get("options") or []
-        raw_attributes = []
-        for opt in raw_options:
-            opt_name = (opt.get("OptionName") or "").strip()
-            opt_value = (opt.get("ValueName") or "").strip()
-            if opt_name and opt_value:
-                raw_attributes.append((opt_name, opt_value))
-        
-        # Process through mapping pipeline
-        processed_attrs, unknown_names, unknown_values = self._process_attributes(raw_attributes)
-        merged_attrs = merge_attributes(processed_attrs)
-        merged_attrs_list = list(merged_attrs.items())
-        
-        # Build product dict for SEO
-        product_dict = {
-            "Name": name,
-            "Regular price": price,
-            "Brand": "",
-        }
-        seo = generate_product_seo(product_dict)
-        
-        product = NormalizedProduct(
-            supplier_sku=articul,
-            sku=sku,
-            name=name,
-            description=description,
-            short_description=brief,
-            price=price,
-            category_path=category_path,
-            images=images,
-            in_stock=in_stock,
-            attributes=merged_attrs_list,
-            raw_attributes=raw_attributes,
-            seo_title=seo.get("seo_title", ""),
-            seo_description=seo.get("meta_description", ""),
-            focus_keyphrase=seo.get("focus_keyphrase", ""),
-        )
-        
-        self.stats.unknown_attributes.extend(unknown_names)
-        self.stats.unknown_attribute_values.extend(unknown_values)
-        
-        return product
-    
-    def _process_attributes(
-        self, raw_attrs: List[Tuple[str, str]]
-    ) -> Tuple[List[Tuple[str, str]], List[Tuple], List[Tuple]]:
-        """Process raw attributes through mapping pipeline."""
+
+    def _process_attributes(self, raw_attrs):
         processed = []
         unknown_names = []
         unknown_values = []
-        
         for name, value in raw_attrs:
             result = process_attribute(name, value)
-            
             if isinstance(result, tuple) and len(result) == 2:
                 processed.append(result)
             elif result == ATTR_SKIP:
@@ -278,29 +322,9 @@ class DCLinkImporter:
                 unknown_names.append((name, name, ""))
             elif result == ATTR_UNKNOWN_VALUE:
                 unknown_values.append((name, value, ""))
-        
         return processed, unknown_names, unknown_values
-    
+
     def run(self, import_type: str = "full") -> ImportStats:
-        """Run the full import pipeline."""
-        feed = self.download_feed()
-        products = self.parse_products(feed)
+        feed, dc_cat_map = self.download_feed()
+        self.parse_products(feed, dc_cat_map)
         return self.stats
-
-
-# CLI entry point for testing
-if __name__ == "__main__":
-    importer = DCLinkImporter()
-    stats = importer.run()
-    print(f"\nDC-Link Import Results:")
-    print(f"  Total items: {stats.total_items}")
-    print(f"  Processed: {stats.processed}")
-    print(f"  Failed: {stats.failed}")
-    print(f"  Empty SKUs: {stats.empty_skus}")
-    print(f"  Duplicate SKUs: {stats.duplicate_skus}")
-    print(f"  Unknown categories: {len(stats.unknown_categories)}")
-    print(f"  Unknown attributes: {len(stats.unknown_attributes)}")
-    print(f"  Unknown attribute values: {len(stats.unknown_attribute_values)}")
-    
-    for pc in stats.unknown_categories[:10]:
-        print(f"  Unknown category: {pc}")
