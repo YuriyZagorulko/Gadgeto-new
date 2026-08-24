@@ -4,6 +4,7 @@ Uses Gadgeto-new settings from app.core.config.
 """
 
 import os
+import uuid
 from pathlib import Path
 
 from app.core.config import settings as core_settings
@@ -18,6 +19,8 @@ class Settings:
         self.price_id: str = core_settings.SUPPLIER_ITLINK_PRICE_ID
         self.customer_id: str = core_settings.SUPPLIER_ITLINK_CUSTOMER_ID
         self.headless: bool = True
+        # Unique run identifier so concurrent imports never clash
+        self._run_id: str = uuid.uuid4().hex[:12]
 
     @property
     def base_url(self) -> str:
@@ -32,9 +35,9 @@ class Settings:
 
     @property
     def target_file_path(self) -> Path:
-        """Path to save the downloaded XML."""
+        """Path to save the downloaded XML (unique per run)."""
         feeds_dir = core_settings.SUPPLIER_FEEDS_DIR or "/data/feeds"
-        return Path(feeds_dir) / "itlink" / "itlink.yml"
+        return Path(feeds_dir) / "itlink" / f"itlink_{self._run_id}.yml"
 
 
 settings = Settings()

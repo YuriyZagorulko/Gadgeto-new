@@ -162,10 +162,115 @@ async def update_product(pid: int, data: ProductUpdate, user: dict = Depends(req
 
 @router.delete("/products/{pid}")
 async def delete_product(pid: int, user: dict = Depends(require_admin)):
+    """Permanently delete a product and its associations.
+
+    Safety rules (no cascade-delete on business-critical data):
+    - order_items.product_id is nullable → set to NULL.
+    - cart_items have a hard FK → remove cart_items for this product.
+    - product_images, product_categories, product_attributes,
+      product_variations, product_reviews, product_related are owned by
+      the product → delete those rows.
+    - Physical image/media files are deleted only when no other product
+      references them (handled by _cleanup_product_media).
+    """
     conn, cur = db()
-    cur.execute("UPDATE products SET status='ARCHIVED', is_active=false, updated_at=NOW() WHERE id=%s", (pid,))
-    conn.close()
-    return {"ok": True}
+    try:
+        # 1. Clean up associated media (files + DB refs)
+        _cleanup_product_media(cur, pid)
+
+        # 2. Product-owned records
+        cur.execute("DELETE FROM product_images WHERE product_id=%s", (pid,))
+        cur.execute("DELETE FROM product_categories WHERE product_id=%s", (pid,))
+        cur.execute("DELETE FROM product_attributes WHERE product_id=%s", (pid,))
+        cur.execute("DELETE FROM product_variations WHERE product_id=%s", (pid,))
+        cur.execute("DELETE FROM product_reviews WHERE product_id=%s", (pid,))
+        cur.execute("DELETE FROM product_related WHERE product_id=%s OR related_product_id=%s", (pid, pid))
+
+        # 3. Supplier products (no cascade — nullify the FK)
+        cur.execute("UPDATE supplier_products SET product_id=NULL WHERE product_id=%s", (pid,))
+
+        # 4. Cart items (hard FK — remove them)
+        cur.execute("DELETE FROM cart_items WHERE product_id=%s", (pid,))
+
+        # 5. Order items — set FK to NULL so historical orders remain intact
+        cur.execute("UPDATE order_items SET product_id=NULL WHERE product_id=%s", (pid,))
+
+        # 6. Delete the product itself
+        #     (product_raw_attributes and product_tags have ON DELETE CASCADE,
+        #      so they are cleaned up automatically)
+        cur.execute("DELETE FROM products WHERE id=%s", (pid,))
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+def _cleanup_product_media(cur, pid: int):
+    """For each physical file referenced by the deleted product, check whether
+    any *other* product still references it. If not, delete the file + its
+    media_files row.  Shared media (used by ≥2 products) is kept."""
+    import os
+    from app.core.config import settings
+
+    # Collect (url, media_id, storage_path) for this product's images
+    cur.execute(
+        """SELECT pi.url, pi.media_id, mf.storage_path
+           FROM product_images pi
+           LEFT JOIN media_files mf ON mf.id = pi.media_id
+           WHERE pi.product_id = %s""",
+        (pid,),
+    )
+    images = cur.fetchall()
+
+    for img in images:
+        url = img["url"]
+        media_id = img.get("media_id")
+        storage_path = img.get("storage_path")
+
+        if media_id and storage_path:
+            # Check if any other product_image references the same media_file
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM product_images WHERE media_id=%s AND product_id != %s",
+                (media_id, pid),
+            )
+            ref_count = cur.fetchone()["cnt"]
+            if ref_count == 0:
+                # No other reference → safe to delete both the file and the DB record
+                abs_path = os.path.join(settings.MEDIA_DIR, storage_path)
+                if os.path.exists(abs_path):
+                    try:
+                        os.remove(abs_path)
+                    except OSError:
+                        pass  # file may already be gone; continue
+                cur.execute("DELETE FROM media_files WHERE id=%s", (media_id,))
+        # The product_image row itself is deleted by the caller
+
+
+class BulkDelete(BaseModel):
+    ids: List[int]
+
+
+@router.post("/products/bulk-delete")
+async def bulk_delete_products(data: BulkDelete, user: dict = Depends(require_admin)):
+    """Permanently delete multiple products in a single transaction."""
+    if not data.ids:
+        raise HTTPException(status_code=400, detail="Список ID порожній")
+    conn, cur = db()
+    try:
+        for pid in data.ids:
+            _cleanup_product_media(cur, pid)
+            cur.execute("DELETE FROM product_images WHERE product_id=%s", (pid,))
+            cur.execute("DELETE FROM product_categories WHERE product_id=%s", (pid,))
+            cur.execute("DELETE FROM product_attributes WHERE product_id=%s", (pid,))
+            cur.execute("DELETE FROM product_variations WHERE product_id=%s", (pid,))
+            cur.execute("DELETE FROM product_reviews WHERE product_id=%s", (pid,))
+            cur.execute("DELETE FROM product_related WHERE product_id=%s OR related_product_id=%s", (pid, pid))
+            cur.execute("UPDATE supplier_products SET product_id=NULL WHERE product_id=%s", (pid,))
+            cur.execute("DELETE FROM cart_items WHERE product_id=%s", (pid,))
+            cur.execute("UPDATE order_items SET product_id=NULL WHERE product_id=%s", (pid,))
+            cur.execute("DELETE FROM products WHERE id=%s", (pid,))
+        return {"ok": True, "deleted": len(data.ids)}
+    finally:
+        conn.close()
 
 
 def _slugify(name: str) -> str:
@@ -216,11 +321,14 @@ class BulkAction(BaseModel):
 async def bulk_action(data: BulkAction, user: dict = Depends(require_admin)):
     """Bulk status change for products."""
     actions = {
-        "publish": ("status='PUBLISHED', is_active=true",),
-        "hide": ("status='HIDDEN'",),
-        "archive": ("status='ARCHIVED', is_active=false",),
-        "activate": ("is_active=true",),
-        "deactivate": ("is_active=false",),
+        "publish": ("status='PUBLISHED', is_active=true, is_visible=true",),
+        "hide": ("status='HIDDEN', is_visible=false",),
+        "archive": ("status='ARCHIVED', is_active=false, is_visible=false",),
+        "activate": (
+            "is_active=true, is_visible=true, "
+            "status = CASE WHEN status='ARCHIVED' THEN 'PUBLISHED' ELSE status END",
+        ),
+        "deactivate": ("is_active=false, is_visible=false",),
     }
     if data.action not in actions or not data.ids:
         raise HTTPException(status_code=400, detail="Невірна дія")

@@ -138,7 +138,7 @@ function ProductsInner() {
   const [cats, setCats] = useState<Opt[]>([]);
   const [brands, setBrands] = useState<Opt[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [confirm, setConfirm] = useState<{ kind: 'bulk-archive' | 'delete'; ids: number[] } | null>(null);
+  const [confirm, setConfirm] = useState<{ kind: 'bulk-archive' | 'delete' | 'bulk-delete'; ids: number[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
 
@@ -232,7 +232,19 @@ function ProductsInner() {
     setBusy(true);
     try {
       await api.delete(`/products/${id}`);
-      toast.push('success', 'Товар переміщено в архів');
+      toast.push('success', 'Товар остаточно видалено');
+      setConfirm(null); reload();
+    } catch (e: unknown) {
+      toast.push('error', (e as Error).message);
+    } finally { setBusy(false); }
+  };
+
+  const runBulkDelete = async (ids: number[]) => {
+    setBusy(true);
+    try {
+      await api.post('/products/bulk-delete', { ids });
+      toast.push('success', `Видалено товарів: ${ids.length}`);
+      setSelected(new Set());
       setConfirm(null); reload();
     } catch (e: unknown) {
       toast.push('error', (e as Error).message);
@@ -310,8 +322,11 @@ function ProductsInner() {
             <Button size="sm" variant="secondary" onClick={() => runBulk('hide', [...selected])}>Приховати</Button>
             <Button size="sm" variant="secondary" onClick={() => runBulk('activate', [...selected])}>Активувати</Button>
             <Button size="sm" variant="secondary" onClick={() => runBulk('deactivate', [...selected])}>Деактивувати</Button>
-            <Button size="sm" variant="danger" onClick={() => setConfirm({ kind: 'bulk-archive', ids: [...selected] })}>
+            <Button size="sm" variant="secondary" onClick={() => setConfirm({ kind: 'bulk-archive', ids: [...selected] })}>
               До архіву
+            </Button>
+            <Button size="sm" variant="danger" onClick={() => setConfirm({ kind: 'bulk-delete', ids: [...selected] })}>
+              🗑️ Видалити
             </Button>
           </div>
         </div>
@@ -381,16 +396,25 @@ function ProductsInner() {
                 <Td><Badge tone={r.status === 'PUBLISHED' ? 'green' : r.status === 'ARCHIVED' ? 'gray' : 'yellow'}>{PRODUCT_STATUS_LABELS[r.status] || r.status}</Badge></Td>
                 <Td className="whitespace-nowrap text-xs text-gray-500 tabular-nums">{formatDateTime(r.updated_at)}</Td>
                                                 <Td className="whitespace-nowrap">
-                  {r.slug ? (
-                    <a
-                      href={process.env.NEXT_PUBLIC_STORE_URL + '/product/' + encodeURIComponent(r.slug)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center justify-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-50 hover:border-gray-400 transition-colors"
-                    >Відкрити</a>
-                  ) : (
-                    <span className="inline-flex items-center justify-center px-3 py-1.5 text-sm text-gray-400 border border-gray-200 rounded">Недоступно</span>
-                  )}
+                  <div className="flex items-center gap-1">
+                    {r.slug ? (
+                      <a
+                        href={process.env.NEXT_PUBLIC_STORE_URL + '/product/' + encodeURIComponent(r.slug)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-50 hover:border-gray-400 transition-colors"
+                      >Відкрити</a>
+                    ) : (
+                      <span className="inline-flex items-center justify-center px-3 py-1.5 text-sm text-gray-400 border border-gray-200 rounded">Недоступно</span>
+                    )}
+                    <button
+                      onClick={() => setConfirm({ kind: 'delete', ids: [r.id] })}
+                      className="px-3 py-1.5 text-sm font-medium text-red-600 hover:text-red-800 border border-transparent hover:border-red-200 rounded transition-colors"
+                      title="Видалити назавжди"
+                    >
+                      🗑️
+                    </button>
+                  </div>
                 </Td>
               </tr>
             ))}
@@ -425,10 +449,18 @@ function ProductsInner() {
       />
       <ConfirmDialog
         open={confirm?.kind === 'delete'}
-        title="Архівувати товар?"
-        message="Товар буде переведено в статус «Архів» і деактивовано. Дані не буде видалено."
-        confirmLabel="Архівувати" danger busy={busy}
+        title="Видалити товар?"
+        message={`Товар «${confirm?.ids[0] === -1 ? data?.items.find((r) => confirm?.ids.includes(r.id))?.name : data?.items.find((r) => r.id === confirm?.ids[0])?.name || ''}» буде остаточно видалено. Цю дію неможливо скасувати.\n\nУВАГА: історія замовлень не постраждає, але всі пов'язані дані (зображення, характеристики, варіації, кошики) буде видалено.`}
+        confirmLabel="Видалити назавжди" danger busy={busy}
         onConfirm={() => confirm && deleteProduct(confirm.ids[0])}
+        onCancel={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={confirm?.kind === 'bulk-delete'}
+        title="Масове видалення товарів?"
+        message={`Вибрані товари (${confirm?.ids.length ?? 0}) буде остаточно видалено. Цю дію неможливо скасувати.\n\nІсторія замовлень не постраждає.`}
+        confirmLabel="Видалити назавжди" danger busy={busy}
+        onConfirm={() => confirm && runBulkDelete(confirm.ids)}
         onCancel={() => setConfirm(null)}
       />
     </div>

@@ -265,6 +265,9 @@ async def get_product(slug: str):
     if not p:
         cur.connection.close()
         raise HTTPException(status_code=404, detail="Product not found")
+    if not p["is_active"] or not p["is_visible"]:
+        cur.connection.close()
+        raise HTTPException(status_code=404, detail="Product not found")
     
     # Attributes
     cur.execute("""

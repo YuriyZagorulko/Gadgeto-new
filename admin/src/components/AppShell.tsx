@@ -17,6 +17,7 @@ type NavItem = {
 const navItems: NavItem[] = [
   { href: '/dashboard', label: 'Панель керування', icon: '📊' },
   { href: '/products', label: 'Товари', icon: '📦' },
+  { href: '/media', label: 'Медіа', icon: '🖼️' },
   { href: '/categories', label: 'Категорії', icon: '📁' },
   { href: '/attributes', label: 'Атрибути', icon: '🏷️' },
   { href: '/brands', label: 'Бренди', icon: '™️' },

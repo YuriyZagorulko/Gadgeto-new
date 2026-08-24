@@ -257,3 +257,52 @@ async def delete_media(media_id: int, user: dict = Depends(require_admin)):
         return {"ok": True}
     finally:
         conn.close()
+
+
+@router.post("/media/cleanup-unused")
+async def cleanup_unused_media(user: dict = Depends(require_admin)):
+    """Delete all media_files that have ZERO product_image references.
+
+    Workflow:
+    1. Identify unreferenced media (no product_images row with matching URL).
+    2. Delete physical file if it exists.
+    3. Delete the media_files DB row.
+
+    Returns stats about what was deleted.
+    """
+    conn, cur = db()
+    try:
+        cur.execute(
+            """SELECT mf.id, mf.storage_path, mf.url, mf.filename
+               FROM media_files mf
+               WHERE NOT EXISTS (
+                   SELECT 1 FROM product_images pi WHERE pi.url = mf.url
+               )"""
+        )
+        rows = cur.fetchall()
+        deleted_count = 0
+        deleted_size = 0
+        errors = []
+
+        for row in rows:
+            media_id = row["id"]
+            storage_path = row["storage_path"]
+            abs_path = os.path.join(settings.MEDIA_DIR, storage_path)
+            if os.path.exists(abs_path):
+                try:
+                    deleted_size += os.path.getsize(abs_path)
+                    os.remove(abs_path)
+                except OSError as e:
+                    errors.append(f"{storage_path}: {e}")
+                    continue
+            cur.execute("DELETE FROM media_files WHERE id=%s", (media_id,))
+            deleted_count += 1
+
+        return {
+            "ok": True,
+            "deleted": deleted_count,
+            "deleted_size": deleted_size,
+            "errors": errors,
+        }
+    finally:
+        conn.close()

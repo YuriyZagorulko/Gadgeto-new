@@ -1,5 +1,6 @@
 """Full import pipeline service."""
 import json
+import os
 import psycopg2
 from app.core.db_connect import DB
 from app.imports.registry import SUPPLIERS
@@ -58,6 +59,31 @@ def _make_progress(conn, job_id):
     return _progress
 
 
+def _cleanup_supplier_temp_files(supplier_code: str):
+    """Remove temporary working files created during a supplier import.
+
+    Only cleans files that are known temporary/download artefacts, never
+    permanent application data.
+    """
+    from app.core.config import settings as app_settings
+    if supplier_code == "itlink":
+        # IT-Link downloader saves the XML price feed to
+        # SUPPLIER_FEEDS_DIR/itlink/itlink_<run_id>.yml
+        # Clean up any itlink_*.yml files (all are temporary per-run files)
+        feeds_dir = app_settings.SUPPLIER_FEEDS_DIR or "/data/feeds"
+        itlink_dir = os.path.join(feeds_dir, "itlink")
+        if os.path.isdir(itlink_dir):
+            for fn in os.listdir(itlink_dir):
+                if fn.startswith("itlink_") and (fn.endswith(".yml") or fn.endswith(".yml.tmp")):
+                    path = os.path.join(itlink_dir, fn)
+                    try:
+                        if os.path.isfile(path):
+                            os.remove(path)
+                    except OSError:
+                        pass
+    # DC-Link processes everything in-memory — no temp files to clean.
+
+
 def run_full_import(supplier_code, job_id, supplier_id, import_type="full"):
     from app.imports.import_runner import ImportRunner
     from app.imports.mapping_resolver import MappingResolver
@@ -93,7 +119,11 @@ def run_full_import(supplier_code, job_id, supplier_id, import_type="full"):
         progress("authenticating", 0, 0, 0, 0, 0, 0, "Авторизація...")
         progress("downloading", 0, 0, 0, 0, 0, 0, "Завантаження каталогу...")
         importer = entry["importer"](category_map=db_category_map)
-        stats = importer.run(import_type)
+        try:
+            stats = importer.run(import_type)
+        finally:
+            # Guarantee temp-file cleanup even if parsing/persistence fails
+            _cleanup_supplier_temp_files(supplier_code)
 
         progress("parsing", 0, 0, 0, 0, 0, 0, "Розбір каталогу...")
 
@@ -181,6 +211,10 @@ def run_full_import(supplier_code, job_id, supplier_id, import_type="full"):
     finally:
         try:
             set_db_resolver(None)
+        except Exception:
+            pass
+        try:
+            _cleanup_supplier_temp_files(supplier_code)
         except Exception:
             pass
         try:
