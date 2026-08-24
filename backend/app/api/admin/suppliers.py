@@ -1,15 +1,9 @@
-"""Admin suppliers API (read-only).
-
-Suppliers are FIXED system integrations defined in ``app.imports.registry``.
-Their rows in the ``suppliers`` table are SYSTEM DATA created by the idempotent
-seed migration (012_system_suppliers). Administrators can view them and run
-their imports but must never create/edit/delete them.
-"""
 import json
+from typing import Optional, List
+from pydantic import BaseModel
 import psycopg2
 import psycopg2.extras
 from fastapi import APIRouter, HTTPException, Query, Depends
-from typing import Optional
 
 from app.api.admin.deps import require_admin
 from app.core.db_connect import DB
@@ -44,7 +38,7 @@ async def list_suppliers(
         total = cur.fetchone()["c"]
 
         cur.execute(f"""
-            SELECT s.id, s.code, s.name, s.enabled,
+            SELECT s.id, s.code, s.name, s.enabled, s.config_json,
                    (SELECT COUNT(*) FROM products p WHERE p.supplier_id = s.id) AS products_count,
                    (SELECT COUNT(*) FROM supplier_categories sc
                       WHERE sc.supplier_id = s.id AND NOT sc.is_removed) AS categories_count,
@@ -57,7 +51,14 @@ async def list_suppliers(
             ORDER BY s.name
             LIMIT %s OFFSET %s
         """, params + [per_page, (page - 1) * per_page])
-        return {"items": cur.fetchall(), "total": total, "page": page, "per_page": per_page}
+        items = cur.fetchall()
+        # Parse config_json for each item
+        for item in items:
+            try:
+                item["config"] = json.loads(item.pop("config_json")) if item.get("config_json") else {}
+            except (ValueError, TypeError):
+                item["config"] = {}
+        return {"items": items, "total": total, "page": page, "per_page": per_page}
     finally:
         conn.close()
 
@@ -81,6 +82,27 @@ async def get_supplier(sid: int, user: dict = Depends(require_admin)):
         row["imports_by_status"] = {r["status"]: r["c"] for r in cur.fetchall()}
         row["is_system"] = row["code"] in SYSTEM_SUPPLIERS
         return row
+    finally:
+        conn.close()
+
+
+class SupplierConfigUpdate(BaseModel):
+    config: dict
+
+
+@router.put("/suppliers/{sid}/config")
+async def update_supplier_config(sid: int, body: SupplierConfigUpdate, user: dict = Depends(require_admin)):
+    """Update supplier config_json (e.g. image storage settings)."""
+    conn, cur = db()
+    try:
+        cur.execute("SELECT id FROM suppliers WHERE id = %s", (sid,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Постачальника не знайдено")
+        cur.execute(
+            "UPDATE suppliers SET config_json = %s WHERE id = %s",
+            (json.dumps(body.config, ensure_ascii=False), sid),
+        )
+        return {"ok": True, "config": body.config}
     finally:
         conn.close()
 

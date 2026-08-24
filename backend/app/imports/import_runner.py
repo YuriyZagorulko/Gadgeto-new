@@ -54,11 +54,13 @@ class ImportRunner:
     """
 
     def __init__(self, supplier_id: int, supplier_code: str,
-                 progress_cb=None, mark_removed_products: bool = True):
+                 progress_cb=None, mark_removed_products: bool = True,
+                 image_storage_mode: str = "supplier_url"):
         self.supplier_id = supplier_id
         self.supplier_code = supplier_code
         self.progress_cb = progress_cb
         self.mark_removed = mark_removed_products
+        self.image_storage_mode = image_storage_mode  # "supplier_url" or "local"
         self.total = 0
         self.processed = 0
         self.created = 0
@@ -315,9 +317,21 @@ class ImportRunner:
             return
         for i, img_url in enumerate(images):
             if img_url and img_url.strip():
+                url = img_url.strip()
+                media_id = None
+                if self.image_storage_mode == "local" and (url.startswith("http://") or url.startswith("https://")):
+                    from app.imports.image_helper import download_supplier_image
+                    result = download_supplier_image(url, cur)
+                    if result:
+                        url = result["url"]
+                        media_id = result["media_id"]
+                    else:
+                        self.warnings.append(f"Не вдалося завантажити зображення: {url}")
+                        # Fall back to storing the supplier URL so the product
+                        # still has an image reference
                 cur.execute(
-                    """INSERT INTO product_images (product_id, url, is_primary,
+                    """INSERT INTO product_images (product_id, url, media_id, is_primary,
                                                    sort_order, created_at, updated_at)
-                       VALUES (%s,%s,%s,%s,NOW(),NOW())""",
-                    (product_id, img_url.strip(), i == 0, i),
+                       VALUES (%s,%s,%s,%s,%s,NOW(),NOW())""",
+                    (product_id, url, media_id, i == 0, i),
                 )

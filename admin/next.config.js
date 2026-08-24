@@ -16,6 +16,10 @@ const nextConfig = {
       // Suppliers/mappings moved under the "Імпорт" section (admin sidebar).
       { source: '/mappings', destination: '/imports/mappings', permanent: false },
       { source: '/suppliers', destination: '/imports/suppliers', permanent: false },
+      // Legacy import routes consolidated into /imports/history and /imports/settings
+      { source: '/imports', destination: '/imports/history', permanent: false },
+      { source: '/imports/global', destination: '/imports/settings?tab=global', permanent: false },
+      { source: '/settings/global-actions', destination: '/imports/settings?tab=global', permanent: false },
     ];
   },
   async rewrites() {

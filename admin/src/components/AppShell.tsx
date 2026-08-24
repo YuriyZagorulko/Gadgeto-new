@@ -26,19 +26,15 @@ const navItems: NavItem[] = [
     label: 'Імпорт',
     icon: '📥',
     children: [
+      { href: '/imports/history', label: 'Історія імпортів' },
+      { href: '/imports/settings', label: 'Налаштування' },
       { href: '/imports/mappings', label: 'Маппінг' },
       { href: '/imports/suppliers', label: 'Постачальники' },
     ],
   },
   { href: '/orders', label: 'Замовлення', icon: '🧾' },
   { href: '/users', label: 'Користувачі', icon: '👤' },
-  {
-    label: 'Налаштування',
-    icon: '⚙️',
-    children: [
-      { href: '/settings/global-actions', label: 'Глобальні дії' },
-    ],
-  },
+  { href: '/settings', label: 'Налаштування', icon: '⚙️' },
 ];
 
 /** Routes that are reachable by URL but no longer have their own menu entry. */

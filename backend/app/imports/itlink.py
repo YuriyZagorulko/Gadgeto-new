@@ -162,16 +162,16 @@ class ITLinkImporter:
             processed_attrs = []
             unknown_names = []
             unknown_values = []
-            for name, value in raw_attributes:
-                result = process_attribute(name, value)
+            for attr_name, attr_value in raw_attributes:
+                result = process_attribute(attr_name, attr_value)
                 if isinstance(result, tuple) and len(result) == 2:
                     processed_attrs.append(result)
                 elif result == ATTR_SKIP:
                     pass
                 elif result == ATTR_UNKNOWN_NAME:
-                    unknown_names.append((name, name, sku))
+                    unknown_names.append((attr_name, attr_name, sku))
                 elif result == ATTR_UNKNOWN_VALUE:
-                    unknown_values.append((name, value, sku))
+                    unknown_values.append((attr_name, attr_value, sku))
 
             merged_attrs = merge_attributes(processed_attrs)
             merged_list = list(merged_attrs.items())

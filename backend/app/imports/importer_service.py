@@ -131,10 +131,25 @@ def run_full_import(supplier_code, job_id, supplier_id, import_type="full"):
         if hasattr(stats, 'products'):
             normalized_products = stats.products
 
+        # Read supplier config for image storage mode
+        image_storage_mode = "supplier_url"
+        try:
+            import json
+            sup_cur = conn.cursor()
+            sup_cur.execute("SELECT config_json FROM suppliers WHERE id = %s", (supplier_id,))
+            sup_row = sup_cur.fetchone()
+            sup_cur.close()
+            if sup_row and sup_row[0]:
+                sup_config = json.loads(sup_row[0])
+                image_storage_mode = sup_config.get("image_storage_mode", "supplier_url")
+        except Exception:
+            pass
+
         runner = ImportRunner(supplier_id=supplier_id,
                               supplier_code=supplier_code,
                               progress_cb=progress,
-                              mark_removed_products=True)
+                              mark_removed_products=True,
+                              image_storage_mode=image_storage_mode)
         runner.total = len(normalized_products) or stats.processed or 0
         runner.initialize()
 

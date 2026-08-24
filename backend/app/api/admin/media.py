@@ -12,7 +12,8 @@ import uuid
 import psycopg2
 import psycopg2.extras
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Query
-from typing import Optional
+from typing import Optional, List
+from pydantic import BaseModel
 
 from app.api.admin.deps import require_admin
 from app.core.config import settings
@@ -97,14 +98,18 @@ async def upload_media(file: UploadFile = File(...), user: dict = Depends(requir
     body = await file.read()
     if len(body) > MAX_SIZE:
         raise HTTPException(400, "Файл завеликий (макс. 10 MB)")
+    mime = detect_mime(body)
+    if not mime or mime not in ALLOWED_MIME:
+        raise HTTPException(400, "Дозволено лише JPG, PNG, WEBP або GIF зображення")
+    return save_upload(body, mime)
 
 @router.get("/media")
 async def list_media(
     page: int = Query(1, ge=1),
     per_page: int = Query(24, ge=1, le=100),
     search: Optional[str] = None,
-    usage: str = Query("all", pattern="^(all|used|unused)$"),
-    sort: str = Query("created_at", pattern="^(created_at|filename|size_bytes)$"),
+    usage: str = Query("all", pattern="^(all|used|unused|missing)$"),
+    sort: str = Query("created_at", pattern="^(created_at|filename|size_bytes|mime_type|width|height|usage_count)$"),
     order: str = Query("desc", pattern="^(asc|desc)$"),
     user: dict = Depends(require_admin),
 ):
@@ -135,7 +140,9 @@ async def list_media(
         total = cur.fetchone()["c"]
 
         sort_col = {"created_at": "m.created_at", "filename": "m.filename",
-                    "size_bytes": "m.size_bytes"}[sort]
+                    "size_bytes": "m.size_bytes", "mime_type": "m.mime_type",
+                    "width": "m.width", "height": "m.height",
+                    "usage_count": "COUNT(pi.id)"}[sort]
         cur.execute(
             f"""SELECT m.*, COUNT(pi.id) AS usage_count
                 {base_sql}
@@ -144,6 +151,21 @@ async def list_media(
             params + [per_page, offset],
         )
         items = [dict(r) for r in cur.fetchall()]
+        # Compute status: USED / UNUSED / MISSING_FILE
+        for item in items:
+            if item["usage_count"] > 0:
+                if os.path.exists(os.path.join(settings.MEDIA_DIR, item["storage_path"])):
+                    item["status"] = "used"
+                else:
+                    item["status"] = "missing"
+            else:
+                if os.path.exists(os.path.join(settings.MEDIA_DIR, item["storage_path"])):
+                    item["status"] = "unused"
+                else:
+                    item["status"] = "missing"
+        # If filtering by missing, filter in Python (approximate, small edge case)
+        if usage == "missing":
+            items = [it for it in items if it["status"] == "missing"]
         return {"items": items, "total": total, "page": page,
                 "pages": max(1, -(-total // per_page))}
     finally:
@@ -206,10 +228,6 @@ async def scan_storage(user: dict = Depends(require_admin)):
                 "missing_on_disk": missing_on_disk}
     finally:
         conn.close()
-    mime = detect_mime(body)
-    if not mime or mime not in ALLOWED_MIME:
-        raise HTTPException(400, "Дозволено лише JPG, PNG, WEBP або GIF зображення")
-    return save_upload(body, mime)
 
 
 @router.get("/media/{media_id}")
@@ -304,5 +322,45 @@ async def cleanup_unused_media(user: dict = Depends(require_admin)):
             "deleted_size": deleted_size,
             "errors": errors,
         }
+    finally:
+        conn.close()
+
+
+class MediaBulkDelete(BaseModel):
+    ids: List[int]
+
+
+@router.post("/media/bulk-delete")
+async def bulk_delete_media(body: MediaBulkDelete, user: dict = Depends(require_admin)):
+    """Delete multiple media files. Refuses to delete any that are still referenced."""
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="Список ID порожній")
+    conn, cur = db()
+    try:
+        deleted = 0
+        skipped = 0
+        errors = []
+        for mid in body.ids:
+            cur.execute("SELECT * FROM media_files WHERE id=%s", (mid,))
+            m = cur.fetchone()
+            if not m:
+                skipped += 1
+                continue
+            cur.execute("SELECT COUNT(*) AS c FROM product_images WHERE url=%s", (m["url"],))
+            used_by = cur.fetchone()["c"]
+            if used_by > 0:
+                skipped += 1
+                errors.append(f"ID {mid}: використовується у {used_by} товарах")
+                continue
+            abs_path = os.path.join(settings.MEDIA_DIR, m["storage_path"])
+            if os.path.exists(abs_path):
+                try:
+                    os.remove(abs_path)
+                except OSError as e:
+                    errors.append(f"{m['storage_path']}: {e}")
+                    continue
+            cur.execute("DELETE FROM media_files WHERE id=%s", (mid,))
+            deleted += 1
+        return {"ok": True, "deleted": deleted, "skipped": skipped, "errors": errors}
     finally:
         conn.close()
