@@ -6,7 +6,9 @@ from app.models.base import Base
 class CategoryMapping(Base):
     __tablename__ = "category_mappings"
     supplier_category_id = Column(Integer, ForeignKey("supplier_categories.id"), nullable=False)
-    category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
+    # Nullable: mappings imported as «Не імпортувати» (excluded) and records whose
+    # internal target is pending manual linking have no catalog entity yet.
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -17,7 +19,8 @@ class CategoryMapping(Base):
 class AttributeMapping(Base):
     __tablename__ = "attribute_mappings"
     supplier_attribute_id = Column(Integer, ForeignKey("supplier_attributes.id"), nullable=False)
-    attribute_id = Column(Integer, ForeignKey("attributes.id"), nullable=False)
+    # Nullable — see CategoryMapping.category_id.
+    attribute_id = Column(Integer, ForeignKey("attributes.id"), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

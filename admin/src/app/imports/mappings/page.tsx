@@ -39,9 +39,10 @@ type Row = {
   is_active: boolean;
   created_at: string;
   updated_at: string;
-  supplier_id: number;
-  supplier_code: string;
-  supplier_name: string;
+  supplier_id: number | null;
+  supplier_code: string | null;
+  supplier_name: string | null;
+  is_global: boolean;
   supplier_item_id: number;
   supplier_item_name: string;
   holder_name?: string | null;
@@ -80,7 +81,9 @@ export default function MappingsPage() {
   // create / edit modal
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
-  const [fSupplierCode, setFSupplierCode] = useState('itlink');
+  const [fScope, setFScope] = useState('');            // '' = global (default)
+  const [fStatus, setFStatus] = useState('');          // '' | 'true' | 'false'
+  const [fMapped, setFMapped] = useState('');          // '' | 'true' | 'false
   const [fItemName, setFItemName] = useState('');
   const [fParentName, setFParentName] = useState('');       // values: holder attr
   const [fInternalAttrId, setFInternalAttrId] = useState(''); // values only
@@ -104,18 +107,30 @@ export default function MappingsPage() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setError('');
+    const scopeSup = fScope && fScope !== 'global'
+      ? suppliers.find((x) => x.code === fScope)?.id : undefined;
     api.get<ListResp>(`/mappings/${kind}` + qs({
       page, per_page: perPage,
       q: appliedQ || undefined,
       sort_by: sortBy, sort_dir: sortDir,
+      active: fStatus === '' ? undefined : fStatus === 'true',
+      mapped: fMapped === '' ? undefined : fMapped === 'true',
+      scope: fScope === 'global' ? 'global' : (fScope ? 'supplier' : undefined),
+      supplier_id: scopeSup,
     }))
       .then((d) => { if (!cancelled) { setRows(d.items || []); setTotal(d.total); } })
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, [kind, appliedQ, sortBy, sortDir, page, perPage, tick]);
+  }, [kind, appliedQ, sortBy, sortDir, page, perPage, tick, fScope, fStatus, fMapped, suppliers]);
 
-  useEffect(() => { setPage(1); }, [kind, appliedQ, sortBy, sortDir, perPage]);
+  useEffect(() => { setPage(1); }, [kind, appliedQ, sortBy, sortDir, perPage, fScope, fStatus, fMapped]);
+
+  const resetFilters = () => {
+    setQ(''); setAppliedQ(''); setFStatus(''); setFMapped(''); setFScope('');
+  };
+
+  const hasFilters = !!(appliedQ || fStatus || fMapped || fScope);
 
   const toggleSort = (key: SortKey) => {
     if (sortBy === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -152,7 +167,7 @@ export default function MappingsPage() {
   };
 const openCreate = () => {
     setEditing(null);
-    setFSupplierCode(suppliers[0]?.code || 'itlink');
+    setFScope('');
     setFItemName(''); setFParentName('');
     setFInternalAttrId(''); setFCatalogId(''); setFActive(true); setValOpts([]);
     setModalOpen(true);
@@ -160,7 +175,7 @@ const openCreate = () => {
 
   const openEdit = (row: Row) => {
     setEditing(row);
-    setFSupplierCode(row.supplier_code);
+    setFScope(row.is_global ? '' : (row.supplier_code || ''));
     setFItemName(row.supplier_item_name);
     setFParentName('');
     setFInternalAttrId('');
@@ -189,7 +204,6 @@ const openCreate = () => {
     const catId = fCatalogId ? Number(fCatalogId) : null;
     if (!editing) {
       if (!name) { toast.push('error', 'Вкажіть запис постачальника'); return; }
-      if (!fSupplierCode) { toast.push('error', 'Оберіть постачальника'); return; }
       if (kind === 'values' && !fParentName.trim()) {
         toast.push('error', "Вкажіть атрибут, до якого належить значення"); return;
       }
@@ -208,7 +222,7 @@ const openCreate = () => {
         toast.push('success', 'Маппінг оновлено');
       } else {
         await api.post(`/mappings/${kind}`, {
-          supplier_code: fSupplierCode,
+          ...(fScope ? { supplier_code: fScope } : {}),
           supplier_item_name: name,
           ...(kind === 'values' ? { supplier_parent_name: fParentName.trim() } : {}),
           catalog_item_id: catId,
@@ -254,9 +268,33 @@ const openCreate = () => {
             onKeyDown={(e) => { if (e.key === 'Enter') setAppliedQ(q); }}
             placeholder={`Постачальник, ${COLUMN_LABELS[kind].supplierItem.toLowerCase()}…`} />
         </div>
+        <div className="w-40">
+          <label className="block text-xs text-gray-500 mb-1">Статус</label>
+          <Select value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+            <option value="">Усі</option>
+            <option value="true">Маппінг</option>
+            <option value="false">Не імпортувати</option>
+          </Select>
+        </div>
+        <div className="w-44">
+          <label className="block text-xs text-gray-500 mb-1">Прив&apos;язка</label>
+          <Select value={fMapped} onChange={(e) => setFMapped(e.target.value)}>
+            <option value="">Усі</option>
+            <option value="true">Прив&apos;язано</option>
+            <option value="false">Без прив&apos;язки</option>
+          </Select>
+        </div>
+        <div className="w-44">
+          <label className="block text-xs text-gray-500 mb-1">Область</label>
+          <Select value={fScope} onChange={(e) => setFScope(e.target.value)}>
+            <option value="">Усі</option>
+            <option value="global">Глобальний</option>
+            {suppliers.map((sp) => <option key={sp.code} value={sp.code}>{sp.name}</option>)}
+          </Select>
+        </div>
         <Button variant="secondary" onClick={() => setAppliedQ(q)}>Застосувати</Button>
-        {appliedQ && (
-          <Button variant="ghost" onClick={() => { setQ(''); setAppliedQ(''); }}>Скинути</Button>
+        {hasFilters && (
+          <Button variant="ghost" onClick={resetFilters}>Скинути фільтри</Button>
         )}
         <div className="ml-auto">
           <Button onClick={openCreate}>＋ Додати маппінг</Button>
@@ -282,7 +320,7 @@ const openCreate = () => {
                 <Th>
                   <button type="button" onClick={() => toggleSort('supplier')}
                     className="inline-flex items-center gap-1 uppercase tracking-wide hover:text-gray-800">
-                    Постачальник<span className="text-[10px]" aria-hidden>{sortIndicator('supplier')}</span>
+                    Область<span className="text-[10px]" aria-hidden>{sortIndicator('supplier')}</span>
                   </button>
                 </Th>
                 {kind === 'values' && (
@@ -328,8 +366,10 @@ const openCreate = () => {
               <tr key={row.id} className="hover:bg-gray-50">
                 <Td className="font-mono text-xs text-gray-400">{row.id}</Td>
                 <Td className="text-sm">
-                  {row.supplier_name}
-                  <span className="block font-mono text-[10px] text-gray-400">{row.supplier_code}</span>
+                  {row.is_global
+                    ? <Badge tone="blue">Глобальний</Badge>
+                    : <>{row.supplier_name}
+                        <span className="block font-mono text-[10px] text-gray-400">{row.supplier_code}</span></>}
                 </Td>
                 {kind === 'values' && (
                   <Td className="text-sm break-all max-w-[200px]">
@@ -388,17 +428,24 @@ const openCreate = () => {
       >
         <div className="space-y-4">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Постачальник *</label>
-            <Select value={fSupplierCode} disabled={!!editing}
-              onChange={(e) => setFSupplierCode(e.target.value)} className="w-full">
-              {suppliers.map((s) => (
-                <option key={s.code} value={s.code}>{s.name}</option>
-              ))}
-            </Select>
-            {!editing && (
-              <p className="text-xs text-gray-400 mt-1">
-                Лише системні постачальники. Довільне створення заборонено.
-              </p>
+            <label className="block text-xs text-gray-500 mb-1">Область дії</label>
+            {editing ? (
+              <div className="text-sm bg-gray-50 border border-gray-100 rounded px-3 py-2 w-full">
+                {editing.is_global ? 'Глобальний (усі постачальники)' : (editing.supplier_name + '')}
+              </div>
+            ) : (
+              <>
+                <Select value={fScope} onChange={(e) => setFScope(e.target.value)} className="w-full">
+                  <option value="">Глобальний — застосовується до всіх постачальників</option>
+                  {suppliers.map((sp) => (
+                    <option key={sp.code} value={sp.code}>{sp.name} — тільки цей постачальник</option>
+                  ))}
+                </Select>
+                <p className="text-xs text-gray-400 mt-1">
+                  За замовчуванням маппінг створюється глобальним. Постачальник обирається
+                  лише для точкового перевизначення.
+                </p>
+              </>
             )}
           </div>
 

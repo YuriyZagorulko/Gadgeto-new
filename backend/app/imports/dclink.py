@@ -90,15 +90,19 @@ class DCLinkImporter:
     ]
     
     def __init__(self, products_path: str = None, categories_path: str = None,
-                 category_mapping_path: str = None):
+                 category_mapping_path: str = None, category_map: dict = None):
         self.products_path = products_path or DCLINK_PRODUCTS_PATH
         self.categories_path = categories_path or DCLINK_CATEGORIES_PATH
         self.category_mapping_path = category_mapping_path or CATEGORY_MAPPING_PATH
         self.stats = ImportStats()
-        
-        # Load category data
-        with open(self.category_mapping_path, "r", encoding="utf-8") as f:
-            self.category_map = json.load(f)
+
+        # DB-derived map (global + supplier overrides) takes priority;
+        # legacy JSON file is the fallback when the DB has no rules.
+        if category_map:
+            self.category_map = dict(category_map)
+        else:
+            with open(self.category_mapping_path, "r", encoding="utf-8") as f:
+                self.category_map = json.load(f)
         
         with open(self.categories_path, "r", encoding="utf-8") as f:
             self.dc_categories = json.load(f)

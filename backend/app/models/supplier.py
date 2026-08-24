@@ -16,7 +16,9 @@ class Supplier(Base):
 
 class SupplierCategory(Base):
     __tablename__ = "supplier_categories"
-    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False)
+    # NULL supplier_id => GLOBAL dictionary entry shared by all suppliers;
+    # a concrete supplier_id marks a supplier-specific override entry.
+    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
     external_id = Column(String(255), nullable=True, index=True)
     supplier_name = Column(String(500), nullable=False, index=True)
     is_removed = Column(Boolean, default=False, nullable=False)
@@ -25,7 +27,8 @@ class SupplierCategory(Base):
 
 class SupplierAttribute(Base):
     __tablename__ = "supplier_attributes"
-    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False)
+    # NULL supplier_id => GLOBAL dictionary entry (see SupplierCategory).
+    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
     supplier_name = Column(String(500), nullable=False, index=True)
     is_removed = Column(Boolean, default=False, nullable=False)
     supplier = relationship("Supplier", back_populates="supplier_attributes")

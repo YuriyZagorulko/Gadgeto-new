@@ -70,12 +70,18 @@ class ITLinkImporter:
     SUPPLIER_CODE = "itlink"
     MARKUP = 1.3
 
-    def __init__(self, xml_path: str = None, category_mapping_path: str = None):
+    def __init__(self, xml_path: str = None, category_mapping_path: str = None,
+                 category_map: dict = None):
         self.xml_path = xml_path or ITLINK_XML_PATH
         self.category_mapping_path = category_mapping_path or CATEGORY_MAPPING_PATH
         self.stats = ImportStats()
-        with open(self.category_mapping_path, "r", encoding="utf-8") as f:
-            self.category_map = json.load(f)
+        # DB-derived map (global + supplier overrides) takes priority;
+        # legacy JSON file is the fallback when the DB has no rules.
+        if category_map:
+            self.category_map = dict(category_map)
+        else:
+            with open(self.category_mapping_path, "r", encoding="utf-8") as f:
+                self.category_map = json.load(f)
 
     def _safe_price(self, value: str) -> int:
         try:

@@ -39,11 +39,11 @@ class MappingUpdate(BaseModel):
 _LIST_SQL = {
     "categories": {
         "table": "category_mappings", "s_fk": "supplier_category_id", "c_fk": "category_id",
-        "s_table": "supplier_categories", "c_table": "categories",
+        "s_table": "supplier_categories", "c_table": "categories", "scope_alias": "sc",
         "joins": """JOIN supplier_categories sc ON sc.id = m.supplier_category_id
-                    JOIN suppliers s ON s.id = sc.supplier_id
+                    LEFT JOIN suppliers s ON s.id = sc.supplier_id
                     LEFT JOIN categories c ON c.id = m.category_id""",
-        "select_names": "sc.supplier_name AS supplier_item_name, c.name AS catalog_name",
+        "select_names": "sc.supplier_name AS supplier_item_name, c.name AS catalog_name,\n                         (sc.supplier_id IS NULL) AS is_global",
         "search": ["sc.supplier_name", "s.code", "c.name"],
         "sort": {
             "id": "m.id", "supplier": "s.name", "supplier_code": "s.code",
@@ -53,11 +53,11 @@ _LIST_SQL = {
     },
     "attributes": {
         "table": "attribute_mappings", "s_fk": "supplier_attribute_id", "c_fk": "attribute_id",
-        "s_table": "supplier_attributes", "c_table": "attributes",
+        "s_table": "supplier_attributes", "c_table": "attributes", "scope_alias": "sa",
         "joins": """JOIN supplier_attributes sa ON sa.id = m.supplier_attribute_id
-                    JOIN suppliers s ON s.id = sa.supplier_id
+                    LEFT JOIN suppliers s ON s.id = sa.supplier_id
                     LEFT JOIN attributes a ON a.id = m.attribute_id""",
-        "select_names": "sa.supplier_name AS supplier_item_name, a.name AS catalog_name",
+        "select_names": "sa.supplier_name AS supplier_item_name, a.name AS catalog_name,\n                         (sa.supplier_id IS NULL) AS is_global",
         "search": ["sa.supplier_name", "s.code", "a.name"],
         "sort": {
             "id": "m.id", "supplier": "s.name", "supplier_code": "s.code",
@@ -68,13 +68,14 @@ _LIST_SQL = {
     "values": {
         "table": "attribute_value_mappings", "s_fk": "supplier_attribute_value_id",
         "c_fk": "attribute_value_id",
-        "s_table": "supplier_attribute_values", "c_table": "attribute_values",
+        "s_table": "supplier_attribute_values", "c_table": "attribute_values", "scope_alias": "ha",
         "joins": """JOIN supplier_attribute_values sav ON sav.id = m.supplier_attribute_value_id
                     JOIN supplier_attributes ha ON ha.id = sav.supplier_attribute_id
-                    JOIN suppliers s ON s.id = ha.supplier_id
+                    LEFT JOIN suppliers s ON s.id = ha.supplier_id
                     LEFT JOIN attribute_values av ON av.id = m.attribute_value_id""",
         "select_names": """ha.supplier_name AS holder_name,
-                           sav.supplier_value AS supplier_item_name, av.value AS catalog_name""",
+                           sav.supplier_value AS supplier_item_name, av.value AS catalog_name,
+                           (ha.supplier_id IS NULL) AS is_global""",
         "search": ["ha.supplier_name", "sav.supplier_value", "av.value", "s.code"],
         "sort": {
             "id": "m.id", "supplier": "s.name", "supplier_code": "s.code",
@@ -213,13 +214,15 @@ def _kind_or_404(kind: str):
 @router.get("/mappings/{kind}")
 async def list_mappings(
     kind: str, q: Optional[str] = None, supplier_id: Optional[int] = None,
-    active: Optional[bool] = None,
+    active: Optional[bool] = None, mapped: Optional[bool] = None,
+    scope: Optional[str] = Query(None, pattern="^(global|supplier)$"),
     sort_by: Optional[str] = None, sort_dir: str = Query("asc", pattern="^(asc|desc)$"),
     page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
     user: dict = Depends(require_admin),
 ):
-    """Server-side search / sorting / pagination over mapping rows."""
+    """Server-side search / filtering / sorting / pagination over mapping rows."""
     L = _list_sql_or_404(kind)
+    scope_col = f"{L['scope_alias']}.supplier_id"
     conn, cur = db()
     try:
         conds, params = ["TRUE"], []
@@ -227,12 +230,18 @@ async def list_mappings(
             like = f"%{q}%"
             conds.append("(" + " OR ".join(f"{col} ILIKE %s" for col in L["search"]) + ")")
             params.extend([like] * len(L["search"]))
+        if scope == "global":
+            conds.append(f"{scope_col} IS NULL")
+        elif scope == "supplier":
+            conds.append(f"{scope_col} IS NOT NULL")
         if supplier_id:
-            conds.append("s.id = %s")
+            conds.append(f"{scope_col} = %s")
             params.append(supplier_id)
         if active is not None:
             conds.append("m.is_active = %s")
             params.append(active)
+        if mapped is not None:
+            conds.append(f"m.{L['c_fk']} IS " + ("NOT NULL" if mapped else "NULL"))
         where = " AND ".join(conds)
 
         order_col = L["sort"].get(sort_by or "", L["sort"]["id"])
@@ -263,7 +272,7 @@ def _ensure_supplier_item(cur, kind: str, sid: int, name: str,
     """Find or create the supplier-side dictionary row; returns its id."""
     if kind == "categories":
         cur.execute(
-            "SELECT id FROM supplier_categories WHERE supplier_id=%s AND supplier_name=%s",
+            "SELECT id FROM supplier_categories WHERE supplier_id IS NOT DISTINCT FROM %s AND supplier_name=%s",
             (sid, name))
         row = cur.fetchone()
         if row:
@@ -276,7 +285,7 @@ def _ensure_supplier_item(cur, kind: str, sid: int, name: str,
 
     if kind == "attributes":
         cur.execute(
-            "SELECT id FROM supplier_attributes WHERE supplier_id=%s AND supplier_name=%s",
+            "SELECT id FROM supplier_attributes WHERE supplier_id IS NOT DISTINCT FROM %s AND supplier_name=%s",
             (sid, name))
         row = cur.fetchone()
         if row:
@@ -293,7 +302,7 @@ def _ensure_supplier_item(cur, kind: str, sid: int, name: str,
         raise HTTPException(status_code=422,
                             detail="Вкажіть атрибут постачальника для значення")
     cur.execute(
-        "SELECT id FROM supplier_attributes WHERE supplier_id=%s AND supplier_name=%s",
+        "SELECT id FROM supplier_attributes WHERE supplier_id IS NOT DISTINCT FROM %s AND supplier_name=%s",
         (sid, parent_name))
     prow = cur.fetchone()
     if prow:
@@ -333,19 +342,22 @@ async def create_mapping(kind: str, body: MappingCreate, user: dict = Depends(re
                 raise HTTPException(status_code=404, detail="Запис постачальника не знайдено")
             sid, s_item_id = row["supplier_id"], row["id"]
         else:
-            code = (body.supplier_code or "").strip()
+            # Global mapping by default: no supplier required.
             name = (body.supplier_item_name or "").strip()
-            if not code or not name:
+            if not name:
                 raise HTTPException(status_code=422,
-                                    detail="Вкажіть постачальника та запис постачальника")
-            if code not in SYSTEM_SUPPLIERS:
-                raise HTTPException(status_code=400,
-                                    detail="Невірний постачальник. Доступні: IT-Link, DC-Link")
-            cur.execute("SELECT id FROM suppliers WHERE code = %s", (code,))
-            srow = cur.fetchone()
-            if not srow:
-                raise HTTPException(status_code=404, detail="Постачальника не знайдено")
-            sid = srow["id"]
+                                    detail="Вкажіть запис постачальника")
+            code = (body.supplier_code or "").strip() or None
+            sid = None
+            if code is not None:
+                if code not in SYSTEM_SUPPLIERS:
+                    raise HTTPException(status_code=400,
+                                        detail="Невірний постачальник. Доступні: IT-Link, DC-Link")
+                cur.execute("SELECT id FROM suppliers WHERE code = %s", (code,))
+                srow = cur.fetchone()
+                if not srow:
+                    raise HTTPException(status_code=404, detail="Постачальника не знайдено")
+                sid = srow["id"]
             s_item_id = _ensure_supplier_item(cur, kind, sid, name, body.supplier_parent_name)
 
         # ── resolve / validate the internal target ─────────────────────────

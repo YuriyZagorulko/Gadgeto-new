@@ -50,6 +50,17 @@ _attr_value_remove: Optional[Dict[str, Set[str]]] = None
 _attr_value_map: Optional[Dict[str, Dict[str, str]]] = None
 
 
+# ── DB-backed resolver hook (global + supplier-specific overrides) ─────────
+_db_resolver = None  # instance of mapping_resolver.MappingResolver, or None
+
+
+def set_db_resolver(resolver) -> None:
+    """Install/replace the DB-backed resolver for the current importer run.
+    Pass None to restore legacy JSON-file resolution."""
+    global _db_resolver
+    _db_resolver = resolver
+
+
 def _load_attr_remove() -> Set[str]:
     global _attr_remove
     if _attr_remove is None:
@@ -99,6 +110,9 @@ def process_attribute(supplier_name: str, supplier_value: str) -> Union[Tuple, s
     """
     supplier_name = supplier_name.strip()
     supplier_value = str(supplier_value).strip()
+
+    if _db_resolver is not None:
+        return _db_resolver.process_attribute(supplier_name, supplier_value)
 
     if not supplier_name or not supplier_value:
         return ATTR_SKIP
