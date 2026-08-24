@@ -128,7 +128,12 @@ class MappingResolver:
             return ATTR_SKIP
         internal = entry["internal_name"]
 
-        key = (internal.strip(), value)
+        # BUGFIX: use the supplier attribute name (not internal name) for the value
+        # lookup key, because self.values is keyed by (supplier_attr, raw_value).
+        # When supplier_name != internal_name (e.g. "Цвет" → "Колір",
+        # "Формфактор" → "Форм-фактор"), using internal_name caused every
+        # value-level mapping to be invisible → "UNKNOWN_VALUE" for every product.
+        key = (name.strip(), value)
         ventry = self.values.get(key)
         if ventry is not None:
             if not ventry["active"]:

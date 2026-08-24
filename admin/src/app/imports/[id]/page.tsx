@@ -138,6 +138,17 @@ export default function ImportReportPage() {
   const isRunning = report.status === 'RUNNING' || report.status === 'QUEUED';
   const logsToShow = (report.logs || []).slice(0, logLimit);
 
+  const sectionAnchor = (label: string): string => {
+    const map: Record<string, string> = {
+      'Категорії': 'section-unmapped-categories',
+      'Атрибути': 'section-unmapped-attributes',
+      'Значення': 'section-unmapped-values',
+      'Попередження': 'section-warnings',
+      'Помилки': 'section-errors',
+    };
+    return map[label] || `section-${label}`;
+  };
+
   const summaryIssues = [
     { label: 'Категорії', count: report.unmapped_categories_count, color: 'bg-yellow-100 text-yellow-800' },
     { label: 'Атрибути', count: report.unmapped_attributes_count, color: 'bg-yellow-100 text-yellow-800' },
@@ -217,14 +228,14 @@ export default function ImportReportPage() {
       {(report.has_unmapped || report.has_errors) && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
           <div className="flex items-start gap-3">
-            <span className="text-yellow-600 text-xl">\u26a0\ufe0f</span>
+            <span className="text-yellow-600 text-xl">{'\u26a0\ufe0f'}</span>
             <div className="flex-1">
               <div className="font-medium text-yellow-800">Виявлено проблеми під час імпорту</div>
               <div className="flex flex-wrap gap-2 mt-2">
                 {summaryIssues.map((s) => s.count > 0 && (
                   <a
                     key={s.label}
-                    href={`#section-${s.label}`}
+                    href={`#${sectionAnchor(s.label)}`}
                     className={`inline-block px-3 py-1 rounded-full text-xs font-medium ${s.color}`}
                   >
                     {s.label}: {s.count}
@@ -249,7 +260,7 @@ export default function ImportReportPage() {
       </div>
 
       {/* Unmapped categories */}
-      <section id="section-Категорії" className="bg-white rounded-lg border border-gray-200 p-5">
+      <section id="section-unmapped-categories" className="bg-white rounded-lg border border-gray-200 p-5">
         <h2 className="text-lg font-semibold mb-3">Невідображені категорії ({report.unmapped_categories_count})</h2>
         {report.unmapped_categories_count === 0 ? (
           <p className="text-sm text-gray-500">Немає невідображених категорій.</p>
@@ -293,7 +304,7 @@ export default function ImportReportPage() {
       </section>
 
       {/* Unmapped attributes */}
-      <section id="section-Атрибути" className="bg-white rounded-lg border border-gray-200 p-5">
+      <section id="section-unmapped-attributes" className="bg-white rounded-lg border border-gray-200 p-5">
         <h2 className="text-lg font-semibold mb-3">Невідображені атрибути ({report.unmapped_attributes_count})</h2>
         {report.unmapped_attributes_count === 0 ? (
           <p className="text-sm text-gray-500">Немає невідображених атрибутів.</p>
@@ -337,7 +348,7 @@ export default function ImportReportPage() {
       </section>
 
       {/* Unmapped attribute values */}
-      <section id="section-Значення" className="bg-white rounded-lg border border-gray-200 p-5">
+      <section id="section-unmapped-values" className="bg-white rounded-lg border border-gray-200 p-5">
         <h2 className="text-lg font-semibold mb-3">Невідображені значення атрибутів ({report.unmapped_attribute_values_count})</h2>
         {report.unmapped_attribute_values_count === 0 ? (
           <p className="text-sm text-gray-500">Немає невідображених значень.</p>
@@ -366,7 +377,7 @@ export default function ImportReportPage() {
       </section>
 
       {/* Warnings */}
-      <section id="section-Попередження" className="bg-white rounded-lg border border-gray-200 p-5">
+      <section id="section-warnings" className="bg-white rounded-lg border border-gray-200 p-5">
         <h2 className="text-lg font-semibold mb-3">Попередження ({report.warnings.length})</h2>
         {report.warnings.length === 0 ? (
           <p className="text-sm text-gray-500">Немає попереджень.</p>
@@ -374,7 +385,7 @@ export default function ImportReportPage() {
           <ul className="space-y-1">
             {report.warnings.map((w, i) => (
               <li key={i} className="text-sm flex items-start gap-2">
-                <span className="text-yellow-500 mt-0.5">\u26a0</span>
+                <span className="text-yellow-500 mt-0.5">{'\u26a0'}</span>
                 <span>{w}</span>
               </li>
             ))}
@@ -383,7 +394,7 @@ export default function ImportReportPage() {
       </section>
 
       {/* Errors */}
-      <section id="section-Помилки" className="bg-white rounded-lg border border-red-200 p-5">
+      <section id="section-errors" className="bg-white rounded-lg border border-red-200 p-5">
         <h2 className="text-lg font-semibold mb-3 text-red-700">Помилки ({report.errors.length})</h2>
         {report.errors.length === 0 ? (
           <p className="text-sm text-gray-500">Немає помилок.</p>
