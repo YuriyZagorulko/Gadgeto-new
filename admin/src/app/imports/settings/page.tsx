@@ -8,6 +8,7 @@ import {
   PageHeader, Button, Select, Table, Th, Td, Badge,
   Pagination, LoadingState, ErrorState, EmptyState, ConfirmDialog, useToast,
 } from '@/components/ui';
+import PricingTab from '@/components/PricingTab';
 
 type Job = {
   id: number; supplier_id: number; supplier_name: string | null;
@@ -40,6 +41,10 @@ export default function ImportSettingsPage() {
             className={'pb-2 text-sm font-medium border-b-2 transition-colors ' + (tab === 'settings' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700')}>
             Налаштування
           </button>
+          <button onClick={() => setTab('pricing')}
+            className={'pb-2 text-sm font-medium border-b-2 transition-colors ' + (tab === 'pricing' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700')}>
+            Ціноутворення
+          </button>
           <button onClick={() => setTab('global')}
             className={'pb-2 text-sm font-medium border-b-2 transition-colors ' + (tab === 'global' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700')}>
             Глобальні дії
@@ -47,6 +52,7 @@ export default function ImportSettingsPage() {
         </div>
       </div>
       {tab === 'settings' && <SettingsTab />}
+      {tab === 'pricing' && <PricingTab />}
       {tab === 'global' && <GlobalActionsTab />}
     </div>
   );

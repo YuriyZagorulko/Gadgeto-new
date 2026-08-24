@@ -11,6 +11,7 @@ from app.models.cart import Cart, CartItem
 from app.models.order import Order, OrderItem, OrderEvent, Payment, ShippingAddress, OrderStatus
 from app.models.import_job import ImportJob, ImportLog, ImportJobStatus
 from app.models.settings import Setting
+from app.models.pricing import MarkupRule
 from app.models.url_alias import URLAlias
 from app.models.filter import CategoryFilter
 from app.models.product_relations import ProductRelated
@@ -25,5 +26,5 @@ __all__ = [
     "Cart", "CartItem",
     "Order", "OrderItem", "OrderEvent", "Payment", "ShippingAddress", "OrderStatus",
     "ImportJob", "ImportLog", "ImportJobStatus",
-    "Setting", "URLAlias", "CategoryFilter", "ProductRelated",
+    "Setting", "MarkupRule", "URLAlias", "CategoryFilter", "ProductRelated",
 ]

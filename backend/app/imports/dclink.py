@@ -21,6 +21,9 @@ from app.imports.attribute_processor import (
     ATTR_UNKNOWN_NAME,
     ATTR_UNKNOWN_VALUE,
 )
+from app.imports.pricing_service import (
+    calculate_price, calculate_old_price, find_markup_multiplier, get_usd_rate,
+)
 from app.imports.category_utils import resolve_category_path
 from app.core.config import settings
 from app.services.seo import generate_product_seo
@@ -110,16 +113,6 @@ class ImportStats:
 class DCLinkImporter:
     SKU_PREFIX = "DCL-"
     SUPPLIER_CODE = "dclink"
-
-    MARKUP_RULES = [
-        (200, 1.50),
-        (500, 1.45),
-        (1000, 1.40),
-        (3000, 1.35),
-        (7000, 1.30),
-        (15000, 1.25),
-        (float("inf"), 1.20),
-    ]
 
     def __init__(self, feed_path: str = None, categories_path: str = None,
                  category_map: dict = None):
@@ -234,25 +227,31 @@ class DCLinkImporter:
 
         return products_list, cat_dict
 
-    def _apply_markup(self, price_uah: float) -> int:
-        for threshold, multiplier in self.MARKUP_RULES:
-            if price_uah <= threshold:
-                return round(price_uah * multiplier)
-        return round(price_uah * self.MARKUP_RULES[-1][1])
+    def _pick_price(self, item: dict, category_path: str = "") -> int:
+        """Determine and calculate the final price in kopecks.
 
-    def _pick_price(self, item: dict) -> int:
+        Priority:
+          1. Use price_uah directly if present and > 0.
+          2. Fall back to price (USD) → convert at admin-configured rate.
+          3. Apply category-aware markup.
+        Returns 0 if no valid price is found.
+        """
         try:
-            price_uah = item.get("price_uah")
-            if price_uah not in (None, "", 0):
-                price = float(price_uah)
-            else:
-                usd = float(item.get("price", 0))
-                if usd <= 0:
+            price_uah_val = item.get("price_uah")
+            price_usd_val = None
+            if price_uah_val in (None, "", 0):
+                price_usd_val = float(item.get("price", 0))
+                if price_usd_val <= 0:
                     return 0
-                price = usd * 44.3
-            if price <= 0:
-                return 0
-            return self._apply_markup(price)
+            else:
+                price_uah_val = float(price_uah_val)
+
+            return calculate_price(
+                price_uah=price_uah_val if price_uah_val not in (None, "", 0) else None,
+                price_usd=price_usd_val,
+                supplier_code=self.SUPPLIER_CODE,
+                category_path=category_path,
+            )
         except (ValueError, TypeError):
             return 0
 
@@ -275,7 +274,6 @@ class DCLinkImporter:
             name = item.get("name") or ""
             description = item.get("description") or ""
             brief = item.get("brief_description") or ""
-            price = self._pick_price(item)
 
             category_id = str(item.get("categoryID") or "").strip()
             category_name = dc_cat_map.get(category_id, "")
@@ -287,6 +285,7 @@ class DCLinkImporter:
                 self.stats.errors.append({"articul": articul, "error": f"\u041d\u0435\u0432\u0456\u0434\u043e\u043c\u0430 \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0456\u044f: {category_name}"})
                 continue
 
+            price = self._pick_price(item, category_path=category_path)
             images = []
             full_image = item.get("full_image")
             if full_image:

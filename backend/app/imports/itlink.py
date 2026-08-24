@@ -18,6 +18,7 @@ from app.imports.attribute_processor import (
     ATTR_UNKNOWN_VALUE,
 )
 from app.imports.category_utils import resolve_category_path
+from app.imports.pricing_service import calculate_price, calculate_old_price, find_markup_multiplier
 from app.core.config import settings
 from app.services.seo import generate_product_seo
 
@@ -98,7 +99,6 @@ class ImportStats:
 class ITLinkImporter:
     SKU_PREFIX = "ITL-"
     SUPPLIER_CODE = "itlink"
-    MARKUP = 1.3
 
     def __init__(self, feed_path: str = None, category_map: dict = None):
         self.feed_path = feed_path
@@ -130,11 +130,12 @@ class ITLinkImporter:
 
         return str(saved_path)
 
-    def _safe_price(self, value: str) -> int:
+    def _safe_price(self, value: str) -> float:
+        """Parse supplier price string to float (in UAH). Returns 0 if invalid."""
         try:
-            return round(float(value) * self.MARKUP)
+            return float(value)
         except (ValueError, TypeError):
-            return 0
+            return 0.0
 
     def parse_feed(self, xml_path: str) -> ET.ElementTree:
         if not os.path.exists(xml_path):
@@ -169,9 +170,30 @@ class ITLinkImporter:
             picture = offer.findtext("picture", "") or ""
             available = (offer.findtext("available", "") or "").strip()
 
-            price = self._safe_price(offer.findtext("price", "0") or "0")
-            rrp = offer.findtext("rrp", "0") or "0"
-            old_price = self._safe_price(rrp) if rrp != "0" else None
+            price_uah = self._safe_price(offer.findtext("price", "0") or "0")
+            rrp_uah_str = offer.findtext("rrp", "0") or "0"
+
+            # Calculate final price in kopecks using the pricing service
+            price = calculate_price(
+                price_uah=price_uah,
+                supplier_code=self.SUPPLIER_CODE,
+                category_path=category_path,
+            )
+            # Old price (RRP) — apply same markup logic
+            if rrp_uah_str != "0":
+                rrp_uah = self._safe_price(rrp_uah_str)
+                # Find the multiplier that was used for the regular price
+                multiplier = find_markup_multiplier(
+                    base_price_uah=price_uah,
+                    supplier_code=self.SUPPLIER_CODE,
+                    category_path=category_path,
+                )
+                old_price = calculate_old_price(
+                    source_old_price_uah=rrp_uah,
+                    markup=multiplier,
+                )
+            else:
+                old_price = None
 
             category_id = offer.findtext("categoryId", "")
             category_name = xml_categories.get(category_id, "")
