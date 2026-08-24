@@ -45,8 +45,9 @@ def _set_setting(key: str, value: str) -> None:
     conn.autocommit = True
     try:
         cur.execute(
-            "INSERT INTO settings (key, value, is_secret) VALUES (%s, %s, FALSE)"
-            " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            """INSERT INTO settings (key, value, is_secret, created_at, updated_at)
+               VALUES (%s, %s, FALSE, NOW(), NOW())
+               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()""",
             (key, value),
         )
     finally:
