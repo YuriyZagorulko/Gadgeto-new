@@ -1,5 +1,4 @@
-"""
-DC-Link supplier importer.
+"""DC-Link supplier importer.
 
 Downloads the current catalog from DC-Link API (cerebro.dclink.ua),
 parses it, and returns normalized products for persistence.
@@ -25,6 +24,7 @@ from app.imports.pricing_service import (
     calculate_price, calculate_old_price, find_markup_multiplier, get_usd_rate,
 )
 from app.imports.category_utils import resolve_category_path
+from app.imports.import_stats import ImportStats as SharedImportStats
 from app.core.config import settings
 from app.services.seo import generate_product_seo
 
@@ -93,21 +93,10 @@ class NormalizedProduct:
 
 
 @dataclass
-class ImportStats:
-    total_items: int = 0
-    processed: int = 0
-    created: int = 0
-    updated: int = 0
-    skipped: int = 0
-    failed: int = 0
-    unknown_attributes: List[Tuple[str, str, str]] = field(default_factory=list)
-    unknown_attribute_values: List[Tuple[str, str, str]] = field(default_factory=list)
-    unknown_categories: List[str] = field(default_factory=list)
-    duplicate_skus: int = 0
-    empty_skus: int = 0
-    warnings: List[str] = field(default_factory=list)
-    errors: List[dict] = field(default_factory=list)
-    products: list = field(default_factory=list)
+class ImportStats(SharedImportStats):
+    """DC-Link import statistics. Alias of shared ImportStats (keeps backward
+    compatibility for callers that import from dclink module)."""
+    pass
 
 
 class DCLinkImporter:
@@ -127,8 +116,8 @@ class DCLinkImporter:
         password = settings.SUPPLIER_DCLINK_PASSWORD or ""
         if not login or not password:
             raise RuntimeError(
-                "\u041d\u0435 \u043d\u0430\u043b\u0430\u0448\u0442\u043e\u0432\u0430\u043d\u0456 \u043e\u0431\u043b\u0456\u043a\u043e\u0432\u0456 \u0434\u0430\u043d\u0456 DC-Link. "
-                "\u0412\u0441\u0442\u0430\u043d\u043e\u0432\u0456\u0442\u044c SUPPLIER_DCLINK_LOGIN / SUPPLIER_DCLINK_PASSWORD."
+                "Не налаштовані облікові дані DC-Link. "
+                "Встановіть SUPPLIER_DCLINK_LOGIN / SUPPLIER_DCLINK_PASSWORD."
             )
         password_md5 = hashlib.md5(password.encode("utf-8")).hexdigest()
         response = requests.post(
@@ -139,7 +128,7 @@ class DCLinkImporter:
         response.raise_for_status()
         data = response.json()
         if data.get("status") != 1:
-            raise RuntimeError(f"\u041f\u043e\u043c\u0438\u043b\u043a\u0430 \u0430\u0432\u0442\u0435\u043d\u0442\u0438\u0444\u0456\u043a\u0430\u0446\u0456\u0457 DC-Link: {data}")
+            raise RuntimeError(f"Помилка аутентифікації DC-Link: {data}")
         return data["result"]
 
     def _get_categories(self, sid: str) -> List[dict]:
@@ -181,108 +170,96 @@ class DCLinkImporter:
         for i in range(0, len(product_ids), batch_size):
             batch = product_ids[i:i + batch_size]
             response = requests.post(
-                f"{BASE_URL}/products/content/{sid}",
-                json={"lang": "ua", "productIDs": ",".join(map(str, batch))},
-                headers={"Content-Type": "application/json"},
-                timeout=120,
+                f"{BASE_URL}/info-card/{sid}",
+                json={"lang": "ua", "ids": batch},
+                timeout=60,
             )
-            if response.status_code != 200:
-                continue
-            data = response.json()
-            if data.get("status") == 1:
-                all_content.extend(data["result"])
+            response.raise_for_status()
+            all_content.extend(response.json()["result"])
             time.sleep(0.2)
         return all_content
 
-    def download_feed(self) -> tuple:
-        """Download the complete DC-Link catalog.
-        Returns (products_list, categories_dict).
+    def download_feed(self) -> Tuple[list, dict]:
+        """Download full catalog via DC-Link API.
+
+        Returns:
+            (products_list, dc_cat_map) where dc_cat_map maps DC-Link category
+            IDs to supplier category names (for resolution vs. category_map).
         """
         sid = self._login()
+        dc_categories = self._get_categories(sid)
+        dc_cat_map = {str(c["id"]): c["name"] for c in dc_categories}
 
-        categories = self._get_categories(sid)
-        cat_dict = {str(c["categoryID"]): c["name"] for c in categories}
+        all_product_ids = []
+        for cat_id in CATEGORY_IDS:
+            chunk = self._get_products(sid, cat_id)
+            all_product_ids.extend(item["id"] for item in chunk)
 
-        all_products = {}
-        for cid in CATEGORY_IDS:
-            try:
-                products = self._get_products(sid, cid)
-                for p in products:
-                    all_products[p["productID"]] = p
-            except Exception as e:
-                self.stats.errors.append({"category_id": cid, "error": str(e)})
+        content = self._get_products_content(sid, all_product_ids)
+        return content, dc_cat_map
 
-        products_list = list(all_products.values())
-        product_ids = [p["productID"] for p in products_list]
+    def _pick_price(self, item: dict, category_path: str = None) -> int:
+        """Pick and calculate the final price in kopecks.
 
-        content = self._get_products_content(sid, product_ids)
-        content_map = {p["productID"]: p for p in content}
-
-        for product in products_list:
-            full = content_map.get(product["productID"])
-            if full:
-                product["description"] = full.get("description")
-                product["options"] = full.get("options", [])
-                product["images"] = full.get("images", [])
-
-        return products_list, cat_dict
-
-    def _pick_price(self, item: dict, category_path: str = "") -> int:
-        """Determine and calculate the final price in kopecks.
-
-        Priority:
-          1. Use price_uah directly if present and > 0.
-          2. Fall back to price (USD) → convert at admin-configured rate.
-          3. Apply category-aware markup.
-        Returns 0 if no valid price is found.
+        Priority: price_uah -> price_usd -> 0.
         """
-        try:
-            price_uah_val = item.get("price_uah")
-            price_usd_val = None
-            if price_uah_val in (None, "", 0):
-                price_usd_val = float(item.get("price", 0))
-                if price_usd_val <= 0:
-                    return 0
-            else:
-                price_uah_val = float(price_uah_val)
+        price_uah = None
+        uah_val = item.get("price_uah") or item.get("PriceUAH")
+        if uah_val:
+            try:
+                price_uah = float(uah_val)
+            except (ValueError, TypeError):
+                pass
 
-            return calculate_price(
-                price_uah=price_uah_val if price_uah_val not in (None, "", 0) else None,
-                price_usd=price_usd_val,
-                supplier_code=self.SUPPLIER_CODE,
-                category_path=category_path,
-            )
-        except (ValueError, TypeError):
-            return 0
+        price_usd = None
+        if price_uah is None:
+            usd_val = item.get("price") or item.get("Price")
+            if usd_val:
+                try:
+                    price_usd = float(usd_val)
+                except (ValueError, TypeError):
+                    pass
+
+        return calculate_price(
+            price_uah=price_uah,
+            price_usd=price_usd,
+            supplier_code=self.SUPPLIER_CODE,
+            category_path=category_path,
+        )
 
     def parse_products(self, feed: list, dc_cat_map: dict) -> List[NormalizedProduct]:
-        self.stats.total_items = len(feed)
+        """Parse downloaded products into NormalizedProduct list."""
+        self.stats.total = len(feed)
         products = []
         seen_skus = set()
 
         for item in feed:
-            articul = str(item.get("articul") or "").strip()
+            articul = str(item.get("articul") or item.get("article") or item.get("sku") or "").strip()
             if not articul:
                 self.stats.empty_skus += 1
                 continue
             sku = self.SKU_PREFIX + articul
+
             if sku in seen_skus:
                 self.stats.duplicate_skus += 1
                 continue
             seen_skus.add(sku)
 
-            name = item.get("name") or ""
-            description = item.get("description") or ""
-            brief = item.get("brief_description") or ""
-
-            category_id = str(item.get("categoryID") or "").strip()
+            name = item.get("name") or item.get("Name") or ""
+            category_id = str(item.get("category_id") or item.get("CategoryId") or "")
             category_name = dc_cat_map.get(category_id, "")
+
+            # Resolve category BEFORE price calculation.
+            # Unmapped categories are skipped (not failed).
             try:
-                category_path = resolve_category_path(category_name, self.category_map)
+                category_path = resolve_category_path(category_name, self.category_map, sku=sku)
             except (ValueError, KeyError) as e:
-                self.stats.unknown_categories.append(f"'{category_name}' (id={category_id}): {e}")
-                self.stats.failed += 1
-                self.stats.errors.append({"articul": articul, "error": f"\u041d\u0435\u0432\u0456\u0434\u043e\u043c\u0430 \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0456\u044f: {category_name}"})
+                self.stats.record_unmapped_category(
+                    name=category_name,
+                    supplier_category_id=category_id,
+                    sku=sku,
+                )
+                self.stats.skipped += 1
                 continue
 
             price = self._pick_price(item, category_path=category_path)
@@ -310,11 +287,14 @@ class DCLinkImporter:
                 if opt_name and opt_value:
                     raw_attributes.append((opt_name, opt_value))
 
-            # Core-field protection: prevent attribute names from overwriting core fields
             raw_attributes = _validate_attributes(raw_attributes, self.stats, sku, "DC-Link")
 
-            processed, unknown_names, unknown_values = self._process_attributes(raw_attributes)
+            processed, unknown_names, unknown_values = self._process_attributes(raw_attributes, sku=sku)
+
             merged_list = list(merge_attributes(processed).items())
+
+            brief = item.get("brief") or item.get("short_description") or item.get("ShortDescription") or ""
+            description = item.get("description") or item.get("Description") or brief or ""
 
             seo = generate_product_seo({"Name": name, "Regular price": price, "Brand": ""})
 
@@ -334,19 +314,14 @@ class DCLinkImporter:
                 seo_description=seo.get("meta_description", ""),
                 focus_keyphrase=seo.get("focus_keyphrase", ""),
             )
-
-            self.stats.unknown_attributes.extend(unknown_names)
-            self.stats.unknown_attribute_values.extend(unknown_values)
             products.append(product)
 
         self.stats.processed = len(products)
         self.stats.products = products
         return products
 
-    def _process_attributes(self, raw_attrs):
+    def _process_attributes(self, raw_attrs, sku: str = ""):
         processed = []
-        unknown_names = []
-        unknown_values = []
         for attr_name, attr_value in raw_attrs:
             result = process_attribute(attr_name, attr_value)
             if isinstance(result, tuple) and len(result) == 2:
@@ -354,10 +329,10 @@ class DCLinkImporter:
             elif result == ATTR_SKIP:
                 pass
             elif result == ATTR_UNKNOWN_NAME:
-                unknown_names.append((attr_name, attr_name, ""))
+                self.stats.record_unknown_attribute(attr_name, sku=sku)
             elif result == ATTR_UNKNOWN_VALUE:
-                unknown_values.append((attr_name, attr_value, ""))
-        return processed, unknown_names, unknown_values
+                self.stats.record_unknown_attribute_value(attr_name, attr_value, sku=sku)
+        return processed, [], []
 
     def run(self, import_type: str = "full") -> ImportStats:
         feed, dc_cat_map = self.download_feed()

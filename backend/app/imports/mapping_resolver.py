@@ -25,7 +25,6 @@ class MappingResolver:
         self.attrs: dict = {}
         # (internal_attr_lower, raw_value_lower) -> {value_name, active}
         self.values: dict = {}
-        self.value_whitelist: set = set()   # internal names having >=1 active rule
         # raw_category(lower) -> {category_id, internal_name, active}
         self.cats: dict = {}
         self._load()
@@ -81,8 +80,6 @@ class MappingResolver:
                     "specific": r["specific"],
                 }
                 self.values[key] = entry
-                if r["is_active"]:
-                    self.value_whitelist.add(key[0])
 
             cur.execute(
                 """SELECT sc.supplier_name AS raw, m.is_active,
@@ -138,9 +135,15 @@ class MappingResolver:
                 return ATTR_SKIP
             # active but unresolved target -> pass raw value through (no data loss)
             return (internal, ventry["value_name"] or value)
-        if internal in self.value_whitelist:
-            return ATTR_UNKNOWN_VALUE
-        return (internal, value)
+        # No value-level mapping found for this attribute+value combination.
+        # If the attribute participates in the value allowlist (has >=1 active
+        # value rule) AND this specific value is not in the list -> unknown.
+        # If the attribute has NO value-level mappings at all, the raw value
+        # was previously passed through, which silently created internal values
+        # for every supplier variant.  This behaviour is now disabled: every
+        # unmapped value is treated as unknown so that it is dropped and logged
+        # instead of auto-creating catalog entries.
+        return ATTR_UNKNOWN_VALUE
 
     def build_category_map(self) -> dict:
         """{raw_category: internal_category_name} for active, resolved rows."""

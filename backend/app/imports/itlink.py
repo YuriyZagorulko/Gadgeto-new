@@ -1,5 +1,4 @@
-"""
-IT-Link supplier importer.
+"""IT-Link supplier importer.
 
 Downloads the current XML price list via the IT-Link OAuth2 API,
 parses it, and returns normalized products for persistence.
@@ -18,6 +17,7 @@ from app.imports.attribute_processor import (
     ATTR_UNKNOWN_VALUE,
 )
 from app.imports.category_utils import resolve_category_path
+from app.imports.import_stats import ImportStats as SharedImportStats
 from app.imports.pricing_service import calculate_price, calculate_old_price, find_markup_multiplier
 from app.core.config import settings
 from app.services.seo import generate_product_seo
@@ -48,8 +48,6 @@ def _validate_attributes(raw_attributes, stats, sku, logger_prefix=""):
             else:
                 import logging
                 logging.getLogger(__name__).warning(f"{logger_prefix} SKU {sku}: {msg}")
-            # Still pass through the normal attribute processor; it may map it
-            # to an internal attribute. If not, it will be UNKNOWN_NAME.
             safe.append((attr_name, attr_value))
         else:
             safe.append((attr_name, attr_value))
@@ -80,20 +78,10 @@ class NormalizedProduct:
 
 
 @dataclass
-class ImportStats:
-    total_offers: int = 0
-    processed: int = 0
-    created: int = 0
-    updated: int = 0
-    skipped: int = 0
-    failed: int = 0
-    unknown_attributes: List[Tuple] = field(default_factory=list)
-    unknown_attribute_values: List[Tuple] = field(default_factory=list)
-    unknown_categories: List[str] = field(default_factory=list)
-    duplicate_skus: int = 0
-    warnings: List[str] = field(default_factory=list)
-    errors: List[dict] = field(default_factory=list)
-    products: list = field(default_factory=list)
+class ImportStats(SharedImportStats):
+    """IT-Link import statistics. Alias of shared ImportStats (keeps backward
+    compatibility for callers that import from itlink module)."""
+    pass
 
 
 class ITLinkImporter:
@@ -106,32 +94,25 @@ class ITLinkImporter:
         self.category_map = dict(category_map) if category_map else {}
 
     def download_feed(self) -> str:
-        """
-        Download the current IT-Link price list via OAuth2.
-        Returns the path to the downloaded XML file.
-        """
+        """Download the current IT-Link price list via OAuth2."""
         from app.suppliers.itlink_downloader.auth import get_access_token
         from app.suppliers.itlink_downloader.client import download_price_list
         from app.suppliers.itlink_downloader.exceptions import (
             AuthenticationError, ConfigurationError, DownloadError,
         )
-
         try:
             access_token = get_access_token()
         except AuthenticationError as e:
-            raise RuntimeError(f"\u041f\u043e\u043c\u0438\u043b\u043a\u0430 \u0430\u0432\u0442\u0435\u043d\u0442\u0438\u0444\u0456\u043a\u0430\u0446\u0456\u0457 IT-Link: {e}") from e
+            raise RuntimeError(f"Помилка аутентифікації IT-Link: {e}") from e
         except ConfigurationError as e:
-            raise RuntimeError(f"\u041f\u043e\u043c\u0438\u043b\u043a\u0430 \u043a\u043e\u043d\u0444\u0456\u0433\u0443\u0440\u0430\u0446\u0456\u0457 IT-Link: {e}") from e
-
+            raise RuntimeError(f"Помилка конфігурації IT-Link: {e}") from e
         try:
             saved_path = download_price_list(access_token)
         except DownloadError as e:
-            raise RuntimeError(f"\u041f\u043e\u043c\u0438\u043b\u043a\u0430 \u0437\u0430\u0432\u0430\u043d\u0442\u0430\u0436\u0435\u043d\u043d\u044f \u043a\u0430\u0442\u0430\u043b\u043e\u0433\u0443 IT-Link: {e}") from e
-
+            raise RuntimeError(f"Помилка завантаження каталогу IT-Link: {e}") from e
         return str(saved_path)
 
     def _safe_price(self, value: str) -> float:
-        """Parse supplier price string to float (in UAH). Returns 0 if invalid."""
         try:
             return float(value)
         except (ValueError, TypeError):
@@ -139,16 +120,14 @@ class ITLinkImporter:
 
     def parse_feed(self, xml_path: str) -> ET.ElementTree:
         if not os.path.exists(xml_path):
-            raise FileNotFoundError(
-                f"\u041a\u0430\u0442\u0430\u043b\u043e\u0433 IT-Link \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e: {xml_path}"
-            )
+            raise FileNotFoundError(f"Каталог IT-Link не знайдено: {xml_path}")
         return ET.parse(xml_path)
 
     def parse_offers(self, tree: ET.ElementTree) -> List[NormalizedProduct]:
         root = tree.getroot()
         xml_categories = {cat.attrib["id"]: cat.text for cat in root.findall(".//category")}
         offers = root.findall(".//offer")
-        self.stats.total_offers = len(offers)
+        self.stats.total = len(offers)
 
         products = []
         seen_skus = set()
@@ -157,6 +136,7 @@ class ITLinkImporter:
             offer_id = offer.get("id", "")
             vendor_code = (offer.findtext("vendorCode") or "").strip()
             if not vendor_code:
+                self.stats.empty_skus += 1
                 continue
             sku = self.SKU_PREFIX + vendor_code
 
@@ -170,19 +150,31 @@ class ITLinkImporter:
             picture = offer.findtext("picture", "") or ""
             available = (offer.findtext("available", "") or "").strip()
 
+            # Resolve category BEFORE price calculation.
+            # Unmapped categories are skipped (not failed).
+            category_id = offer.findtext("categoryId", "")
+            category_name = xml_categories.get(category_id, "")
+            try:
+                category_path = resolve_category_path(category_name, self.category_map)
+            except (ValueError, KeyError) as e:
+                self.stats.record_unmapped_category(
+                    name=category_name,
+                    supplier_category_id=category_id,
+                    sku=sku,
+                )
+                self.stats.skipped += 1
+                continue
+
             price_uah = self._safe_price(offer.findtext("price", "0") or "0")
             rrp_uah_str = offer.findtext("rrp", "0") or "0"
 
-            # Calculate final price in kopecks using the pricing service
             price = calculate_price(
                 price_uah=price_uah,
                 supplier_code=self.SUPPLIER_CODE,
                 category_path=category_path,
             )
-            # Old price (RRP) — apply same markup logic
             if rrp_uah_str != "0":
                 rrp_uah = self._safe_price(rrp_uah_str)
-                # Find the multiplier that was used for the regular price
                 multiplier = find_markup_multiplier(
                     base_price_uah=price_uah,
                     supplier_code=self.SUPPLIER_CODE,
@@ -195,16 +187,6 @@ class ITLinkImporter:
             else:
                 old_price = None
 
-            category_id = offer.findtext("categoryId", "")
-            category_name = xml_categories.get(category_id, "")
-            try:
-                category_path = resolve_category_path(category_name, self.category_map)
-            except (ValueError, KeyError) as e:
-                self.stats.unknown_categories.append(f"'{category_name}' (id={category_id}): {e}")
-                self.stats.failed += 1
-                self.stats.errors.append({"offer_id": offer_id, "error": f"\u041d\u0435\u0432\u0456\u0434\u043e\u043c\u0430 \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0456\u044f: {category_name}"})
-                continue
-
             description = ""
             raw_attributes = []
             for param in offer.findall("param"):
@@ -215,12 +197,9 @@ class ITLinkImporter:
                 elif pname and pvalue:
                     raw_attributes.append((pname, pvalue))
 
-            # Core-field protection: prevent attribute names from overwriting core fields
             raw_attributes = _validate_attributes(raw_attributes, self.stats, sku, "IT-Link")
 
             processed_attrs = []
-            unknown_names = []
-            unknown_values = []
             for attr_name, attr_value in raw_attributes:
                 result = process_attribute(attr_name, attr_value)
                 if isinstance(result, tuple) and len(result) == 2:
@@ -228,9 +207,9 @@ class ITLinkImporter:
                 elif result == ATTR_SKIP:
                     pass
                 elif result == ATTR_UNKNOWN_NAME:
-                    unknown_names.append((attr_name, attr_name, sku))
+                    self.stats.record_unknown_attribute(attr_name, sku=sku)
                 elif result == ATTR_UNKNOWN_VALUE:
-                    unknown_values.append((attr_name, attr_value, sku))
+                    self.stats.record_unknown_attribute_value(attr_name, attr_value, sku=sku)
 
             merged_attrs = merge_attributes(processed_attrs)
             merged_list = list(merged_attrs.items())
@@ -254,9 +233,6 @@ class ITLinkImporter:
                 seo_description=seo.get("meta_description", ""),
                 focus_keyphrase=seo.get("focus_keyphrase", ""),
             )
-
-            self.stats.unknown_attributes.extend(unknown_names)
-            self.stats.unknown_attribute_values.extend(unknown_values)
             products.append(product)
 
         self.stats.processed = len(products)

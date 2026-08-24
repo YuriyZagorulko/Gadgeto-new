@@ -244,47 +244,61 @@ def run_full_import(supplier_code, job_id, supplier_id, import_type="full"):
             for w in stats.warnings:
                 _log(conn, job_id, "WARNING", w)
 
-        if hasattr(stats, "unknown_categories") and stats.unknown_categories:
-            _log(conn, job_id, "WARNING",
-                 f"Категорій без маппінгу: {len(stats.unknown_categories)}")
-        if hasattr(stats, "unknown_attributes") and stats.unknown_attributes:
-            _log(conn, job_id, "WARNING",
-                 f"Атрибутів без маппінгу: {len(stats.unknown_attributes)}")
-        if hasattr(stats, "unknown_attribute_values") and stats.unknown_attribute_values:
-            _log(conn, job_id, "WARNING",
-                 f"Значень атрибутів без маппінгу: {len(stats.unknown_attribute_values)}")
+        if hasattr(stats, "warnings") and stats.warnings:
+            for w in stats.warnings:
+                _log(conn, job_id, "WARNING", w)
+
+        # Log structured unmapped data warnings
+        if hasattr(stats, "has_unmapped") and stats.has_unmapped:
+            n_cats = len(stats.unmapped_categories)
+            n_attrs = len(stats.unmapped_attributes)
+            n_vals = sum(len(inner) for inner in stats.unmapped_attribute_values.values())
+            if n_cats:
+                _log(conn, job_id, "WARNING",
+                     f"Категорій без маппінгу: {stats.skipped} товарів, {n_cats} унікальних категорій")
+            if n_attrs:
+                _log(conn, job_id, "WARNING",
+                     f"Атрибутів без маппінгу: {n_attrs} унікальних назв")
+            if n_vals:
+                _log(conn, job_id, "WARNING",
+                     f"Значень атрибутів без маппінгу: {n_vals} унікальних пар (атрибут, значення)")
 
         for e in runner.errors:
             _log(conn, job_id, "ERROR", str(e))
 
-        result_stats = {
-            "total": runner.total, "processed": runner.processed,
-            "created": runner.created, "updated": runner.updated,
-            "skipped": runner.skipped, "failed": runner.failed,
-            "warnings": runner.warnings, "errors": runner.errors,
-            "unknown_categories": len(stats.unknown_categories) if hasattr(stats, "unknown_categories") else 0,
-            "unknown_attributes": len(stats.unknown_attributes) if hasattr(stats, "unknown_attributes") else 0,
-            "unknown_attribute_values": len(stats.unknown_attribute_values) if hasattr(stats, "unknown_attribute_values") else 0,
-        }
+        # Build structured result_stats from the shared ImportStats.
+        result_stats = stats.merge_runner_stats(runner)
 
-        progress("completed", runner.total, runner.processed,
-                 runner.created, runner.updated, runner.skipped,
-                 runner.failed,
-                 f"Імпорт завершено. Створено: {runner.created}, Оновлено: {runner.updated}",
-                 error_count=len(runner.errors), warning_count=len(runner.warnings))
-        _log(conn, job_id, "SUCCESS",
-             f"Імпорт завершено. Створено: {runner.created}, Оновлено: {runner.updated}")
+        # Determine the DB status: map new statuses to the importjobstatus enum.
+        # COMPLETED -> SUCCEEDED, COMPLETED_WITH_WARNINGS -> SUCCEEDED (stored
+        # in stats_json for the admin report).  FAILED stays FAILED.
+        db_status = "SUCCEEDED"
+        if result_stats["status"] == "FAILED":
+            db_status = "FAILED"
+        progress_msg = f"Імпорт завершено. Створено: {result_stats['created']}, Оновлено: {result_stats['updated']}"
+        if result_stats["status"] == "COMPLETED_WITH_WARNINGS":
+            progress_msg += " (з попередженнями: невідображені дані)"
+
+        progress("completed", result_stats["total"], result_stats["processed"],
+                 result_stats["created"], result_stats["updated"],
+                 result_stats["skipped"], result_stats["failed"],
+                 progress_msg,
+                 error_count=len(result_stats["errors"]),
+                 warning_count=len(result_stats["warnings"]))
+        _log(conn, job_id, db_status, progress_msg)
 
         cur = conn.cursor()
         cur.execute(
-            "UPDATE import_jobs SET status='SUCCEEDED', finished_at=NOW(),"
+            "UPDATE import_jobs SET status=%s, finished_at=NOW(),"
             " updated_at=NOW(), heartbeat_at=NOW(), last_activity_at=NOW(),"
             " stats_json=%s, total_count=%s, processed_count=%s, created_count=%s,"
             " updated_count=%s, skipped_count=%s, failed_count=%s,"
             " error_count=%s, warning_count=%s WHERE id=%s",
-            (json.dumps(result_stats, ensure_ascii=False), runner.total,
-             runner.processed, runner.created, runner.updated, runner.skipped,
-             runner.failed, len(runner.errors), len(runner.warnings), job_id),
+            (db_status, json.dumps(result_stats, ensure_ascii=False),
+             result_stats["total"], result_stats["processed"],
+             result_stats["created"], result_stats["updated"],
+             result_stats["skipped"], result_stats["failed"],
+             len(result_stats["errors"]), len(result_stats["warnings"]), job_id),
         )
         conn.commit()
         cur.close()
