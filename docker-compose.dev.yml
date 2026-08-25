@@ -2,13 +2,17 @@
 # Enables hot reload for all services without docker compose build
 #
 # USAGE:
-#   docker compose up -d
-#   # Frontend and backend now work with hot reload out of the box
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#   # Backend, admin, and frontend now reload automatically on source changes.
 #
 #   # Stop:
 #   docker compose down
 #
 # Source code changes on the host are immediately reflected.
+#
+# NOTE: The first run requires the base images to be built:
+#   docker compose build
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 
 services:
   backend:
@@ -19,6 +23,9 @@ services:
     volumes:
       - ./backend/app:/app/app
       - ./migrations:/app/migrations
+      - ./backend/tests:/app/tests
+      - ./backend/pyproject.toml:/app/pyproject.toml
+      - ./backend/Alembic.ini:/app/alembic.ini
 
   admin:
     build:
@@ -36,6 +43,25 @@ services:
     depends_on:
       - backend
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+      args:
+        NEXT_PUBLIC_API_URL: "http://backend:8000"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_next:/app/.next
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
 volumes:
   admin_node_modules:
   admin_next:
+  frontend_node_modules:
+  frontend_next:

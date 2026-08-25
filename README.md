@@ -232,7 +232,7 @@ cp .env.example .env
 Edit .env with the required database, supplier, payment, shipping, and application settings.
 
 3. Start Docker services
-docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 4. Run database migrations
 docker compose exec backend alembic upgrade head
 

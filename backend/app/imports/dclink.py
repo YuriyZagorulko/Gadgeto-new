@@ -179,6 +179,8 @@ class DCLinkImporter:
             batch = product_ids[i:i + batch_size]
             ids_str = ",".join(map(str, batch))
 
+            print(f"[DCLINK] content batch request: {len(batch)} product IDs (IDs {i + 1}-{min(i + batch_size, total)} of {total})")
+
             try:
                 response = requests.post(
                     f"{BASE_URL}/products/content/{sid}",
