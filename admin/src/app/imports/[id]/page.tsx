@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, useState } from 'react';
+import { use, useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
@@ -131,6 +131,80 @@ export default function ImportReportPage() {
       .finally(() => setLoading(false));
   }, [jobId]);
 
+  const downloadReport = useCallback(() => {
+    if (!report) return;
+    const lines: string[] = [];
+    const add = (v: string) => lines.push(v);
+    const sep = () => add('─'.repeat(60));
+
+    add(`Звіт імпорту #${report.id}`);
+    add(`Сформовано: ${new Date().toLocaleString('uk-UA')}`);
+    sep();
+    add(`Постачальник: ${report.supplier_name || `ID ${report.supplier_id}`}`);
+    add(`Тип: ${({ full: 'Повний імпорт', prices: 'Ціни', stock: 'Залишки' } as Record<string, string>)[report.import_type] || report.import_type}`);
+    add(`Статус: ${report.display_status || report.status}`);
+    add(`Початок: ${report.started_at ? new Date(report.started_at).toLocaleString('uk-UA') : '—'}`);
+    add(`Завершення: ${report.finished_at ? new Date(report.finished_at).toLocaleString('uk-UA') : '—'}`);
+    add(`Тривалість: ${fmtDuration(report.duration ?? undefined)}`);
+    sep();
+    add(`Всього товарів: ${report.total_count}`);
+    add(`Оброблено: ${report.processed_count}`);
+    add(`Створено: ${report.created_count}`);
+    add(`Оновлено: ${report.updated_count}`);
+    add(`Пропущено: ${report.skipped_count}`);
+    add(`Помилок: ${report.failed_count}`);
+    add(`Попереджень: ${report.warning_count}`);
+    sep();
+
+    if (report.unmapped_categories_count > 0) {
+      add(`\nНевідображені категорії (${report.unmapped_categories_count}):`);
+      for (const [name, item] of Object.entries(report.unmapped_categories)) {
+        add(`  ${name} — ${item.count} товар(ів), ID: ${item.id || '—'}, SKU: ${(item.skus || []).slice(0, 5).join(', ')}${item.skus?.length > 5 ? '...' : ''}`);
+      }
+    }
+    if (report.unmapped_attributes_count > 0) {
+      add(`\nНевідображені атрибути (${report.unmapped_attributes_count}):`);
+      for (const [name, item] of Object.entries(report.unmapped_attributes)) {
+        add(`  ${name} — ${item.count} товар(ів), SKU: ${(item.skus || []).slice(0, 5).join(', ')}${item.skus?.length > 5 ? '...' : ''}`);
+      }
+    }
+    if (report.unmapped_attribute_values_count > 0) {
+      add(`\nНевідображені значення атрибутів (${report.unmapped_attribute_values_count}):`);
+      for (const [attr, vals] of Object.entries(report.unmapped_attribute_values)) {
+        for (const [val, info] of Object.entries(vals)) {
+          add(`  ${attr} = ${val} — ${info.count} товар(ів), SKU: ${(info.skus || []).slice(0, 5).join(', ')}${info.skus?.length > 5 ? '...' : ''}`);
+        }
+      }
+    }
+
+    if (report.warnings.length > 0) {
+      add(`\nПопередження (${report.warnings.length}):`);
+      for (const w of report.warnings) add(`  [WARN] ${w}`);
+    }
+    if (report.errors.length > 0) {
+      add(`\nПомилки (${report.errors.length}):`);
+      for (const e of report.errors) add(`  [ERROR] ${typeof e === 'string' ? e : JSON.stringify(e)}`);
+    }
+    if (report.error_message) add(`\nДеталі помилки: ${report.error_message}`);
+
+    if (report.logs && report.logs.length > 0) {
+      add(`\nЖурнал імпорту (${report.logs.length} записів):`);
+      for (const l of report.logs) {
+        add(`  [${l.level}] ${new Date(l.created_at).toLocaleString('uk-UA')} — ${l.message}${l.item_ref ? ` (${l.item_ref})` : ''}`);
+      }
+    }
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `import-report-${report.id}-${new Date().toISOString().slice(0, 10)}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [report]);
+
   if (loading) return <LoadingState label="Завантаження звіту..." />;
   if (error) return <ErrorState message={error} onRetry={() => window.location.reload()} />;
   if (!report) return <ErrorState message="Звіт не знайдено" />;
@@ -164,6 +238,9 @@ export default function ImportReportPage() {
         title={`Звіт імпорту #${report.id}`}
         actions={
           <div className="flex gap-2">
+            <Button variant="secondary" onClick={downloadReport}>
+              Завантажити звіт
+            </Button>
             <Button variant="secondary" onClick={() => router.push('/imports/history')}>
               Назад до історії
             </Button>
