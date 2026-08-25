@@ -27,7 +27,7 @@ async def stats(user: dict = Depends(require_admin)):
         products = {
             "total": _count(cur, "SELECT count(*) FROM products"),
             "active": _count(cur, "SELECT count(*) FROM products WHERE status='PUBLISHED' AND is_active=true"),
-            "without_images": _count(cur, "SELECT count(*) FROM products p WHERE NOT EXISTS (SELECT 1 FROM product_images pi WHERE pi.product_id=p.id)"),
+            "without_images": _count(cur, "SELECT count(*) FROM products p WHERE NOT EXISTS (SELECT 1 FROM product_images pi WHERE pi.product_id=p.id AND pi.is_suppressed=FALSE)"),
             "without_price": _count(cur, "SELECT count(*) FROM products WHERE price IS NULL OR price=0"),
             "out_of_stock": _count(cur, "SELECT count(*) FROM products WHERE stock_status='out_of_stock'"),
         }

@@ -198,7 +198,7 @@ async def list_products(
     # Default: prefer products with images first, then newest
     # This ensures homepage and first listing pages show products that have images
     if not sort:
-        order = "(SELECT count(*) FROM product_images WHERE product_id = p.id) DESC, p.created_at DESC"
+        order = "(SELECT count(*) FROM product_images WHERE product_id = p.id AND is_suppressed = FALSE) DESC, p.created_at DESC"
     
     where = " AND ".join(conditions)
     offset = (page - 1) * page_size
@@ -215,10 +215,10 @@ async def list_products(
     query = f"""
         SELECT DISTINCT p.id, p.sku, p.name, p.slug, p.price, p.old_price,
                p.stock_status, p.stock_qty, p.created_at,
-               (SELECT url FROM product_images WHERE product_id = p.id ORDER BY sort_order, id LIMIT 1) as image,
+               (SELECT url FROM product_images WHERE product_id = p.id AND is_suppressed = FALSE ORDER BY sort_order, id LIMIT 1) as image,
                (SELECT c.name FROM product_categories pc2 JOIN categories c ON c.id = pc2.category_id WHERE pc2.product_id = p.id LIMIT 1) as category,
                COALESCE(b.name, '') as brand_name,
-               (SELECT count(*) FROM product_images WHERE product_id = p.id) as img_count
+               (SELECT count(*) FROM product_images WHERE product_id = p.id AND is_suppressed = FALSE) as img_count
         FROM products p
         LEFT JOIN product_categories pc ON pc.product_id = p.id
         LEFT JOIN brands b ON b.id = p.brand_id
@@ -283,7 +283,7 @@ async def get_product(slug: str):
     # Images
     cur.execute("""
         SELECT id, url, sort_order, is_primary
-        FROM product_images WHERE product_id = %s
+        FROM product_images WHERE product_id = %s AND is_suppressed = FALSE
         ORDER BY sort_order
     """, (p["id"],))
     images = cur.fetchall()

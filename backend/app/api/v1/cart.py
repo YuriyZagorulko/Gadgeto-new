@@ -35,7 +35,7 @@ async def get_cart(session_token: str = ""):
     cart_id, token = get_or_create_cart(cur, session_token)
     cur.execute("""
         SELECT ci.id, ci.product_id, ci.qty, ci.price_at_addition, p.name, p.sku, p.slug, p.price, p.stock_status,
-               (SELECT url FROM product_images WHERE product_id=p.id AND is_primary=true LIMIT 1) as image
+               (SELECT url FROM product_images WHERE product_id=p.id AND is_primary=true AND is_suppressed=FALSE LIMIT 1) as image
         FROM cart_items ci JOIN products p ON p.id=ci.product_id WHERE ci.cart_id=%s ORDER BY ci.id
     """, (cart_id,))
     items = cur.fetchall()

@@ -334,14 +334,10 @@ class ImportRunner:
         if not urls_to_import:
             return
 
-        # Delete existing images whose URLs match the current import set.
-        # This prevents duplicate product_image rows on re-import while
-        # preserving any manually added images with different URLs.
-        cur.execute(
-            "DELETE FROM product_images WHERE product_id = %s AND url = ANY(%s)",
-            (product_id, urls_to_import),
-        )
-
+        # Step 1: For each URL in the feed, check if it already exists.
+        #   - If existing + suppressed → keep suppressed (update sort_order)
+        #   - If existing + active     → keep active (update sort_order)
+        #   - If new                   → INSERT with is_supplier_image=TRUE
         for i, url in enumerate(urls_to_import):
             media_id = None
             if self.image_storage_mode == "local" and (url.startswith("http://") or url.startswith("https://")):
@@ -354,9 +350,40 @@ class ImportRunner:
                     self.warnings.append(f"Не вдалося завантажити зображення: {url}")
                     # Fall back to storing the supplier URL so the product
                     # still has an image reference
+
+            # Check if this URL already exists for this product
             cur.execute(
-                """INSERT INTO product_images (product_id, url, media_id, is_primary,
-                                               sort_order, created_at, updated_at)
-                   VALUES (%s,%s,%s,%s,%s,NOW(),NOW())""",
-                (product_id, url, media_id, i == 0, i),
+                "SELECT id, is_suppressed FROM product_images WHERE product_id = %s AND url = %s",
+                (product_id, url),
             )
+            existing = cur.fetchone()
+
+            if existing:
+                existing_id = existing["id"] if isinstance(existing, dict) else existing[0]
+                existing_suppressed = existing["is_suppressed"] if isinstance(existing, dict) else existing[1]
+                # Always update sort_order and primary flag
+                cur.execute(
+                    "UPDATE product_images SET sort_order = %s, is_primary = %s WHERE id = %s",
+                    (i, i == 0, existing_id),
+                )
+                if existing_suppressed:
+                    pass  # Keep suppressed — admin's choice takes precedence
+                else:
+                    pass  # Keep active
+            else:
+                cur.execute(
+                    """INSERT INTO product_images (product_id, url, media_id, is_primary,
+                                                   sort_order, is_supplier_image, is_suppressed,
+                                                   created_at, updated_at)
+                       VALUES (%s,%s,%s,%s,%s,TRUE,FALSE,NOW(),NOW())""",
+                    (product_id, url, media_id, i == 0, i),
+                )
+
+        # Step 2: Remove supplier images that are NO LONGER in the feed.
+        # This only affects supplier-originated images (is_supplier_image=TRUE).
+        # Suppressed images that the supplier no longer provides are also deleted.
+        # Manual images (is_supplier_image=FALSE) are NEVER touched by the importer.
+        cur.execute(
+            "DELETE FROM product_images WHERE product_id = %s AND is_supplier_image = TRUE AND NOT (url = ANY(%s))",
+            (product_id, urls_to_import),
+        )

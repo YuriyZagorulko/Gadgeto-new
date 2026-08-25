@@ -109,9 +109,9 @@ def main():
         print(f"  Total records: {cnt5}")
         for u in urls:
             print(f"    {u[:50]}")
-        assert IMG_A in urls, "IMG_A should be preserved (manual image)"
+        assert IMG_A not in urls, "IMG_A should be removed (supplier no longer provides it)"
         assert IMG_B in urls, "IMG_B should be re-inserted"
-        print("  PASS - old image preserved, supplier image replaced")
+        print("  PASS - old supplier image removed when no longer in feed")
 
         # STEP 6
         print("\n=== IMPORT 6: No images (empty list) ===")
@@ -127,7 +127,7 @@ def main():
         print("=" * 50)
         print("  [OK] 3x identical imports  -> 1 record (no duplicates)")
         print("  [OK] Add distinct URL      -> 2 records")
-        print("  [OK] Supplier URL change   -> old preserved, new inserted")
+        print("  [OK] Supplier URL change   -> old removed, new inserted")
         print("  [OK] Empty list            -> no-op")
         print("  [OK] sort_order & is_primary correct")
 

@@ -73,6 +73,9 @@ class ImportStats:
     failed: int = 0
     duplicate_skus: int = 0
     empty_skus: int = 0
+    # Count of items in the raw feed before parsing, used to detect
+    # imports that appear to succeed but actually processed nothing.
+    feed_count: int = 0
 
     unmapped_categories: Dict[str, _UnmappedInfo] = field(default_factory=dict)
     unmapped_attributes: Dict[str, _UnmappedInfo] = field(default_factory=dict)
@@ -105,11 +108,17 @@ class ImportStats:
         """Compute the import status from collected stats.
 
         - FAILED if any real errors occurred (parsing or persistence).
+        - FAILED if the feed had products (feed_count > 0) but none were
+          successfully created or updated (e.g., downstream API failure).
         - COMPLETED_WITH_WARNINGS if the import finished but unmapped data
           was found.
         - COMPLETED if everything finished cleanly.
         """
         if self.has_errors:
+            return FAILED
+        # If the supplier feed had products but zero were persisted,
+        # something went wrong (e.g., info endpoint failure).
+        if self.feed_count > 0 and self.created == 0 and self.updated == 0:
             return FAILED
         if self.has_unmapped:
             return COMPLETED_WITH_WARNINGS
@@ -171,6 +180,7 @@ class ImportStats:
 
         return {
             "total": self.total,
+            "feed_count": self.feed_count,
             "processed": self.processed,
             "created": self.created,
             "updated": self.updated,
@@ -199,6 +209,7 @@ class ImportStats:
         summary = self.to_summary_dict()
         summary["created"] = getattr(runner, "created", 0)
         summary["updated"] = getattr(runner, "updated", 0)
+        summary["processed"] = getattr(runner, "processed", 0) or self.processed
         summary["skipped"] = self.skipped + getattr(runner, "skipped", 0)
         summary["failed"] = self.failed + getattr(runner, "failed", 0)
         summary["warnings"] = list(self.warnings) + list(
@@ -208,6 +219,8 @@ class ImportStats:
         # Recompute status after merging persistence errors.
         has_errors = summary["failed"] > 0 or len(summary["errors"]) > 0
         if has_errors:
+            summary["status"] = FAILED
+        elif summary["feed_count"] > 0 and summary["created"] == 0 and summary["updated"] == 0:
             summary["status"] = FAILED
         elif summary["has_unmapped"]:
             summary["status"] = COMPLETED_WITH_WARNINGS

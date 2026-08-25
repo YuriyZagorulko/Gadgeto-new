@@ -49,6 +49,8 @@ class ProductImage(Base):
     alt = Column(String(255), nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
     is_primary = Column(Boolean, default=False, nullable=False)
+    is_supplier_image = Column(Boolean, default=False, nullable=False)
+    is_suppressed = Column(Boolean, default=False, nullable=False)
     checksum = Column(String(64), nullable=True)
     product = relationship("Product", back_populates="images")
 

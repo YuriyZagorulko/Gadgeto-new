@@ -166,51 +166,83 @@ class DCLinkImporter:
     def _get_products_content(self, sid: str, product_ids: list) -> list:
         """Download full product details (attributes, images, descriptions).
 
-        The info-card endpoint URL changed; try the current known path
-        first, fall back to the legacy path.  If neither works returns an
-        empty list so the caller can still import basic product data
-        (name, price, stock, full_image) from the list endpoint alone.
+        Uses the proven endpoint from the historical DC-Link integration:
+        POST /products/content/{sid}  with comma-separated productIDs.
+
+        Batches up to 500 products per request.
         """
         all_content = []
         batch_size = 500
-        for i in range(0, len(product_ids), batch_size):
+        total = len(product_ids)
+
+        for i in range(0, total, batch_size):
             batch = product_ids[i:i + batch_size]
-            # Try current endpoint first (product/info), then legacy (info-card)
-            urls = [
-                f"{BASE_URL}/product/info/{sid}",
-                f"{BASE_URL}/info-card/{sid}",
-            ]
-            fetched = None
-            for url in urls:
-                try:
-                    response = requests.post(
-                        url,
-                        json={"lang": "ua", "ids": batch},
-                        timeout=60,
-                    )
-                    if response.status_code == 200:
-                        fetched = response.json().get("result")
-                        if fetched is not None:
-                            break
-                except requests.RequestException:
-                    continue
-            if fetched is None:
-                # Neither endpoint worked — log a warning and continue
-                self.stats.warnings.append(
-                    f"Не вдалося отримати деталі товарів (info endpoint) для {len(batch)} продуктів"
+            ids_str = ",".join(map(str, batch))
+
+            try:
+                response = requests.post(
+                    f"{BASE_URL}/products/content/{sid}",
+                    json={"lang": "ua", "productIDs": ids_str},
+                    headers={"Content-Type": "application/json"},
+                    timeout=120,
                 )
-                continue
-            if isinstance(fetched, list):
-                all_content.extend(fetched)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("status") == 1:
+                        fetched = data.get("result")
+                        if isinstance(fetched, list):
+                            all_content.extend(fetched)
+                        else:
+                            self.stats.warnings.append(
+                                f"Неочікуваний формат відповіді для {len(batch)} продуктів"
+                            )
+                    else:
+                        self.stats.warnings.append(
+                            f"Помилка отримання деталей для {len(batch)} продуктів: статус {data.get('status')}"
+                        )
+                elif response.status_code == 429:
+                    # Rate limited — wait and retry once
+                    time.sleep(5)
+                    try:
+                        response = requests.post(
+                            f"{BASE_URL}/products/content/{sid}",
+                            json={"lang": "ua", "productIDs": ids_str},
+                            headers={"Content-Type": "application/json"},
+                            timeout=120,
+                        )
+                        if response.status_code == 200:
+                            data = response.json()
+                            if data.get("status") == 1:
+                                fetched = data.get("result")
+                                if isinstance(fetched, list):
+                                    all_content.extend(fetched)
+                    except requests.RequestException:
+                        pass
+                else:
+                    self.stats.warnings.append(
+                        f"Не вдалося отримати деталі товарів: HTTP {response.status_code} для {len(batch)} продуктів"
+                    )
+            except requests.RequestException as e:
+                self.stats.warnings.append(
+                    f"Не вдалося отримати деталі товарів: {e} для {len(batch)} продуктів"
+                )
+
             time.sleep(0.2)
+
         return all_content
 
     def download_feed(self) -> Tuple[list, dict]:
         """Download full catalog via DC-Link API.
 
+        Merges data from two endpoints:
+        1. List endpoint: /products/{category_id}/{sid} — provides base product
+           data (prices, stocks, names, full_image, etc.)
+        2. Content endpoint: /products/content/{sid} — provides enriched data
+           (options/attributes, description, additional images, name_ua/name_ru)
+
         Returns:
-            (products_list, dc_cat_map) where dc_cat_map maps DC-Link category
-            IDs to supplier category names (for resolution vs. category_map).
+            (merged_products_list, dc_cat_map) where each product dict has
+            fields from both the list and content endpoints.
         """
         sid = self._login()
         dc_categories = self._get_categories(sid)
@@ -221,16 +253,52 @@ class DCLinkImporter:
             if cid:
                 dc_cat_map[str(cid)] = cname
 
+        # Step 1: Collect all products from the list endpoint (has prices, stock)
         all_product_ids = []
+        base_products = {}  # productID -> product dict from list endpoint
         for cat_id in CATEGORY_IDS:
             chunk = self._get_products(sid, cat_id)
             for item in chunk:
                 item_id = item.get("productID") or item.get("id")
                 if item_id:
                     all_product_ids.append(item_id)
+                    base_products[str(item_id)] = item
 
-        content = self._get_products_content(sid, all_product_ids)
-        return content, dc_cat_map
+        # Record how many products the feed listed
+        self.stats.feed_count = len(all_product_ids)
+
+        # Step 2: Fetch enriched content from content endpoint (has options, description, images)
+        content_list = self._get_products_content(sid, all_product_ids)
+
+        # Step 3: Merge content into base products
+        for enriched in content_list:
+            pid = enriched.get("productID")
+            if pid is None:
+                continue
+            base = base_products.get(str(pid))
+            if base is None:
+                # Enriched product not in base list — use as-is
+                base_products[str(pid)] = enriched
+                continue
+
+            # Merge enriched fields into base product
+            # Description from content endpoint
+            if enriched.get("description"):
+                base["description"] = enriched["description"]
+            # Options/attributes from content endpoint
+            if enriched.get("options"):
+                base["options"] = enriched["options"]
+            # Additional images from content endpoint (structured format)
+            if enriched.get("images"):
+                base["content_images"] = enriched["images"]
+            # Name fallback: use name_ua if name is empty
+            if not base.get("name") or base.get("name") is None:
+                base["name"] = enriched.get("name_ua") or enriched.get("name_ru") or ""
+            # Brief description fallback
+            if not base.get("brief_description") and enriched.get("brief_description"):
+                base["brief_description"] = enriched["brief_description"]
+
+        return list(base_products.values()), dc_cat_map
 
     def _pick_price(self, item: dict, category_path: str = None) -> int:
         """Pick and calculate the final price in kopecks.
@@ -261,14 +329,18 @@ class DCLinkImporter:
             category_path=category_path,
         )
 
-    def parse_products(self, feed: list, dc_cat_map: dict) -> List[NormalizedProduct]:
-        """Parse downloaded products into NormalizedProduct list."""
+    def parse_products(self, feed: list, dc_cat_map: dict):
+        """Parse downloaded products, yielding NormalizedProduct one at a time.
+
+        Yields a NormalizedProduct for each valid product.  No full product
+        list is retained in memory — the caller must iterate the generator
+        to consume products.
+        """
         self.stats.total = len(feed)
-        products = []
         seen_skus = set()
 
         for item in feed:
-            articul = str(item.get("articul") or item.get("article") or item.get("sku") or "").strip()
+            articul = str(item.get("articul") or item.get("artikul") or item.get("article") or item.get("sku") or "").strip()
             if not articul:
                 self.stats.empty_skus += 1
                 continue
@@ -280,7 +352,7 @@ class DCLinkImporter:
             seen_skus.add(sku)
 
             name = item.get("name") or item.get("Name") or ""
-            category_id = str(item.get("category_id") or item.get("CategoryId") or "")
+            category_id = str(item.get("category_id") or item.get("categoryID") or item.get("CategoryId") or "")
             category_name = dc_cat_map.get(category_id, "")
 
             # Resolve category BEFORE price calculation.
@@ -301,10 +373,17 @@ class DCLinkImporter:
             full_image = item.get("full_image")
             if full_image:
                 images.append(str(full_image))
+            # Also check for additional images from the content endpoint
+            # (structured array of {full_image, small_image, ...} dicts)
+            content_images = item.get("content_images") or []
+            for im in content_images:
+                url = str(im.get("full_image") or im.get("url") or "")
+                if url and url not in images:
+                    images.append(url)
             other_images = item.get("other_images") or item.get("images") or []
             for im in other_images:
                 if isinstance(im, dict):
-                    url = str(im.get("url") or im.get("path") or "")
+                    url = str(im.get("url") or im.get("path") or im.get("full_image") or "")
                 else:
                     url = str(im)
                 if url and url not in images:
@@ -316,8 +395,8 @@ class DCLinkImporter:
             raw_options = item.get("options") or []
             raw_attributes = []
             for opt in raw_options:
-                opt_name = (opt.get("OptionName") or "").strip()
-                opt_value = (opt.get("ValueName") or "").strip()
+                opt_name = (opt.get("OptionName") or opt.get("name") or "").strip()
+                opt_value = (opt.get("ValueName") or opt.get("value") or "").strip()
                 if opt_name and opt_value:
                     raw_attributes.append((opt_name, opt_value))
 
@@ -327,7 +406,7 @@ class DCLinkImporter:
 
             merged_list = list(merge_attributes(processed).items())
 
-            brief = item.get("brief") or item.get("short_description") or item.get("ShortDescription") or ""
+            brief = item.get("brief") or item.get("brief_description") or item.get("short_description") or item.get("ShortDescription") or ""
             description = item.get("description") or item.get("Description") or brief or ""
 
             seo = generate_product_seo({"Name": name, "Regular price": price, "Brand": ""})
@@ -348,11 +427,7 @@ class DCLinkImporter:
                 seo_description=seo.get("meta_description", ""),
                 focus_keyphrase=seo.get("focus_keyphrase", ""),
             )
-            products.append(product)
-
-        self.stats.processed = len(products)
-        self.stats.products = products
-        return products
+            yield product
 
     def _process_attributes(self, raw_attrs, sku: str = ""):
         processed = []
@@ -370,5 +445,7 @@ class DCLinkImporter:
 
     def run(self, import_type: str = "full") -> ImportStats:
         feed, dc_cat_map = self.download_feed()
-        self.parse_products(feed, dc_cat_map)
+        # Store the generator — the caller (importer_service) will iterate it
+        # product-by-product, so only one NormalizedProduct is in memory at a time.
+        self.stats.products = self.parse_products(feed, dc_cat_map)
         return self.stats

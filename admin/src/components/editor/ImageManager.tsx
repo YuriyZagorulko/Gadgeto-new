@@ -7,6 +7,8 @@ export interface EditorImage {
   url: string;
   is_primary?: boolean;
   sort_order?: number;
+  is_supplier_image?: boolean;
+  is_suppressed?: boolean;
 }
 
 export default function ImageManager({
@@ -22,6 +24,9 @@ export default function ImageManager({
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const activeImages = images.filter((img) => !img.is_suppressed);
+  const suppressedImages = images.filter((img) => img.is_suppressed);
 
   const addUrl = () => {
     const u = url.trim();
@@ -49,21 +54,36 @@ export default function ImageManager({
   };
 
   const remove = (i: number) => {
-    const next = images.filter((_, idx) => idx !== i);
-    if (images[i]?.is_primary && next.length > 0) next[0] = { ...next[0], is_primary: true };
-    onChange(next);
+    const next = activeImages.filter((_, idx) => idx !== i);
+    if (activeImages[i]?.is_primary && next.length > 0) next[0] = { ...next[0], is_primary: true };
+    onChange([...next, ...suppressedImages]);
+  };
+
+  const hide = (i: number) => {
+    const img = activeImages[i];
+    const suppressed = { ...img, is_suppressed: true, is_primary: false };
+    const nextActive = activeImages.filter((_, idx) => idx !== i);
+    if (img?.is_primary && nextActive.length > 0) nextActive[0] = { ...nextActive[0], is_primary: true };
+    onChange([...nextActive, ...suppressedImages, suppressed]);
+  };
+
+  const restore = (i: number) => {
+    const img = suppressedImages[i];
+    const restored = { ...img, is_suppressed: false };
+    const nextSuppressed = suppressedImages.filter((_, idx) => idx !== i);
+    onChange([...activeImages, restored, ...nextSuppressed]);
   };
 
   const makePrimary = (i: number) => {
-    onChange(images.map((im, idx) => ({ ...im, is_primary: idx === i })));
+    onChange(images.map((im, idx) => ({ ...im, is_primary: idx === i && !im.is_suppressed })));
   };
 
   const moveTo = (from: number, to: number) => {
-    if (to < 0 || to >= images.length || from === to) return;
-    const next = [...images];
+    if (to < 0 || to >= activeImages.length || from === to) return;
+    const next = [...activeImages];
     const [item] = next.splice(from, 1);
     next.splice(to, 0, item);
-    onChange(next);
+    onChange([...next, ...suppressedImages]);
   };
 
   return (
@@ -83,31 +103,65 @@ export default function ImageManager({
         </button>
       </div>
 
-      {images.length === 0 ? (
+      {activeImages.length === 0 && suppressedImages.length === 0 ? (
         <p className="text-sm text-gray-500">Зображень немає. Завантажте файл або додайте за URL.</p>
       ) : (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
-          {images.map((img, i) => (
-            <div key={img.id ?? `${img.url}-${i}`} draggable onDragStart={() => setDragIdx(i)}
-              onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragIdx !== null) moveTo(dragIdx, i); setDragIdx(null); }}
-              className={`group relative overflow-hidden rounded border-2 bg-gray-800 ${img.is_primary ? 'border-blue-500' : 'border-transparent'}`}>
-              <img src={img.url} alt="" className="aspect-square w-full object-cover" loading="lazy" />
-              <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-black/70 px-1 py-0.5 opacity-0 transition group-hover:opacity-100">
-                <div className="flex gap-1">
-                  <button type="button" onClick={() => moveTo(i, i - 1)} disabled={i === 0} className="inline-flex items-center justify-center w-10 h-10 text-3xl leading-none text-white disabled:opacity-30">{'<'}</button>
-                  <button type="button" onClick={() => moveTo(i, i + 1)} disabled={i === images.length - 1} className="px-1 text-3xl text-white disabled:opacity-30">{'>'}</button>
-                </div>
-                <div className="flex gap-1">
-                  {!img.is_primary && <button type="button" onClick={() => makePrimary(i)} className="px-1 text-3xl text-yellow-300" title="Головне">★</button>}
-                  <button type="button" onClick={() => remove(i)} className="px-1 text-3xl text-red-400" title="Видалити">✕</button>
-                </div>
+        <>
+          {activeImages.length > 0 && (
+            <div>
+              <p className="mb-2 text-sm font-medium text-gray-300">Активні зображення</p>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
+                {activeImages.map((img, i) => (
+                  <div key={img.id ?? `${img.url}-${i}`} draggable onDragStart={() => setDragIdx(i)}
+                    onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragIdx !== null) moveTo(dragIdx, i); setDragIdx(null); }}
+                    className={`group relative overflow-hidden rounded border-2 bg-gray-800 ${img.is_primary ? 'border-blue-500' : 'border-transparent'}`}>
+                    <img src={img.url} alt="" className="aspect-square w-full object-cover" loading="lazy" />
+                    <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-black/70 px-1 py-0.5 opacity-0 transition group-hover:opacity-100">
+                      <div className="flex gap-1">
+                        <button type="button" onClick={() => moveTo(i, i - 1)} disabled={i === 0} className="inline-flex items-center justify-center w-10 h-10 text-3xl leading-none text-white disabled:opacity-30">{'<'}</button>
+                        <button type="button" onClick={() => moveTo(i, i + 1)} disabled={i === activeImages.length - 1} className="px-1 text-3xl text-white disabled:opacity-30">{'>'}</button>
+                      </div>
+                      <div className="flex gap-1">
+                        {!img.is_primary && <button type="button" onClick={() => makePrimary(i)} className="px-1 text-3xl text-yellow-300" title="Головне">★</button>}
+                        {img.is_supplier_image ? (
+                          <button type="button" onClick={() => hide(i)} className="px-1 text-lg text-orange-400" title="Приховати (постачальник)">🙈</button>
+                        ) : (
+                          <button type="button" onClick={() => remove(i)} className="px-1 text-3xl text-red-400" title="Видалити">✕</button>
+                        )}
+                      </div>
+                    </div>
+                    {img.is_primary && <span className="absolute left-1 top-1 rounded bg-blue-600 px-1 text-[10px] font-semibold text-white">Головне</span>}
+                  </div>
+                ))}
               </div>
-              {img.is_primary && <span className="absolute left-1 top-1 rounded bg-blue-600 px-1 text-[10px] font-semibold text-white">Головне</span>}
             </div>
-          ))}
-        </div>
+          )}
+
+          {suppressedImages.length > 0 && (
+            <div className="mt-4 rounded border border-dashed border-yellow-600/40 bg-yellow-900/20 p-3">
+              <p className="mb-2 text-sm font-medium text-yellow-400">Приховані адміністратором</p>
+              <p className="mb-2 text-xs text-yellow-500/70">Ці зображення є у постачальника, але приховані. Вони не показуються покупцям.</p>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
+                {suppressedImages.map((img, i) => (
+                  <div key={img.id ?? `${img.url}-${i}`}
+                    className="relative overflow-hidden rounded border-2 border-yellow-600/40 bg-gray-800 opacity-60">
+                    <img src={img.url} alt="" className="aspect-square w-full object-cover" loading="lazy" />
+                    <div className="absolute inset-x-0 bottom-0 flex items-center justify-center bg-black/70 px-1 py-0.5">
+                      <button type="button" onClick={() => restore(i)} className="rounded bg-yellow-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-yellow-500" title="Відновити">
+                        Відновити
+                      </button>
+                    </div>
+                    <span className="absolute left-1 top-1 rounded bg-yellow-600/80 px-1 text-[10px] font-semibold text-white">Приховано</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
       )}
-      <p className="text-xs text-gray-500">Перетягніть, щоб змінити порядок. ★ — головне зображення.</p>
+      <p className="text-xs text-gray-500">
+        Перетягніть, щоб змінити порядок. ★ — головне зображення. Для зображень постачальника — приховати 🙈, для ручних — ✕ видалити.
+      </p>
     </div>
   );
 }

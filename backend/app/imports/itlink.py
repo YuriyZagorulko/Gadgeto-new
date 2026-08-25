@@ -123,13 +123,18 @@ class ITLinkImporter:
             raise FileNotFoundError(f"Каталог IT-Link не знайдено: {xml_path}")
         return ET.parse(xml_path)
 
-    def parse_offers(self, tree: ET.ElementTree) -> List[NormalizedProduct]:
+    def parse_offers(self, tree: ET.ElementTree):
+        """Parse XML offers, yielding NormalizedProduct one at a time.
+
+        Yields NormalizedProduct for each valid offer.  The caller must
+        iterate the generator to consume products — no full product list
+        is retained in memory.
+        """
         root = tree.getroot()
         xml_categories = {cat.attrib["id"]: cat.text for cat in root.findall(".//category")}
         offers = root.findall(".//offer")
         self.stats.total = len(offers)
 
-        products = []
         seen_skus = set()
 
         for offer in offers:
@@ -233,14 +238,13 @@ class ITLinkImporter:
                 seo_description=seo.get("meta_description", ""),
                 focus_keyphrase=seo.get("focus_keyphrase", ""),
             )
-            products.append(product)
-
-        self.stats.processed = len(products)
-        self.stats.products = products
-        return products
+            yield product
 
     def run(self, import_type: str = "full") -> ImportStats:
         xml_path = self.feed_path or self.download_feed()
         tree = self.parse_feed(xml_path)
-        self.parse_offers(tree)
+        # Store the generator — the caller (importer_service) will iterate it
+        # product-by-product, so only one NormalizedProduct is in memory at a time.
+        self.stats.products = self.parse_offers(tree)
+        return self.stats
         return self.stats

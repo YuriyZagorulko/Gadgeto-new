@@ -100,7 +100,7 @@ async def list_products(page: int = Query(1,ge=1), per_page: int = Query(20,ge=1
         SELECT p.id, p.sku, p.name, p.slug, p.price, p.old_price, p.stock_status,
                p.stock_qty, p.status, p.is_active, p.updated_at,
                b.name as brand_name,
-               (SELECT url FROM product_images WHERE product_id=p.id AND is_primary=true LIMIT 1) as image,
+               (SELECT url FROM product_images WHERE product_id=p.id AND is_primary=true AND is_suppressed=FALSE LIMIT 1) as image,
                (SELECT string_agg(c.name, ', ') FROM product_categories pc JOIN categories c ON c.id=pc.category_id WHERE pc.product_id=p.id) as categories
         FROM products p LEFT JOIN brands b ON b.id=p.brand_id
         WHERE {where} ORDER BY {order_by} LIMIT %s OFFSET %s
@@ -124,7 +124,7 @@ async def get_product(pid: int, user: dict = Depends(require_admin)):
         WHERE pa.product_id=%s ORDER BY a.name
     """, (pid,))
     attrs = cur.fetchall()
-    cur.execute("SELECT id, url, sort_order, is_primary FROM product_images WHERE product_id=%s ORDER BY sort_order", (pid,))
+    cur.execute("SELECT id, url, sort_order, is_primary FROM product_images WHERE product_id=%s AND is_suppressed=FALSE ORDER BY sort_order", (pid,))
     imgs = cur.fetchall()
     conn.close()
     return {"product": p, "categories": cats, "attributes": attrs, "images": imgs}

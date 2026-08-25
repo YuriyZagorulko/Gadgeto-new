@@ -216,10 +216,14 @@ def run_full_import(supplier_code, job_id, supplier_id, import_type="full"):
                               progress_cb=progress,
                               mark_removed_products=True,
                               image_storage_mode=image_storage_mode)
-        runner.total = len(normalized_products) or stats.processed or 0
+        # Use stats.total as the upper bound for progress (generators don't
+        # expose len()).  The final processed count will be at most stats.total.
+        runner.total = stats.total or stats.processed or 0
         runner.initialize()
 
         for prod in normalized_products:
+            if prod is None:
+                continue
             runner.persist_product(prod)
             runner.processed += 1
             if runner.processed % PROGRESS_EVERY == 0 or runner.processed == runner.total:

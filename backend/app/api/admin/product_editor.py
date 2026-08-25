@@ -63,7 +63,7 @@ def get_editor(product_id: int, user: dict = Depends(require_admin)):
                 meta = {}
 
         cur.execute(
-            """SELECT id, url, alt, sort_order, is_primary FROM product_images
+            """SELECT id, url, alt, sort_order, is_primary, is_supplier_image, is_suppressed FROM product_images
                WHERE product_id=%s ORDER BY sort_order, id""", (product_id,))
         images = cur.fetchall()
 
@@ -123,6 +123,11 @@ def _ed_conn():
     c = _pg.connect(url)
     c.autocommit = True
     return c
+
+
+def _ed_cursor(con):
+    """Return a RealDictCursor for the editor connection."""
+    return con.cursor(cursor_factory=_pg.extras.RealDictCursor)
 
 
 def _tcols(cur, table):
@@ -267,36 +272,94 @@ async def ed_attributes(product_id: int, payload: dict = _Body(...), _u=Depends(
 async def ed_images(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     rows = payload.get("images") or []
     con = _ed_conn()
-    cur = con.cursor()
-    cur.execute("SELECT id, url FROM product_images WHERE product_id=%s", (product_id,))
-    existing = {u: i for i, u in cur.fetchall()}
+    cur = _ed_cursor(con)
+
+    # Fetch existing images with their type flags
+    cur.execute(
+        "SELECT id, url, is_supplier_image, is_suppressed FROM product_images WHERE product_id=%s",
+        (product_id,),
+    )
+    existing_rows = cur.fetchall()
+    existing_by_url = {}
+    for r in existing_rows:
+        existing_by_url[r["url"]] = {
+            "id": r["id"],
+            "is_supplier_image": r["is_supplier_image"],
+            "is_suppressed": r["is_suppressed"],
+        }
+
     keep_urls = []
     order = 0
+
     for r in rows:
         url = (r.get("url") or "").strip()
         if not url:
             continue
         keep_urls.append(url)
-        eid = existing.get(url)
-        if eid:
-            cur.execute("UPDATE product_images SET sort_order=%s WHERE id=%s", (order, eid))
-        else:
+
+        existing = existing_by_url.get(url)
+        is_payload_suppressed = r.get("is_suppressed", False)
+        if existing:
+            # Existing image — update sort_order
             cur.execute(
-                "INSERT INTO product_images (product_id, url, sort_order, is_primary) VALUES (%s,%s,%s,FALSE)",
+                "UPDATE product_images SET sort_order=%s WHERE id=%s",
+                (order, existing["id"]),
+            )
+            # Handle suppress/restore based on payload intent
+            if existing["is_suppressed"] and not is_payload_suppressed:
+                # Was suppressed, now included as active → unsuppress
+                cur.execute(
+                    "UPDATE product_images SET is_suppressed=FALSE WHERE id=%s",
+                    (existing["id"],),
+                )
+            elif not existing["is_suppressed"] and is_payload_suppressed:
+                # Was active, now marked as suppressed → suppress
+                cur.execute(
+                    "UPDATE product_images SET is_suppressed=TRUE WHERE id=%s",
+                    (existing["id"],),
+                )
+        else:
+            # New image (manual addition) — insert as manual, active
+            cur.execute(
+                "INSERT INTO product_images (product_id, url, sort_order, is_primary, is_supplier_image, is_suppressed) VALUES (%s,%s,%s,FALSE,FALSE,FALSE)",
                 (product_id, url, order),
             )
         order += 1
+
     cur.execute("UPDATE product_images SET is_primary=FALSE WHERE product_id=%s", (product_id,))
     prim = next((r.get("url").strip() for r in rows if r.get("is_primary") and r.get("url")), None)
     if prim:
         cur.execute("UPDATE product_images SET is_primary=TRUE WHERE product_id=%s AND url=%s", (product_id, prim))
     elif order:
-        cur.execute("SELECT id FROM product_images WHERE product_id=%s ORDER BY sort_order, id LIMIT 1", (product_id,))
+        cur.execute("SELECT id FROM product_images WHERE product_id=%s AND is_suppressed=FALSE ORDER BY sort_order, id LIMIT 1", (product_id,))
         first = cur.fetchone()
         if first:
-            cur.execute("UPDATE product_images SET is_primary=TRUE WHERE id=%s", (first[0],))
-    if keep_urls:
-        cur.execute("DELETE FROM product_images WHERE product_id=%s AND NOT (url = ANY(%s))", (product_id, keep_urls))
+            cur.execute("UPDATE product_images SET is_primary=TRUE WHERE id=%s", (first["id"],))
+
+    # Process images NOT in the desired list:
+    #   - Supplier images → mark as suppressed (not deleted)
+    #   - Manual images  → delete
+    suppressed_ids = []
+    delete_ids = []
+    for url, existing in existing_by_url.items():
+        if url not in keep_urls:
+            if existing["is_supplier_image"] and not existing["is_suppressed"]:
+                suppressed_ids.append(existing["id"])
+            elif not existing["is_supplier_image"]:
+                delete_ids.append(existing["id"])
+            # If already suppressed and not in keep → keep suppressed
+
+    if suppressed_ids:
+        cur.execute(
+            "UPDATE product_images SET is_suppressed=TRUE WHERE id = ANY(%s)",
+            (suppressed_ids,),
+        )
+    if delete_ids:
+        cur.execute(
+            "DELETE FROM product_images WHERE id = ANY(%s)",
+            (delete_ids,),
+        )
+
     cur.close()
     con.close()
     return {"ok": True}
