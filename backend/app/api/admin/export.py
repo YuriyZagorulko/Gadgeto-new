@@ -249,3 +249,24 @@ async def refresh_taxonomy(code: str, user=Depends(require_admin)):
         raise HTTPException(status_code=501, detail=str(e))
     finally:
         conn.close()
+
+
+# ── Validation ───────────────────────────────────────────────────────────────
+
+
+class ValidateRequest(BaseModel):
+    product_id: int
+    public_base_url: Optional[str] = None
+
+
+@router.post("/export/channels/{code}/validate")
+async def validate_product_endpoint(
+        code: str,
+        body: ValidateRequest,
+        user=Depends(require_admin),
+):
+    """Validate a single product for export to the channel."""
+    from app.channels.validation import validate_product as _validate
+    result = _validate(body.product_id, channel_code=code,
+                       public_base_url=body.public_base_url)
+    return result

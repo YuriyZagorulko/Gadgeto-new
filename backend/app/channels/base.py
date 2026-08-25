@@ -1,9 +1,14 @@
 """Channel adapter abstraction.
 
-A ChannelAdapter encapsulates every marketplace-specific behaviour:
-taxonomy refresh, validation, transformation, publishing and error
-classification.  The sync engine talks ONLY to this interface, so future
-channels (Prom.ua, Amazon, ...) plug in without touching catalog code.
+A ChannelAdapter encapsulates every marketplace-specific transport/API
+behaviour: publishing, commercial updates, unpublishing, status lookup
+and error classification.  The sync engine talks ONLY to this interface,
+so future channels (Prom.ua, Amazon, ...) plug in without touching
+catalog code.
+
+Operations that are already implemented as generic channel-agnostic
+services (validation, transformation, taxonomy refresh) live outside
+the adapter — see validation.py, transformer.py, taxonomy.py.
 
 Phase 1: interface only — no marketplace API logic is implemented yet.
 Concrete endpoints will be added in the Rozetka integration phase once the
@@ -15,25 +20,15 @@ from typing import Any, Optional
 
 
 class ChannelAdapter(ABC):
-    """Contract every marketplace adapter must satisfy."""
+    """Contract every marketplace adapter must satisfy.
+
+    The adapter is responsible only for transport and API-specific
+    wire format.  Generic operations (validation, transformation,
+    taxonomy) are handled by dedicated services.
+    """
 
     #: Stable channel code, e.g. "rozetka" (matches channels.code).
     channel_code: str
-
-    @abstractmethod
-    def refresh_taxonomy(self) -> Any:
-        """Fetch/refresh the marketplace category & attribute dictionary
-        into the local channel_external_* reference tables."""
-
-    @abstractmethod
-    def validate_product(self, product_id: int) -> list[dict]:
-        """Local pre-flight validation.  Returns a list of issue dicts:
-        [{"code": ..., "message": ..., "details": {...}}, ...] (empty = valid)."""
-
-    @abstractmethod
-    def transform_product(self, product_id: int) -> dict:
-        """Map the internal product into this channel's representation.
-        Must never mutate internal catalog data."""
 
     @abstractmethod
     def push_product(self, listing) -> dict:
@@ -67,6 +62,21 @@ class RozetkaAdapter(ChannelAdapter):
     """
 
     channel_code = "rozetka"
+
+    def push_product(self, listing) -> dict:
+        raise NotImplementedError("RozetkaAdapter.push_product — API credentials required")
+
+    def update_price_stock(self, listing) -> dict:
+        raise NotImplementedError("RozetkaAdapter.update_price_stock — API credentials required")
+
+    def unpublish(self, listing) -> dict:
+        raise NotImplementedError("RozetkaAdapter.unpublish — API credentials required")
+
+    def fetch_listing_status(self, listing) -> Optional[str]:
+        raise NotImplementedError("RozetkaAdapter.fetch_listing_status — API credentials required")
+
+    def classify_error(self, exc: Exception) -> tuple[str, bool]:
+        raise NotImplementedError("RozetkaAdapter.classify_error — API credentials required")
 
 
 def get_adapter(channel_code: str) -> ChannelAdapter:
