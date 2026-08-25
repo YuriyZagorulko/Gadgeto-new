@@ -58,21 +58,20 @@ def get_taxonomy_service(channel_code: str) -> TaxonomyService:
 
 
 def get_taxonomy_stats(cur, channel_id: int) -> dict:
-    """Return current taxonomy counts for a channel (independent of API)."""
     cur.execute(
-        "SELECT count(*) FROM channel_external_categories WHERE channel_id = %s",
+        "SELECT count(*) AS c FROM channel_external_categories WHERE channel_id = %s",
         (channel_id,),
     )
     categories = cur.fetchone()["c"]
 
     cur.execute(
-        "SELECT count(*) FROM channel_external_attributes WHERE channel_id = %s",
+        "SELECT count(*) AS c FROM channel_external_attributes WHERE channel_id = %s",
         (channel_id,),
     )
     attributes = cur.fetchone()["c"]
 
     cur.execute(
-        "SELECT count(*) FROM channel_external_values WHERE channel_id = %s",
+        "SELECT count(*) AS c FROM channel_external_values WHERE channel_id = %s",
         (channel_id,),
     )
     values = cur.fetchone()["c"]
