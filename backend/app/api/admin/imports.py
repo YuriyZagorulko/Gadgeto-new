@@ -146,13 +146,25 @@ async def run_import_job(
     background: BackgroundTasks,
     user: dict = Depends(require_admin),
 ):
-    """Launch the existing import runner in the background."""
+    """Launch the existing import runner in a background thread."""
     if data.import_type not in IMPORT_TYPES:
         raise HTTPException(status_code=400, detail="Невірний тип імпорту")
     if data.supplier_code not in SYSTEM_SUPPLIERS:
         raise HTTPException(status_code=404, detail="Постачальника з таким кодом не знайдено")
     conn, cur = db()
     try:
+        # Guard: no concurrent import for the same supplier
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM import_jobs j"
+            " JOIN suppliers s ON s.id=j.supplier_id"
+            " WHERE s.code=%s AND j.status IN ('QUEUED','RUNNING')",
+            (data.supplier_code,),
+        )
+        if cur.fetchone()["c"]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Імпорт {data.supplier_code} вже виконується",
+            )
         cur.execute("SELECT id, name FROM suppliers WHERE code = %s", (data.supplier_code,))
         supplier = cur.fetchone()
     finally:
@@ -160,7 +172,9 @@ async def run_import_job(
     if not supplier:
         raise HTTPException(status_code=404, detail="Постачальника з таким кодом не знайдено")
 
-    background.add_task(run_import, data.supplier_code, data.import_type)
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, run_import, data.supplier_code, data.import_type)
     return {"ok": True, "detail": f"Імпорт '{data.import_type}' для {supplier['name']} запущено"}
 
 
@@ -170,7 +184,7 @@ async def start_import(
     background: BackgroundTasks,
     user: dict = Depends(require_admin),
 ):
-    """Create an import job and start it in the background with full persistence."""
+    """Create an import job and start it in a background thread."""
     if data.import_type not in IMPORT_TYPES:
         raise HTTPException(status_code=400, detail="Невірний тип імпорту")
     if data.supplier_code not in SYSTEM_SUPPLIERS:
@@ -208,7 +222,15 @@ async def start_import(
 
     from app.imports.importer_service import run_full_import
 
-    background.add_task(run_full_import, data.supplier_code, job_id, supplier["id"], data.import_type)
+    # Offload the blocking import to a thread pool so the async event
+    # loop remains free to serve HTTP requests (health, admin API, …).
+    # BackgroundTasks runs synchronously in the event loop and would
+    # block all request handling for the duration of the import.
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(
+        None, run_full_import, data.supplier_code, job_id, supplier["id"], data.import_type,
+    )
     return {"ok": True, "job_id": job_id, "detail": f"Імпорт {data.supplier_code} запущено (job #{job_id})"}
 
 
@@ -494,10 +516,17 @@ async def run_all_imports(
     finally:
         conn.close()
 
-    # Starlette executes background tasks sequentially in insertion order, so
-    # suppliers are imported one-by-one without concurrent runs.
-    for job_id, code, t in scheduled:
-        background.add_task(_run_tracked_import, job_id, code, t)
+    # Offload each scheduled job to the thread pool via a single wrapper
+    # that runs all jobs sequentially (the DB-level concurrency guard
+    # prevents duplicate jobs).
+    import asyncio
+    loop = asyncio.get_event_loop()
+
+    def _run_all():
+        for job_id, code, t in scheduled:
+            _run_tracked_import(job_id, code, t)
+
+    loop.run_in_executor(None, _run_all)
 
     verb = "Імпорт" if data.action == "import" else "Оновлення"
     names = ", ".join(s["name"] for s in suppliers)

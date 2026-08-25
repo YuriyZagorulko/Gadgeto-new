@@ -324,23 +324,39 @@ class ImportRunner:
     def _upsert_images(self, cur, product_id, images):
         if not images:
             return
-        for i, img_url in enumerate(images):
+
+        # Collect URLs to import (strip whitespace, filter empty)
+        urls_to_import = []
+        for img_url in images:
             if img_url and img_url.strip():
-                url = img_url.strip()
-                media_id = None
-                if self.image_storage_mode == "local" and (url.startswith("http://") or url.startswith("https://")):
-                    from app.imports.image_helper import download_supplier_image
-                    result = download_supplier_image(url, cur)
-                    if result:
-                        url = result["url"]
-                        media_id = result["media_id"]
-                    else:
-                        self.warnings.append(f"Не вдалося завантажити зображення: {url}")
-                        # Fall back to storing the supplier URL so the product
-                        # still has an image reference
-                cur.execute(
-                    """INSERT INTO product_images (product_id, url, media_id, is_primary,
-                                                   sort_order, created_at, updated_at)
-                       VALUES (%s,%s,%s,%s,%s,NOW(),NOW())""",
-                    (product_id, url, media_id, i == 0, i),
-                )
+                urls_to_import.append(img_url.strip())
+
+        if not urls_to_import:
+            return
+
+        # Delete existing images whose URLs match the current import set.
+        # This prevents duplicate product_image rows on re-import while
+        # preserving any manually added images with different URLs.
+        cur.execute(
+            "DELETE FROM product_images WHERE product_id = %s AND url = ANY(%s)",
+            (product_id, urls_to_import),
+        )
+
+        for i, url in enumerate(urls_to_import):
+            media_id = None
+            if self.image_storage_mode == "local" and (url.startswith("http://") or url.startswith("https://")):
+                from app.imports.image_helper import download_supplier_image
+                result = download_supplier_image(url, cur)
+                if result:
+                    url = result["url"]
+                    media_id = result["media_id"]
+                else:
+                    self.warnings.append(f"Не вдалося завантажити зображення: {url}")
+                    # Fall back to storing the supplier URL so the product
+                    # still has an image reference
+            cur.execute(
+                """INSERT INTO product_images (product_id, url, media_id, is_primary,
+                                               sort_order, created_at, updated_at)
+                   VALUES (%s,%s,%s,%s,%s,NOW(),NOW())""",
+                (product_id, url, media_id, i == 0, i),
+            )

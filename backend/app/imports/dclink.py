@@ -164,18 +164,44 @@ class DCLinkImporter:
         return products
 
     def _get_products_content(self, sid: str, product_ids: list) -> list:
-        """Download full product details (attributes, images, descriptions)."""
+        """Download full product details (attributes, images, descriptions).
+
+        The info-card endpoint URL changed; try the current known path
+        first, fall back to the legacy path.  If neither works returns an
+        empty list so the caller can still import basic product data
+        (name, price, stock, full_image) from the list endpoint alone.
+        """
         all_content = []
         batch_size = 500
         for i in range(0, len(product_ids), batch_size):
             batch = product_ids[i:i + batch_size]
-            response = requests.post(
+            # Try current endpoint first (product/info), then legacy (info-card)
+            urls = [
+                f"{BASE_URL}/product/info/{sid}",
                 f"{BASE_URL}/info-card/{sid}",
-                json={"lang": "ua", "ids": batch},
-                timeout=60,
-            )
-            response.raise_for_status()
-            all_content.extend(response.json()["result"])
+            ]
+            fetched = None
+            for url in urls:
+                try:
+                    response = requests.post(
+                        url,
+                        json={"lang": "ua", "ids": batch},
+                        timeout=60,
+                    )
+                    if response.status_code == 200:
+                        fetched = response.json().get("result")
+                        if fetched is not None:
+                            break
+                except requests.RequestException:
+                    continue
+            if fetched is None:
+                # Neither endpoint worked — log a warning and continue
+                self.stats.warnings.append(
+                    f"Не вдалося отримати деталі товарів (info endpoint) для {len(batch)} продуктів"
+                )
+                continue
+            if isinstance(fetched, list):
+                all_content.extend(fetched)
             time.sleep(0.2)
         return all_content
 
@@ -188,12 +214,20 @@ class DCLinkImporter:
         """
         sid = self._login()
         dc_categories = self._get_categories(sid)
-        dc_cat_map = {str(c["id"]): c["name"] for c in dc_categories}
+        dc_cat_map = {}
+        for c in dc_categories:
+            cid = c.get("categoryID") or c.get("id")
+            cname = c.get("name") or ""
+            if cid:
+                dc_cat_map[str(cid)] = cname
 
         all_product_ids = []
         for cat_id in CATEGORY_IDS:
             chunk = self._get_products(sid, cat_id)
-            all_product_ids.extend(item["id"] for item in chunk)
+            for item in chunk:
+                item_id = item.get("productID") or item.get("id")
+                if item_id:
+                    all_product_ids.append(item_id)
 
         content = self._get_products_content(sid, all_product_ids)
         return content, dc_cat_map
