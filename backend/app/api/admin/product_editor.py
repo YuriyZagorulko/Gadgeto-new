@@ -73,6 +73,10 @@ def get_editor(product_id: int, user: dict = Depends(require_admin)):
         category_ids = [r["category_id"] for r in cur.fetchall()]
 
         cur.execute(
+            "SELECT id, name, parent_id FROM categories ORDER BY sort_order, name")
+        all_categories = cur.fetchall()
+
+        cur.execute(
             """SELECT pa.id, pa.attribute_id, a.name AS attribute_name,
                       pa.attribute_value_id, av.value AS attribute_value,
                       pa.value_text
@@ -96,6 +100,7 @@ def get_editor(product_id: int, user: dict = Depends(require_admin)):
             "product": product,
             "images": images,
             "category_ids": category_ids,
+            "categories": all_categories,
             "attributes": attributes,
             "reviews": reviews,
             "variations": variations,

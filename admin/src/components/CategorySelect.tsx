@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 export interface CatOption {
   id: number;
@@ -9,8 +9,11 @@ export interface CatOption {
 
 /**
  * Searchable multi-select for categories with removable chips.
- * Fetches the full category tree once (147 rows — fine), filters client-side,
- * shows hierarchical "Parent → Child" labels. Replaces the checkbox grid.
+ * Receives the full category list as options, filters client-side,
+ * shows hierarchical "Parent → Child" labels.
+ *
+ * The dropdown uses position:fixed so it never gets clipped by parent
+ * overflow/scroll containers and always stacks above subsequent blocks.
  */
 export default function CategorySelect({
   value,
@@ -23,36 +26,66 @@ export default function CategorySelect({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const boxRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
 
+  // Close dropdown on click outside
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
     };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
   }, [open]);
 
+  // Position the dropdown fixed relative to viewport, tracking button position
+  const updateMenuPosition = useCallback(() => {
+    if (!buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    setMenuStyle({
+      position: 'fixed',
+      top: `${rect.bottom + 4}px`,
+      left: `${rect.left}px`,
+      width: `${rect.width}px`,
+      zIndex: 9999,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updateMenuPosition();
+    window.addEventListener('scroll', updateMenuPosition, true);
+    window.addEventListener('resize', updateMenuPosition);
+    return () => {
+      window.removeEventListener('scroll', updateMenuPosition, true);
+      window.removeEventListener('resize', updateMenuPosition);
+    };
+  }, [open, updateMenuPosition]);
+
   const byId = useMemo(() => new Map(options.map((c) => [c.id, c])), [options]);
-  const path = (id: number): string => {
+
+  const path = useCallback((id: number): string => {
     const c = byId.get(id);
     if (!c) return `#${id}`;
     return c.parent_id ? `${path(c.parent_id)} → ${c.name}` : c.name;
-  };
+  }, [byId]);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
     const list = q ? options.filter((c) => path(c.id).toLowerCase().includes(q)) : options;
     return list.slice(0, 60);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [options, query, byId]);
+  }, [options, query, path]);
 
-  const toggle = (id: number) =>
+  const toggle = useCallback((id: number) => {
     onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id]);
+  }, [value, onChange]);
 
   return (
-    <div className="relative" ref={boxRef}>
+    <div className="relative" ref={containerRef}>
       {value.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-2">
           {value.map((id) => (
@@ -63,19 +96,40 @@ export default function CategorySelect({
           ))}
         </div>
       )}
-      <button type="button" onClick={() => setOpen(!open)} className="w-full text-left input-field flex justify-between items-center">
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full text-left input-field flex justify-between items-center"
+      >
         <span className="text-gray-400">+ Обрати категорії…</span>
         <span className="text-gray-500">▾</span>
       </button>
       {open && (
-        <div className="absolute z-20 mt-1 w-full  border rounded shadow-lg max-h-72 overflow-auto">
-          <div className="sticky top-0 p-2 border-b">
-            <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Пошук категорій…" className="input-field text-sm w-full" />
+        <div style={menuStyle} className="border rounded shadow-lg max-h-72 overflow-auto bg-white">
+          <div className="sticky top-0 p-2 border-b bg-white">
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Пошук категорій…"
+              className="input-field text-sm w-full"
+            />
           </div>
-          {results.length === 0 && <div className="p-3 text-sm text-gray-500">Нічого не знайдено</div>}
+          {results.length === 0 && (
+            <div className="p-3 text-sm text-gray-500">Нічого не знайдено</div>
+          )}
           {results.map((c) => (
-            <label key={c.id} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-800 cursor-pointer">
-              <input type="checkbox" checked={value.includes(c.id)} onChange={() => toggle(c.id)} className="rounded bg-gray-800 border-gray-600" />
+            <label
+              key={c.id}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-100 cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                checked={value.includes(c.id)}
+                onChange={() => toggle(c.id)}
+                className="rounded border-gray-300"
+              />
               <span>{path(c.id)}</span>
             </label>
           ))}
