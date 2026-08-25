@@ -6,6 +6,9 @@ No existing column is modified or dropped; existing product data stays intact.
 Applied manually (psql) - see project convention: migrations are applied to the
 host database; this file documents the schema for fresh environments.
 """
+from alembic import op
+import sqlalchemy as sa
+
 revision: str = '007_product_editor'
 down_revision: str = '006_carts_imports'
 
@@ -54,3 +57,17 @@ CREATE TABLE IF NOT EXISTS product_variations (
 );
 CREATE INDEX IF NOT EXISTS ix_product_variations_product ON product_variations(product_id);
 """
+
+
+def upgrade() -> None:
+    """Execute the idempotent SQL (safe to re-run on a DB that already has these
+    columns/tables — all DDL uses IF NOT EXISTS / ADD COLUMN IF NOT EXISTS)."""
+    op.execute(sa.text(UPGRADE_SQL))
+
+
+def downgrade() -> None:
+    """Historically this was a manual additive migration with no defined
+    rollback.  The migration added columns and tables that other migrations
+    and application code now depend on.  Rollback is unsafe and intentionally
+    not implemented."""
+    pass

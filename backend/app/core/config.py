@@ -17,6 +17,10 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # The shared root .env also carries frontend-only keys (NEXT_PUBLIC_*)
+        # consumed by the Next.js builds.  They must not crash backend config
+        # loading for host-side tooling (alembic, scripts).
+        extra="ignore",
     )
 
     # Application

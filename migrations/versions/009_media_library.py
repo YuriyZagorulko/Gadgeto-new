@@ -6,6 +6,9 @@ Additive-only:
 - backfills media_files from existing locally-stored product_images
   (/media/... URLs); external URLs are NOT imported.
 """
+from alembic import op
+import sqlalchemy as sa
+
 revision: str = '009_media_library'
 down_revision: str = '008_review_user'
 
@@ -51,3 +54,16 @@ SET media_id = m.id
 FROM media_files m
 WHERE pi.url LIKE '/media/%' AND m.url = pi.url AND pi.media_id IS NULL;
 """
+
+
+def upgrade() -> None:
+    """Execute the idempotent SQL (additive, IF NOT EXISTS / ON CONFLICT DO NOTHING)."""
+    op.execute(sa.text(UPGRADE_SQL))
+
+
+def downgrade() -> None:
+    """Historically this was a manual additive migration with no defined
+    rollback.  The table, column, indexes and data backfill added here are
+    now depended upon by later migrations and application code.  Rollback is
+    intentionally not implemented."""
+    pass

@@ -15,6 +15,37 @@ from app.models.pricing import MarkupRule
 from app.models.url_alias import URLAlias
 from app.models.filter import CategoryFilter
 from app.models.product_relations import ProductRelated
+from app.models.channel import (
+    Channel,
+    ChannelSetting,
+    ChannelListing,
+    ChannelValidationIssue,
+    PublicationStatus,
+    ChannelSyncStatus,
+)
+from app.models.channel_sync import (
+    SyncRun,
+    SyncJob,
+    SyncLog,
+    SyncRunType,
+    SyncRunStatus,
+    SyncJobOperation,
+    SyncJobStatus,
+    SyncJobErrorType,
+    SyncLogLevel,
+)
+
+from app.models.channel_taxonomy import (
+    ChannelExternalCategory,
+    ChannelExternalAttribute,
+    ChannelExternalValue,
+)
+
+from app.models.channel_mapping import (
+    ChannelCategoryMapping,
+    ChannelAttributeMapping,
+    ChannelValueMapping,
+)
 
 __all__ = [
     "Base", "User", "UserRole", "UserStatus", "UserSession",
@@ -27,4 +58,11 @@ __all__ = [
     "Order", "OrderItem", "OrderEvent", "Payment", "ShippingAddress", "OrderStatus",
     "ImportJob", "ImportLog", "ImportJobStatus",
     "Setting", "MarkupRule", "URLAlias", "CategoryFilter", "ProductRelated",
+    "Channel", "ChannelSetting", "ChannelListing", "ChannelValidationIssue",
+    "PublicationStatus", "ChannelSyncStatus",
+    "SyncRun", "SyncJob", "SyncLog",
+    "SyncRunType", "SyncRunStatus", "SyncJobOperation", "SyncJobStatus",
+    "SyncJobErrorType", "SyncLogLevel",
+    "ChannelExternalCategory", "ChannelExternalAttribute", "ChannelExternalValue",
+    "ChannelCategoryMapping", "ChannelAttributeMapping", "ChannelValueMapping",
 ]

@@ -5,6 +5,9 @@ Additive-only migration:
 - password_reset_token_expires_at (nullable)
 """
 
+from alembic import op
+import sqlalchemy as sa
+
 revision: str = '011_password_reset'
 down_revision: str = '010_email_verification'
 
@@ -24,3 +27,13 @@ ALTER TABLE users
     DROP COLUMN IF EXISTS password_reset_token_hash,
     DROP COLUMN IF EXISTS password_reset_token_expires_at;
 """
+
+
+def upgrade() -> None:
+    """Execute the idempotent SQL (additive, IF NOT EXISTS)."""
+    op.execute(sa.text(UPGRADE_SQL))
+
+
+def downgrade() -> None:
+    """Reverse the additive changes using the existing DOWNGRADE_SQL constant."""
+    op.execute(sa.text(DOWNGRADE_SQL))

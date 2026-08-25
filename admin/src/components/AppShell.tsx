@@ -35,6 +35,14 @@ const navItems: NavItem[] = [
   { href: '/orders', label: 'Замовлення', icon: '🧾' },
   { href: '/users', label: 'Користувачі', icon: '👤' },
   { href: '/settings', label: 'Налаштування', icon: '⚙️' },
+  {
+    label: 'Експорт',
+    icon: '📤',
+    children: [
+      { href: '/export/settings', label: 'Налаштування' },
+      { href: '/export/rozetka', label: 'Rozetka' },
+    ],
+  },
 ];
 
 /** Routes that are reachable by URL but no longer have their own menu entry. */
