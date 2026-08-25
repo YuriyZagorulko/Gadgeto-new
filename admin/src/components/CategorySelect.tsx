@@ -68,8 +68,8 @@ export default function CategorySelect({
         <span className="text-gray-500">▾</span>
       </button>
       {open && (
-        <div className="absolute z-20 mt-1 w-full bg-gray-900 border border-gray-700 rounded shadow-lg max-h-72 overflow-auto">
-          <div className="sticky top-0 bg-gray-900 p-2 border-b border-gray-700">
+        <div className="absolute z-20 mt-1 w-full  border rounded shadow-lg max-h-72 overflow-auto">
+          <div className="sticky top-0 p-2 border-b">
             <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Пошук категорій…" className="input-field text-sm w-full" />
           </div>
           {results.length === 0 && <div className="p-3 text-sm text-gray-500">Нічого не знайдено</div>}

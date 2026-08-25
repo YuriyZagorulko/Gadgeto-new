@@ -77,7 +77,7 @@ export default function ImageManager({
         <input type="url" value={url} onChange={(e) => setUrl(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addUrl())}
           placeholder="https://… URL зображення"
-          className="flex-1 rounded border border-gray-600 bg-gray-800 px-2 py-1.5 text-sm text-white placeholder-gray-500" />
+          className="flex-1 rounded border px-2 py-1.5 text-sm text-white placeholder-gray-500" />
         <button type="button" onClick={addUrl} className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
           Додати URL
         </button>
