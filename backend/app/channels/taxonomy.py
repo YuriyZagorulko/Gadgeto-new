@@ -33,20 +33,18 @@ class TaxonomyService(ABC):
            errors, duration_seconds}"""
 
 
+from app.channels.rozetka.taxonomy import RozetkaTaxonomyService as _RozetkaTaxonomyService, RozetkaTaxonomyError
+
 class RozetkaTaxonomyService(TaxonomyService):
     """Rozetka implementation.
 
-    NOTE: The actual API client logic is deferred until authenticated
-    seller documentation/credentials become available.  This stub stores
-    no data and raises a clear error.
+    Fetches the full Rozetka taxonomy using the official Seller API
+    and persists it into the channel_external_* tables.
     """
 
     def refresh(self, channel_id: int, channel_code: str) -> dict:
-        raise NotImplementedError(
-            "Rozetka taxonomy refresh requires API credentials and verified "
-            "endpoint documentation.  Implement RozetkaAdapter.refresh_taxonomy "
-            "first."
-        )
+        svc = _RozetkaTaxonomyService()
+        return svc.refresh(channel_id=channel_id, channel_code=channel_code)
 
 
 def get_taxonomy_service(channel_code: str) -> TaxonomyService:

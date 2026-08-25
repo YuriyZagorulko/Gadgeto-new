@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     SUPPLIER_DCLINK_LOGIN: str = Field(default="")
     SUPPLIER_DCLINK_PASSWORD: str = Field(default="")
 
+    # Rozetka Marketplace API
+    ROZETKA_API_URL: str = Field(default="https://api-seller.rozetka.com.ua")
+    ROZETKA_SELLER_USERNAME: str = Field(default="")
+    ROZETKA_SELLER_PASSWORD: str = Field(default="")
+
     # Supplier feeds (temporary working storage path)
     SUPPLIER_FEEDS_DIR: str = Field(default="/data/feeds")
 
