@@ -149,8 +149,20 @@ export default function RozetkaOverviewPage() {
 
       {/* Actions */}
       <div className="flex flex-wrap gap-3">
-        <Button disabled>Валідувати каталог</Button>
+                <Button disabled>Валідувати каталог</Button>
         <Button disabled>Синхронізувати зараз</Button>
+        <a
+          href="/export/rozetka/mapping"
+          className="inline-flex items-center justify-center rounded-md bg-white border border-gray-300 px-3 py-1.5 text-sm text-gray-900 hover:bg-gray-50"
+        >
+          Маппинг
+        </a>
+        <a
+          href="/export/rozetka/taxonomy"
+          className="inline-flex items-center justify-center rounded-md bg-white border border-gray-300 px-3 py-1.5 text-sm text-gray-900 hover:bg-gray-50"
+        >
+          Таксономия
+        </a>
         <a
           href="/export/rozetka/products"
           className="inline-flex items-center justify-center rounded-md bg-white border border-gray-300 px-3 py-1.5 text-sm text-gray-900 hover:bg-gray-50"

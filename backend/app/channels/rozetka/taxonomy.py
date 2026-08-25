@@ -14,7 +14,7 @@ Authentication: Bearer token obtained from POST /sites.
 import json
 import time
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 import psycopg2
@@ -42,11 +42,16 @@ class RozetkaTaxonomyService:
         self._http_client = http_client or httpx.Client(timeout=30.0)
         self._base_url = ROZETKA_API_URL
 
-    def refresh(self, channel_id: int, channel_code: str = "rozetka") -> dict:
+    def refresh(self, channel_id: int, channel_code: str = "rozetka",
+                progress_cb: Optional[Callable] = None) -> dict:
         """Fetch the full Rozetka taxonomy and store it locally.
 
+        Optional `progress_cb(stage, processed, total, message)` is invoked to
+        report operational progress (used by the background taxonomy runner).
         Returns a stats dict with counts of created/updated records.
         """
+        if progress_cb:
+            progress_cb("init", 0, 0, "Taxonomy refresh started")
         auth = RozetkaAuthClient()
         try:
             result = auth.authenticate()
@@ -66,6 +71,8 @@ class RozetkaTaxonomyService:
             "values_created": 0, "values_updated": 0,
             "errors": 0, "duration_seconds": 0.0,
         }
+        if progress_cb:
+            progress_cb("auth", 1, 1, "Authentication successful")
 
         conn = psycopg2.connect(DB)
         conn.autocommit = True
@@ -73,9 +80,14 @@ class RozetkaTaxonomyService:
         now = datetime.utcnow()
 
         try:
-            cat_stats = self._fetch_categories(channel_id, headers, cur, now)
+            cat_stats = self._fetch_categories(channel_id, headers, cur, now,
+                                               progress_cb=progress_cb)
             stats["categories_created"] = cat_stats["created"]
             stats["categories_updated"] = cat_stats["updated"]
+            if progress_cb:
+                progress_cb("categories",
+                            cat_stats["total"], cat_stats["total"],
+                            f"Categories completed: {cat_stats['total']}")
 
             cur.execute(
                 "SELECT external_id FROM channel_external_categories WHERE channel_id = %s",
@@ -83,15 +95,30 @@ class RozetkaTaxonomyService:
             )
             category_ids = [row["external_id"] for row in cur.fetchall()]
 
-            for ext_cat_id in category_ids:
+            total_cats = len(category_ids)
+            for idx, ext_cat_id in enumerate(category_ids, start=1):
+                if progress_cb:
+                    progress_cb("attributes", idx - 1, total_cats,
+                                f'Fetching attributes for category "{ext_cat_id}"')
                 try:
                     attr_stats = self._fetch_attributes_for_category(
                         channel_id, ext_cat_id, headers, cur, now,
                     )
-                    for k in attr_stats:
-                        stats[k] += attr_stats[k]
-                except Exception:
+                    stats["attributes_created"] += attr_stats["attributes_created"]
+                    stats["attributes_updated"] += attr_stats["attributes_updated"]
+                    stats["values_created"] += attr_stats["values_created"]
+                    stats["values_updated"] += attr_stats["values_updated"]
+                    if progress_cb:
+                        progress_cb(
+                            "attributes", idx, total_cats,
+                            f"Category {ext_cat_id}: "
+                            f"{attr_stats['attributes_created'] + attr_stats['attributes_updated']} attributes",
+                        )
+                except Exception as exc:
                     stats["errors"] += 1
+                    if progress_cb:
+                        progress_cb("attributes", idx, total_cats,
+                                    f'Category {ext_cat_id} FAILED: {exc}')
         finally:
             cur.close()
             conn.close()
@@ -101,10 +128,16 @@ class RozetkaTaxonomyService:
 
     # ── Categories ──────────────────────────────────────────────────────────
 
-    def _fetch_categories(self, channel_id: int, headers: dict, cur, now: datetime) -> dict:
-        """Fetch all active categories with pagination and upsert into DB."""
+    def _fetch_categories(self, channel_id: int, headers: dict, cur, now: datetime,
+                          progress_cb: Optional[Callable] = None) -> dict:
+        """Fetch all active categories with pagination and upsert into DB.
+
+        Returns stats including `total` (the parsed page count × page size,
+        which is the best available estimate of the full category set).
+        """
         created = 0
         updated = 0
+        processed = 0
         page = 1
         total_pages = 1
 
@@ -157,10 +190,15 @@ class RozetkaTaxonomyService:
                     created += 1
                 else:
                     updated += 1
+                processed += 1
 
+            if progress_cb:
+                total = total_pages * self.PAGE_SIZE
+                progress_cb("categories", processed, total,
+                            f"Categories: {processed} / {total}")
             page += 1
 
-        return {"created": created, "updated": updated}
+        return {"created": created, "updated": updated, "total": total_pages * self.PAGE_SIZE}
 
     # ── Attributes + Values ─────────────────────────────────────────────────
 

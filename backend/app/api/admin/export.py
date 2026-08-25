@@ -237,16 +237,190 @@ async def channel_taxonomy_stats(code: str, user=Depends(require_admin)):
 
 @router.post("/export/channels/{code}/taxonomy/refresh")
 async def refresh_taxonomy(code: str, user=Depends(require_admin)):
-    """Trigger a full taxonomy refresh from the marketplace API."""
+    """Start a full taxonomy refresh in a background job and return immediately.
+
+    The long-running fetch/upsert never blocks the HTTP request.  Progress and
+    logs are available via GET /export/channels/{code}/taxonomy/status.
+    """
     conn, cur = db()
     try:
         channel = _resolve_channel(cur, code)
-        from app.channels.taxonomy import get_taxonomy_service
-        svc = get_taxonomy_service(code)
-        result = svc.refresh(channel["id"], code)
-        return result
-    except NotImplementedError as e:
-        raise HTTPException(status_code=501, detail=str(e))
+    finally:
+        conn.close()
+
+    from app.channels.rozetka.taxonomy_run import (
+        TaxonomyRunBusy,
+        run_taxonomy_refresh,
+        start_taxonomy_refresh,
+    )
+    try:
+        run_id = start_taxonomy_refresh(channel["id"], (user or {}).get("id"))
+    except TaxonomyRunBusy as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    # Offload the blocking fetch to a worker thread so the async event loop
+    # stays free to serve the status endpoint and the rest of the admin API.
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, run_taxonomy_refresh, channel["id"], run_id)
+    return {"ok": True, "run_id": run_id, "detail": "Оновлення таксономії запущено у фоновому режимі"}
+
+
+@router.get("/export/channels/{code}/taxonomy/status")
+async def taxonomy_run_status(code: str, user=Depends(require_admin)):
+    """Current progress of the latest (or running) taxonomy refresh job."""
+    conn, cur = db()
+    try:
+        channel = _resolve_channel(cur, code)
+        from app.channels.rozetka.taxonomy_run import get_taxonomy_run_status
+        from app.channels.taxonomy import get_taxonomy_stats as _stats
+        status = get_taxonomy_run_status(cur, channel["id"])
+        taxonomy = _stats(cur, channel["id"])
+        if status is None:
+            return {
+                "run_id": None, "status": "never",
+                "started_at": None, "finished_at": None, "duration_seconds": None,
+                "categories": {"processed": 0, "total": 0, "created": 0, "updated": 0},
+                "attributes": {"categories_processed": 0, "categories_total": 0,
+                               "total": 0, "created": 0, "updated": 0},
+                "values": {"total": 0, "created": 0, "updated": 0},
+                "errors": 0, "current_operation": None, "logs": [], "taxonomy": taxonomy,
+            }
+        status["taxonomy"] = taxonomy
+        return status
+    finally:
+        conn.close()
+
+
+# ── Taxonomy (local reference data browsing) ─────────────────────────────────
+
+
+@router.get("/export/channels/{code}/taxonomy/categories")
+async def taxonomy_categories(
+        code: str,
+        q: Optional[str] = Query(None),
+        page: int = Query(1, ge=1),
+        per_page: int = Query(25, ge=1, le=200),
+        user=Depends(require_admin),
+):
+    """Paginated list of local Rozetka categories with attribute counts."""
+    conn, cur = db()
+    try:
+        channel = _resolve_channel(cur, code)
+        filters = ["c.channel_id = %s"]
+        params = [channel["id"]]
+        if q:
+            filters.append("(c.name ILIKE %s OR c.external_id ILIKE %s)")
+            params.extend([f"%{q}%", f"%{q}%"])
+        where = " AND ".join(filters)
+        cur.execute(
+            f"SELECT count(*) AS c FROM channel_external_categories c WHERE {where}",
+            params,
+        )
+        total = cur.fetchone()["c"]
+        cur.execute(
+            f"""SELECT c.id, c.external_id, c.parent_external_id, c.name, c.path,
+                       (SELECT count(*) FROM channel_external_attributes a
+                         WHERE a.channel_id = c.channel_id
+                           AND a.category_external_id = c.external_id) AS attributes_count
+                FROM channel_external_categories c
+                WHERE {where}
+                ORDER BY c.name LIMIT %s OFFSET %s""",
+            params + [per_page, (page - 1) * per_page],
+        )
+        return {"items": cur.fetchall(), "total": total, "page": page, "per_page": per_page}
+    finally:
+        conn.close()
+
+
+@router.get("/export/channels/{code}/taxonomy/attributes")
+async def taxonomy_attributes(
+        code: str,
+        q: Optional[str] = Query(None),
+        category_external_id: Optional[str] = Query(None),
+        page: int = Query(1, ge=1),
+        per_page: int = Query(25, ge=1, le=200),
+        user=Depends(require_admin),
+):
+    """Paginated local Rozetka attributes (optionally scoped to a category)."""
+    conn, cur = db()
+    try:
+        channel = _resolve_channel(cur, code)
+        filters = ["a.channel_id = %s"]
+        params = [channel["id"]]
+        if category_external_id:
+            filters.append("a.category_external_id = %s")
+            params.append(category_external_id)
+        if q:
+            filters.append("(a.name ILIKE %s OR a.external_id ILIKE %s)")
+            params.extend([f"%{q}%", f"%{q}%"])
+        where = " AND ".join(filters)
+        cur.execute(f"SELECT count(*) AS c FROM channel_external_attributes a WHERE {where}", params)
+        total = cur.fetchone()["c"]
+        cur.execute(
+            f"""SELECT a.id, a.category_external_id, a.external_id, a.name, a.param_type,
+                       a.unit, a.is_required, a.fetched_at,
+                       c.name AS category_name
+                FROM channel_external_attributes a
+                LEFT JOIN channel_external_categories c
+                       ON c.channel_id = a.channel_id
+                      AND c.external_id = a.category_external_id
+                WHERE {where}
+                ORDER BY a.name LIMIT %s OFFSET %s""",
+            params + [per_page, (page - 1) * per_page],
+        )
+        return {"items": cur.fetchall(), "total": total, "page": page, "per_page": per_page}
+    finally:
+        conn.close()
+
+
+@router.get("/export/channels/{code}/taxonomy/values")
+async def taxonomy_values(
+        code: str,
+        q: Optional[str] = Query(None),
+        attribute_external_id: Optional[str] = Query(None),
+        category_external_id: Optional[str] = Query(None),
+        page: int = Query(1, ge=1),
+        per_page: int = Query(25, ge=1, le=200),
+        user=Depends(require_admin),
+):
+    """Paginated local Rozetka values (optionally scoped to attr/category)."""
+    conn, cur = db()
+    try:
+        channel = _resolve_channel(cur, code)
+        filters = ["v.channel_id = %s"]
+        params = [channel["id"]]
+        if attribute_external_id:
+            filters.append("v.attribute_external_id = %s")
+            params.append(attribute_external_id)
+        if category_external_id:
+            filters.append("a.category_external_id = %s")
+            params.append(category_external_id)
+        if q:
+            filters.append("(v.value ILIKE %s OR v.external_id ILIKE %s)")
+            params.extend([f"%{q}%", f"%{q}%"])
+        where = " AND ".join(filters)
+        count_sql = f"""SELECT count(*) AS c
+                        FROM channel_external_values v
+                        JOIN channel_external_attributes a
+                          ON a.channel_id = v.channel_id AND a.external_id = v.attribute_external_id
+                        WHERE {where}"""
+        cur.execute(count_sql, params)
+        total = cur.fetchone()["c"]
+        cur.execute(
+            f"""SELECT v.id, v.attribute_external_id, v.external_id, v.value, v.fetched_at,
+                       a.name AS attribute_name, a.category_external_id,
+                       c.name AS category_name
+                FROM channel_external_values v
+                JOIN channel_external_attributes a
+                  ON a.channel_id = v.channel_id AND a.external_id = v.attribute_external_id
+                LEFT JOIN channel_external_categories c
+                       ON c.channel_id = a.channel_id AND c.external_id = a.category_external_id
+                WHERE {where}
+                ORDER BY v.value LIMIT %s OFFSET %s""",
+            params + [per_page, (page - 1) * per_page],
+        )
+        return {"items": cur.fetchall(), "total": total, "page": page, "per_page": per_page}
     finally:
         conn.close()
 

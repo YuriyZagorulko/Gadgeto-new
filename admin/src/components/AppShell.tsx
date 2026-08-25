@@ -6,7 +6,11 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from './AuthProvider';
 import { LoadingState } from './ui';
 
-type NavChild = { href: string; label: string };
+type NavChild = {
+  href?: string;
+  label: string;
+  children?: NavChild[];
+};
 type NavItem = {
   href?: string;
   label: string;
@@ -40,7 +44,15 @@ const navItems: NavItem[] = [
     icon: '📤',
     children: [
       { href: '/export/settings', label: 'Налаштування' },
-      { href: '/export/rozetka', label: 'Rozetka' },
+      {
+        label: 'Rozetka',
+        children: [
+          { href: '/export/rozetka', label: 'Огляд' },
+          { href: '/export/rozetka/mapping', label: 'Мапінг' },
+          { href: '/export/rozetka/taxonomy', label: 'Таксономія' },
+          { href: '/export/rozetka/settings', label: 'Налаштування' },
+        ],
+      },
     ],
   },
 ];
@@ -53,6 +65,22 @@ const LEGACY_LABELS: Record<string, string> = {
 
 function isActivePath(href: string, pathname: string): boolean {
   return pathname === href || pathname.startsWith(href + '/');
+}
+
+/** Exact match only — for leaf nav links (avoids false sibling matches,
+ * e.g. /export/rozetka matching /export/rozetka/settings). */
+function isExactPath(href: string, pathname: string): boolean {
+  return pathname === href;
+}
+
+/** Recursively check if any leaf item under `items` exactly matches the active path. */
+function childActiveIn(items: NavChild[], path: string): boolean {
+  return items.some((c) => c.children ? childActiveIn(c.children, path) : isExactPath(c.href!, path));
+}
+
+/** Flatten a nested NavChild tree into leaf-only href/label pairs. */
+function leafItems(items: NavChild[]): { href: string; label: string }[] {
+  return items.flatMap((c) => (c.children ? leafItems(c.children) : [{ href: c.href!, label: c.label }]));
 }
 
 /**
@@ -80,7 +108,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // Keep the parent of the active child page expanded.
   useEffect(() => {
-    const group = navItems.find((i) => i.children?.some((c) => isActivePath(c.href, pathname)));
+    const group = navItems.find((i) => i.children && childActiveIn(i.children, pathname));
     if (group) setOpenGroups((prev) => (prev[group.label] ? prev : { ...prev, [group.label]: true }));
   }, [pathname]);
 
@@ -104,7 +132,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // Header label: prefer the most specific nav entry (children included),
   // falling back to legacy route labels.
   const flatNav = navItems.flatMap((i) =>
-    i.children ? i.children.map((c) => c) : [{ href: i.href as string, label: i.label }],
+    i.children ? leafItems(i.children) : [{ href: i.href as string, label: i.label }],
   );
   const legacyLabel =
     Object.entries(LEGACY_LABELS)
@@ -134,8 +162,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           );
         }
 
-        // Expandable/collapsible group (e.g. Імпорт, Налаштування).
-        const groupActive = item.children.some((c) => isActivePath(c.href, pathname));
+        // Expandable/collapsible group (e.g. Імпорт, Експорт).
+        const groupActive = childActiveIn(item.children, pathname);
         const open = !!openGroups[item.label];
         return (
           <div key={item.label}>
@@ -159,11 +187,57 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {open && (
               <div>
                 {item.children.map((child) => {
-                  const childActive = isActivePath(child.href, pathname);
+                  if (child.children) {
+                    // Sub-group (e.g. Rozetka inside Експорт).
+                    const subActive = childActiveIn(child.children, pathname);
+                    const subOpen = !!openGroups[child.label];
+                    return (
+                      <div key={child.label}>
+                        <button
+                          type="button"
+                          onClick={() => setOpenGroups((prev) => ({ ...prev, [child.label]: !prev[child.label] }))}
+                          aria-expanded={subOpen}
+                          className={`w-full flex items-center gap-3 pl-12 pr-5 py-2 text-sm transition-colors ${
+                            subActive ? 'text-white' : 'text-gray-400'
+                          } hover:bg-gray-800 hover:text-white`}
+                        >
+                          <span className="flex-1 text-left">{child.label}</span>
+                          <span
+                            className={`text-[10px] text-gray-500 transition-transform ${subOpen ? 'rotate-90' : ''}`}
+                            aria-hidden
+                          >
+                            ▶
+                          </span>
+                        </button>
+                        {subOpen && (
+                          <div>
+                            {child.children.map((sub) => {
+                              const activeSub = isExactPath(sub.href!, pathname);
+                              return (
+                                <Link
+                                  key={sub.href}
+                                  href={sub.href!}
+                                  aria-current={activeSub ? 'page' : undefined}
+                                  className={`flex items-center gap-3 pl-16 pr-5 py-2 text-sm transition-colors ${
+                                    activeSub
+                                      ? 'bg-blue-600 text-white font-medium'
+                                      : 'text-gray-500 hover:bg-gray-800 hover:text-white'
+                                  }`}
+                                >
+                                  <span>{sub.label}</span>
+                                </Link>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+                  const childActive = isExactPath(child.href!, pathname);
                   return (
                     <Link
-                      key={child.href}
-                      href={child.href}
+                      key={child.href!}
+                      href={child.href!}
                       aria-current={childActive ? 'page' : undefined}
                       className={`flex items-center gap-3 pl-12 pr-5 py-2 text-sm transition-colors ${
                         childActive

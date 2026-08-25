@@ -80,14 +80,210 @@ def _resolve_kind(kind: str):
     return _KIND_MAP[kind]
 
 
+def _list_category_mappings(cur, cid: int, q, status_filter, page: int, per_page: int):
+    """All internal categories with their (optional) channel mapping row."""
+    join_params = [cid]
+    where_conds, where_params = [], []
+    if q:
+        where_conds.append(
+            "(i.name ILIKE %s OR COALESCE(m.external_category_name, '') ILIKE %s)")
+        where_params.extend([f"%{q}%", f"%{q}%"])
+    if status_filter == "unmapped":
+        where_conds.append("m.id IS NULL")
+    elif status_filter:
+        where_conds.append("m.status = %s")
+        where_params.append(status_filter)
+    where_sql = (" WHERE " + " AND ".join(where_conds)) if where_conds else ""
+    base = f"""
+        FROM categories i
+        LEFT JOIN channel_category_mappings m
+               ON m.channel_id = %s AND m.internal_category_id = i.id
+        {where_sql}
+    """
+    cur.execute(f"SELECT count(*) AS c {base}", join_params + where_params)
+    total = cur.fetchone()["c"]
+    cur.execute(
+        f"""SELECT i.id AS internal_id, i.name AS internal_name, i.slug,
+                   m.id AS mapping_id,
+                   m.external_category_id AS external_id,
+                   m.external_category_name AS external_name,
+                   COALESCE(m.status, 'unmapped') AS status,
+                   m.confidence, m.source,
+                   m.created_at AS created_at, m.updated_at AS updated_at
+            {base}
+            ORDER BY i.name LIMIT %s OFFSET %s""",
+        join_params + where_params + [per_page, (page - 1) * per_page],
+    )
+    return cur.fetchall(), total
+
+
+def _list_attribute_mappings(cur, cid: int, q, status_filter, ext_cat_id, scope,
+                             page: int, per_page: int):
+    """Attribute mappings — one row per (internal attribute × mapping context).
+
+    An internal attribute can carry a global mapping and multiple
+    category-scoped mappings; internal attributes without any mapping appear
+    once as an unmapped row.
+    """
+    base = """
+        WITH base AS (
+            SELECT i.id AS internal_id, i.name AS internal_name,
+                   m.id AS mapping_id,
+                   m.external_attribute_id AS external_id,
+                   m.external_attribute_name AS external_name,
+                   m.external_category_id AS external_category_id,
+                   ec.name AS external_category_name,
+                   COALESCE(m.status, 'accepted') AS status,
+                   m.confidence, m.source,
+                   m.created_at AS created_at, m.updated_at AS updated_at
+            FROM channel_attribute_mappings m
+            JOIN attributes i ON i.id = m.internal_attribute_id
+            LEFT JOIN channel_external_categories ec
+                   ON ec.channel_id = m.channel_id
+                  AND ec.external_id = m.external_category_id
+            WHERE m.channel_id = %s
+            UNION ALL
+            SELECT i.id, i.name, NULL, NULL, NULL, NULL, NULL,
+                   'unmapped', NULL, NULL, NULL, NULL
+            FROM attributes i
+            WHERE NOT EXISTS (
+                SELECT 1 FROM channel_attribute_mappings m2
+                WHERE m2.channel_id = %s AND m2.internal_attribute_id = i.id
+            )
+        )
+    """
+    where, params = [], []
+    if q:
+        where.append("(internal_name ILIKE %s OR COALESCE(external_name, '') ILIKE %s)")
+        params.extend([f"%{q}%", f"%{q}%"])
+    if status_filter == "unmapped":
+        where.append("status = 'unmapped'")
+    elif status_filter:
+        where.append("status = %s")
+        params.append(status_filter)
+    if ext_cat_id:
+        where.append("external_category_id = %s")
+        params.append(ext_cat_id)
+    if scope == "global":
+        where.append("(mapping_id IS NULL OR external_category_id IS NULL)")
+    elif scope == "category":
+        where.append("(mapping_id IS NOT NULL AND external_category_id IS NOT NULL)")
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+    cur.execute(
+        f"{base} SELECT count(*) AS c FROM base {where_sql}",
+        [cid, cid] + params,
+    )
+    total = cur.fetchone()["c"]
+    cur.execute(
+        f"{base} SELECT * FROM base {where_sql} ORDER BY internal_name LIMIT %s OFFSET %s",
+        [cid, cid] + params + [per_page, (page - 1) * per_page],
+    )
+    return cur.fetchall(), total
+
+
+def _list_value_mappings(cur, cid: int, q, status_filter, ext_cat_id, attribute_id,
+                         page: int, per_page: int):
+    """Value mappings — mapping rows plus unmapped internal attribute values.
+
+    Mapped rows carry the resolved Rozetka attribute context (via the local
+    channel_external_values/channel_external_attributes tables).
+    """
+    base = """
+        WITH base AS (
+            SELECT av.id AS internal_id, av.value AS internal_name,
+                   a.id AS attribute_id, a.name AS attribute_name,
+                   m.id AS mapping_id,
+                   m.external_value_id AS external_id,
+                   m.external_value_name AS external_name,
+                   m.external_category_id AS external_category_id,
+                   ec.name AS external_category_name,
+                   ea.name AS external_attribute_name,
+                   ea.external_id AS external_attribute_id,
+                   COALESCE(m.status, 'accepted') AS status,
+                   m.confidence, m.source,
+                   m.created_at AS created_at, m.updated_at AS updated_at
+            FROM channel_value_mappings m
+            JOIN attribute_values av ON av.id = m.internal_value_id
+            JOIN attributes a ON a.id = av.attribute_id
+            LEFT JOIN channel_external_categories ec
+                   ON ec.channel_id = m.channel_id
+                  AND ec.external_id = m.external_category_id
+            LEFT JOIN LATERAL (
+                SELECT ea2.name AS name, ea2.external_id AS external_id
+                FROM channel_external_attributes ea2
+                JOIN channel_external_values ev2
+                  ON ev2.channel_id = ea2.channel_id
+                 AND ev2.attribute_external_id = ea2.external_id
+                 AND ev2.external_id = m.external_value_id
+                WHERE ea2.channel_id = m.channel_id
+                  AND ea2.category_external_id = m.external_category_id
+                LIMIT 1
+            ) ea ON TRUE
+            WHERE m.channel_id = %s
+            UNION ALL
+            SELECT av.id, av.value, a.id, a.name,
+                   NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                   'unmapped', NULL, NULL, NULL, NULL
+            FROM attribute_values av
+            JOIN attributes a ON a.id = av.attribute_id
+            WHERE NOT EXISTS (
+                SELECT 1 FROM channel_value_mappings m2
+                WHERE m2.channel_id = %s AND m2.internal_value_id = av.id
+            )
+        )
+    """
+    where, params = [], []
+    if q:
+        where.append("(internal_name ILIKE %s OR COALESCE(external_name, '') ILIKE %s)")
+        params.extend([f"%{q}%", f"%{q}%"])
+    if status_filter == "unmapped":
+        where.append("status = 'unmapped'")
+    elif status_filter:
+        where.append("status = %s")
+        params.append(status_filter)
+    if ext_cat_id:
+        where.append("external_category_id = %s")
+        params.append(ext_cat_id)
+    if attribute_id:
+        where.append("attribute_id = %s")
+        params.append(attribute_id)
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+    cur.execute(
+        f"{base} SELECT count(*) AS c FROM base {where_sql}",
+        [cid, cid] + params,
+    )
+    total = cur.fetchone()["c"]
+    cur.execute(
+        f"{base} SELECT * FROM base {where_sql} "
+        f"ORDER BY attribute_name, internal_name LIMIT %s OFFSET %s",
+        [cid, cid] + params + [per_page, (page - 1) * per_page],
+    )
+    return cur.fetchall(), total
+
+
 @router.get("/export/channels/{code}/mappings/{kind}")
 async def list_mappings(
         code: str, kind: str,
         page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
         q: Optional[str] = Query(None),
         status_filter: Optional[str] = Query(None, alias="status"),
+        external_category_id: Optional[str] = Query(None),
+        attribute_id: Optional[int] = Query(None),
+        scope: Optional[str] = Query(None),
         user=Depends(require_admin),
 ):
+    """List channel mappings.
+
+    Returns BOTH existing mapping rows and unmapped internal entities (their
+    `mapping_id` is NULL), so the admin UI can display/complete everything.
+    Additional context filters:
+      * external_category_id — attribute/value mappings scoped to a Rozetka category
+      * attribute_id    — value mappings scoped to an internal attribute
+      * scope           — attributes: 'global' | 'category'
+      * status          — also accepts 'unmapped'
+    """
     conn, cur = db()
     try:
         cfg = _resolve_kind(kind)
@@ -95,43 +291,33 @@ async def list_mappings(
         ch = cur.fetchone()
         if not ch:
             raise HTTPException(status_code=404, detail="Канал не знайдено")
+        cid = ch["id"]
 
-        filters = ["m.channel_id = %s"]
-        params = [ch["id"]]
-        if status_filter:
-            filters.append("m.status = %s")
-            params.append(status_filter)
-        if q:
-            filters.append(f"(i.{cfg['internal_name_col']} ILIKE %s OR m.{cfg['external_name_col']} ILIKE %s)")
-            params.extend([f"%{q}%", f"%{q}%"])
-
-        where = " AND ".join(filters)
-        cur.execute(
-            f"SELECT count(*) AS c FROM {cfg['table']} m JOIN {cfg['internal_table']} i ON i.id = m.{cfg['internal_id_col']} WHERE {where}",
-            params,
-        )
-        total = cur.fetchone()["c"]
-
-        cur.execute(
-            f"""SELECT m.id, m.{cfg['internal_id_col']} AS internal_id,
-                       i.{cfg['internal_name_col']} AS internal_name,
-                       m.{cfg['external_id_col']} AS external_id,
-                       m.{cfg['external_name_col']} AS external_name,
-                       m.status, m.confidence, m.source,
-                       m.created_at, m.updated_at
-                FROM {cfg['table']} m
-                JOIN {cfg['internal_table']} i ON i.id = m.{cfg['internal_id_col']}
-                WHERE {where}
-                ORDER BY m.updated_at DESC LIMIT %s OFFSET %s""",
-            params + [per_page, (page - 1) * per_page],
-        )
-        return {"items": cur.fetchall(), "total": total, "page": page, "per_page": per_page}
+        if kind == "categories":
+            items, total = _list_category_mappings(cur, cid, q, status_filter,
+                                                   page, per_page)
+        elif kind == "attributes":
+            items, total = _list_attribute_mappings(cur, cid, q, status_filter,
+                                                    external_category_id, scope,
+                                                    page, per_page)
+        elif kind == "values":
+            items, total = _list_value_mappings(cur, cid, q, status_filter,
+                                               external_category_id, attribute_id,
+                                               page, per_page)
+        else:  # unreachable (resolved by _resolve_kind)
+            raise HTTPException(status_code=404, detail="Невідомий тип відповідностей")
+        return {"items": items, "total": total, "page": page, "per_page": per_page}
     finally:
         conn.close()
 
 
 @router.post("/export/channels/{code}/mappings/{kind}")
 async def create_mapping(code: str, kind: str, body: MappingCreate, user=Depends(require_admin)):
+    """Create a mapping idempotently.
+
+    Re-running with the same (internal entity, external category) updates the
+    existing row instead of raising a duplicate-key error.
+    """
     conn, cur = db()
     try:
         cfg = _resolve_kind(kind)
@@ -139,19 +325,89 @@ async def create_mapping(code: str, kind: str, body: MappingCreate, user=Depends
         ch = cur.fetchone()
         if not ch:
             raise HTTPException(status_code=404, detail="Канал не знайдено")
+        cid = ch["id"]
+
+        ext_name = body.external_name
+        if not ext_name and body.external_id:
+            ext_name = _lookup_external_name(cur, kind, cid, body.external_id,
+                                             body.external_category_id)
+
+        id_col = cfg["internal_id_col"]
+        ext_col = cfg["external_id_col"]
+        name_col = cfg["external_name_col"]
+        status = body.status or "proposed"
+        if status not in ("proposed", "accepted", "excluded"):
+            raise HTTPException(status_code=400, detail="Невірний статус відповідності")
+
+        # Idempotent upsert: (channel, internal, external_category) identifies a row.
         cur.execute(
-            f"""INSERT INTO {cfg['table']}
-                (channel_id, {cfg['internal_id_col']},
-                 {cfg['external_id_col']}, {cfg['external_name_col']},
-                 external_category_id, status, confidence, source, created_at, updated_at)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,'manual',NOW(),NOW())
-               RETURNING id""",
-            (ch["id"], body.internal_id, body.external_id, body.external_name,
-             body.external_category_id, body.status, body.confidence),
+            (f"SELECT id FROM {cfg['table']} "
+             f"WHERE channel_id = %s AND {id_col} = %s "
+             f"AND external_category_id IS NOT DISTINCT FROM %s"),
+            (cid, body.internal_id, body.external_category_id),
         )
-        return {"ok": True, "id": cur.fetchone()["id"]}
+        existing = cur.fetchone()
+        if existing:
+            cur.execute(
+                (f"UPDATE {cfg['table']} "
+                 f"SET {ext_col} = %s, {name_col} = %s, status = %s, "
+                 f"confidence = %s, source = 'manual', updated_at = NOW() "
+                 f"WHERE id = %s RETURNING id"),
+                (body.external_id, ext_name, status, body.confidence, existing["id"]),
+            )
+            return {"ok": True, "id": cur.fetchone()["id"], "updated": True}
+
+        col_parts = [f"channel_id", f"{id_col}", f"{ext_col}", f"{name_col}"]
+        val_parts = [f"%s", f"%s", f"%s", f"%s"]
+        val_args = [cid, body.internal_id, body.external_id, ext_name]
+
+        # external_category_id is a separate column (for attributes/values);
+        # for categories where ext_col IS external_category_id, skip it.
+        if ext_col != "external_category_id":
+            col_parts.append("external_category_id")
+            val_parts.append("%s")
+            val_args.append(body.external_category_id)
+
+        col_parts += ["status", "confidence", "source", "created_at", "updated_at"]
+        val_parts += ["%s", "%s", "'manual'", "NOW()", "NOW()"]
+        val_args += [status, body.confidence]
+
+        cur.execute(
+            f"INSERT INTO {cfg['table']} ({', '.join(col_parts)}) "
+            f"VALUES ({', '.join(val_parts)}) "
+            f"RETURNING id",
+            val_args,
+        )
+        return {"ok": True, "id": cur.fetchone()["id"], "created": True}
     finally:
         conn.close()
+
+
+def _lookup_external_name(cur, kind: str, cid: int, external_id: str,
+                          ext_cat_id: Optional[str]) -> Optional[str]:
+    """Fall back to the local taxonomy name when a name was not supplied."""
+    try:
+        if kind == "categories":
+            cur.execute(
+                "SELECT name FROM channel_external_categories WHERE channel_id=%s AND external_id=%s LIMIT 1",
+                (cid, external_id))
+        elif kind == "attributes":
+            cur.execute(
+                "SELECT name FROM channel_external_attributes WHERE channel_id=%s AND external_id=%s"
+                " AND category_external_id IS NOT DISTINCT FROM %s LIMIT 1",
+                (cid, external_id, ext_cat_id),
+            )
+        elif kind == "values":
+            cur.execute(
+                "SELECT value AS name FROM channel_external_values WHERE channel_id=%s AND external_id=%s LIMIT 1",
+                (cid, external_id),
+            )
+        else:
+            return None
+        row = cur.fetchone()
+        return row["name"] if row else None
+    except Exception:
+        return None
 
 
 @router.put("/export/channels/{code}/mappings/{kind}/{mid}")
@@ -284,7 +540,162 @@ async def pick_values(code: str, attribute_id: Optional[int] = Query(None),
         conn.close()
 
 
+# ── External taxonomy pickers (local channel_external_* data) ────────────────
+
+
+@router.get("/export/channels/{code}/pickers/external-categories")
+async def pick_external_categories(code: str, q: Optional[str] = Query(None),
+                                   page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
+                                   user=Depends(require_admin)):
+    """Rozetka categories from the LOCAL taxonomy (never an API call)."""
+    conn, cur = db()
+    try:
+        cur.execute("SELECT id FROM channels WHERE code = %s", (code,))
+        ch = cur.fetchone()
+        if not ch:
+            raise HTTPException(status_code=404, detail="Канал не знайдено")
+        filters, params = ["channel_id = %s"], [ch["id"]]
+        if q:
+            filters.append("name ILIKE %s"); params.append(f"%{q}%")
+        where = " AND ".join(filters)
+        cur.execute(f"SELECT count(*) AS c FROM channel_external_categories WHERE {where}", params)
+        total = cur.fetchone()["c"]
+        cur.execute(
+            f"SELECT id, external_id, name, parent_external_id FROM channel_external_categories"
+            f" WHERE {where} ORDER BY name LIMIT %s OFFSET %s",
+            params + [per_page, (page - 1) * per_page])
+        return {"items": cur.fetchall(), "total": total, "page": page, "per_page": per_page}
+    finally:
+        conn.close()
+
+
+@router.get("/export/channels/{code}/pickers/external-attributes")
+async def pick_external_attributes(code: str,
+                                   category_external_id: Optional[str] = Query(None),
+                                   q: Optional[str] = Query(None),
+                                   page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
+                                   user=Depends(require_admin)):
+    """Rozetka attributes from local taxonomy, scoped to a Rozetka category."""
+    conn, cur = db()
+    try:
+        cur.execute("SELECT id FROM channels WHERE code = %s", (code,))
+        ch = cur.fetchone()
+        if not ch:
+            raise HTTPException(status_code=404, detail="Канал не знайдено")
+        filters, params = ["channel_id = %s"], [ch["id"]]
+        if category_external_id:
+            filters.append("category_external_id = %s"); params.append(category_external_id)
+        if q:
+            filters.append("name ILIKE %s"); params.append(f"%{q}%")
+        where = " AND ".join(filters)
+        cur.execute(f"SELECT count(*) AS c FROM channel_external_attributes WHERE {where}", params)
+        total = cur.fetchone()["c"]
+        cur.execute(
+            f"SELECT id, external_id, name, category_external_id, param_type, unit"
+            f" FROM channel_external_attributes WHERE {where} ORDER BY name LIMIT %s OFFSET %s",
+            params + [per_page, (page - 1) * per_page])
+        return {"items": cur.fetchall(), "total": total, "page": page, "per_page": per_page}
+    finally:
+        conn.close()
+
+
+@router.get("/export/channels/{code}/pickers/external-values")
+async def pick_external_values(code: str,
+                               category_external_id: Optional[str] = Query(None),
+                               attribute_external_id: Optional[str] = Query(None),
+                               q: Optional[str] = Query(None),
+                               page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
+                               user=Depends(require_admin)):
+    """Rozetka values from local taxonomy, scoped to category + attribute."""
+    conn, cur = db()
+    try:
+        cur.execute("SELECT id FROM channels WHERE code = %s", (code,))
+        ch = cur.fetchone()
+        if not ch:
+            raise HTTPException(status_code=404, detail="Канал не знайдено")
+        filters, params = ["v.channel_id = %s"], [ch["id"]]
+        if category_external_id:
+            filters.append("a.category_external_id = %s"); params.append(category_external_id)
+        if attribute_external_id:
+            filters.append("v.attribute_external_id = %s"); params.append(attribute_external_id)
+        if q:
+            filters.append("v.value ILIKE %s"); params.append(f"%{q}%")
+        where = " AND ".join(filters)
+        join = ("FROM channel_external_values v "
+                "JOIN channel_external_attributes a "
+                "  ON a.channel_id = v.channel_id AND a.external_id = v.attribute_external_id")
+        cur.execute(f"SELECT count(*) AS c {join} WHERE {where}", params)
+        total = cur.fetchone()["c"]
+        cur.execute(
+            f"SELECT v.id, v.external_id, v.value, v.attribute_external_id"
+            f" {join} WHERE {where} ORDER BY v.value LIMIT %s OFFSET %s",
+            params + [per_page, (page - 1) * per_page])
+        return {"items": cur.fetchall(), "total": total, "page": page, "per_page": per_page}
+    finally:
+        conn.close()
+
+
 # ── Coverage ─────────────────────────────────────────────────────────────────
+
+_COVERAGE_KINDS = {
+    "categories": {
+        "internal": "categories", "table": "channel_category_mappings",
+        "id_col": "internal_category_id", "ext_col": "external_category_id",
+    },
+    "attributes": {
+        "internal": "attributes", "table": "channel_attribute_mappings",
+        "id_col": "internal_attribute_id", "ext_col": "external_attribute_id",
+    },
+    "values": {
+        "internal": "attribute_values", "table": "channel_value_mappings",
+        "id_col": "internal_value_id", "ext_col": "external_value_id",
+    },
+}
+
+
+def _coverage_block(cur, cid: int, kind: str) -> dict:
+    """Count distinct internal entities by effective mapping state.
+
+    Buckets are exclusive (priority accepted > proposed > excluded > unmapped),
+    so a category-scoped attribute with one accepted and one proposed mapping is
+    counted exactly once as accepted.
+    """
+    cfg = _COVERAGE_KINDS[kind]
+    sql = f"""
+        WITH eff AS (
+            SELECT i.id AS item_id,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM {cfg['table']} m
+                        WHERE m.channel_id = %s AND m.{cfg['id_col']} = i.id
+                          AND m.status = 'accepted'
+                          AND m.{cfg['ext_col']} IS NOT NULL) THEN 'accepted'
+                    WHEN EXISTS (
+                        SELECT 1 FROM {cfg['table']} m
+                        WHERE m.channel_id = %s AND m.{cfg['id_col']} = i.id
+                          AND m.status = 'proposed'
+                          AND m.{cfg['ext_col']} IS NOT NULL) THEN 'proposed'
+                    WHEN EXISTS (
+                        SELECT 1 FROM {cfg['table']} m
+                        WHERE m.channel_id = %s AND m.{cfg['id_col']} = i.id
+                          AND m.status = 'excluded') THEN 'excluded'
+                    ELSE 'unmapped'
+                END AS status
+            FROM {cfg['internal']} i
+        )
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE status = 'accepted') AS accepted,
+               count(*) FILTER (WHERE status = 'proposed') AS proposed,
+               count(*) FILTER (WHERE status = 'excluded') AS excluded,
+               count(*) FILTER (WHERE status = 'unmapped') AS unmapped
+        FROM eff
+    """
+    cur.execute(sql, (cid, cid, cid))
+    block = dict(cur.fetchone())
+    total = block.get("total") or 0
+    for key in ("accepted", "proposed", "excluded", "unmapped"):
+        block[f"{key}_pct"] = round(block.get(key, 0) * 100 / total, 1) if total else 0.0
+    return block
 
 
 @router.get("/export/channels/{code}/mapping-coverage")
@@ -296,36 +707,10 @@ async def mapping_coverage(code: str, user=Depends(require_admin)):
         if not ch:
             raise HTTPException(status_code=404, detail="Канал не знайдено")
         cid = ch["id"]
-        cur.execute("""
-            SELECT count(*) AS total,
-                count(*) FILTER (WHERE m.status='accepted' AND m.external_id IS NOT NULL) AS accepted,
-                count(*) FILTER (WHERE m.status='proposed') AS proposed,
-                count(*) FILTER (WHERE m.status='excluded') AS excluded,
-                count(*) FILTER (WHERE m.id IS NULL) AS unmapped
-            FROM categories c LEFT JOIN channel_category_mappings m
-                ON m.internal_category_id=c.id AND m.channel_id=%s
-        """, (cid,))
-        categories = dict(cur.fetchone())
-        cur.execute("""
-            SELECT count(*) AS total,
-                count(*) FILTER (WHERE m.status='accepted' AND m.external_id IS NOT NULL) AS accepted,
-                count(*) FILTER (WHERE m.status='proposed') AS proposed,
-                count(*) FILTER (WHERE m.status='excluded') AS excluded,
-                count(*) FILTER (WHERE m.id IS NULL) AS unmapped
-            FROM attributes a LEFT JOIN channel_attribute_mappings m
-                ON m.internal_attribute_id=a.id AND m.channel_id=%s
-        """, (cid,))
-        attributes = dict(cur.fetchone())
-        cur.execute("""
-            SELECT count(*) AS total,
-                count(*) FILTER (WHERE m.status='accepted' AND m.external_id IS NOT NULL) AS accepted,
-                count(*) FILTER (WHERE m.status='proposed') AS proposed,
-                count(*) FILTER (WHERE m.status='excluded') AS excluded,
-                count(*) FILTER (WHERE m.id IS NULL) AS unmapped
-            FROM attribute_values av LEFT JOIN channel_value_mappings m
-                ON m.internal_value_id=av.id AND m.channel_id=%s
-        """, (cid,))
-        values = dict(cur.fetchone())
-        return {"categories": categories, "attributes": attributes, "values": values}
+        return {
+            "categories": _coverage_block(cur, cid, "categories"),
+            "attributes": _coverage_block(cur, cid, "attributes"),
+            "values": _coverage_block(cur, cid, "values"),
+        }
     finally:
         conn.close()
