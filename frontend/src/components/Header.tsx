@@ -88,9 +88,9 @@ export default function Header() {
               ))}
             </nav>
             <SearchBox
-              wrapperClassName="hidden md:flex items-center gap-2"
-              formClassName="flex items-center"
-              inputClassName="input-field w-48 lg:w-64 text-sm"
+              wrapperClassName="hidden md:flex items-center gap-2 flex-1 max-w-[600px]"
+              formClassName="flex items-center flex-1"
+              inputClassName="input-field w-full text-sm"
               placeholder={t('searchPlaceholder')}
             />
             <div className="flex items-center gap-3 sm:gap-4">
@@ -144,6 +144,7 @@ export default function Header() {
                 formClassName="flex gap-2"
                 inputClassName="input-field flex-1 text-sm"
                 placeholder={t('searchPlaceholderMobile')}
+                showSubmitButton={false}
               />
             </div>
           )}

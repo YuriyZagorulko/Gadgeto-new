@@ -112,7 +112,12 @@ function HistoryTable({ refreshTrigger }: { refreshTrigger: number | null }) {
   const load = useCallback(() => {
     setLoading(true);
     api.get<{ items: RunHistoryRow[]; total: number }>('/export/channels/rozetka/taxonomy/runs?per_page=50')
-      .then((d) => setRuns(d.items || []))
+      .then((d) => {
+        const items = (d.items || []).map((r) => ({
+          ...r, status: (r.status || '').toLowerCase(),
+        }));
+        setRuns(items);
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -124,6 +129,7 @@ function HistoryTable({ refreshTrigger }: { refreshTrigger: number | null }) {
     setDetailLoading(true);
     try {
       const d = await api.get<RunStatus>(`/export/channels/rozetka/taxonomy/runs/${run.id}`);
+      if (d && d.status) d.status = d.status.toLowerCase();
       setSelectedDetail(d);
     } catch { setSelectedDetail(null); }
     setDetailLoading(false);
@@ -211,22 +217,25 @@ function useTaxonomyStatusPoll() {
   const [error, setError] = useState('');
 
   const load = useCallback(() => {
-    setLoading(true);
     api.get<RunStatus>('/export/channels/rozetka/taxonomy/status')
-      .then((d) => { setStatus(d); })
+      .then((d) => {
+        // Normalize status from DB-uppercase (RUNNING) to frontend-lowercase (running)
+        if (d && d.status) d.status = d.status.toLowerCase();
+        setStatus(d);
+      })
       .catch((e) => setError(e.message || 'Не вдалось завантажити статус'))
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
+  const isRunning = status?.status === 'running' || status?.status === 'queued';
+
   useEffect(() => {
-    if (!status) return;
-    const isRunning = status.status === 'running' || status.status === 'queued';
     if (!isRunning) return;
     const interval = setInterval(() => load(), 3000);
     return () => clearInterval(interval);
-  }, [status, load]);
+  }, [isRunning, load]);
 
   return { status, loading, error, reload: load };
 }
@@ -266,13 +275,13 @@ export default function RozetkaTaxonomyPage() {
   // MUST be unconditionally called before any early return (Rules of Hooks).
   const catList = useLocalList<ExtCatRow>(
     '/export/channels/rozetka/taxonomy/categories' + qs({ page, per_page: perPage, q: appliedQ || undefined }),
-    [page, perPage, appliedQ, status]);
+    [page, perPage, appliedQ]);
   const attrList = useLocalList<ExtAttrRow>(
     '/export/channels/rozetka/taxonomy/attributes' + qs({ page, per_page: perPage, q: appliedQ || undefined }),
-    [page, perPage, appliedQ, status]);
+    [page, perPage, appliedQ]);
   const valList = useLocalList<ExtValRow>(
     '/export/channels/rozetka/taxonomy/values' + qs({ page, per_page: perPage, q: appliedQ || undefined }),
-    [page, perPage, appliedQ, status]);
+    [page, perPage, appliedQ]);
 
   useEffect(() => {
     if (statusError) toast.push('error', statusError);

@@ -70,7 +70,6 @@ export default function RozetkaOverviewPage() {
   const [taxRefreshing, setTaxRefreshing] = useState(false);
   const [taxResult, setTaxResult] = useState('');
   const [runStatus, setRunStatus] = useState<any>(null);
-  const [runLoading, setRunLoading] = useState(false);
 
   const load = () => {
     setLoading(true); setError('');
@@ -84,23 +83,24 @@ export default function RozetkaOverviewPage() {
   };
 
   const loadRunStatus = () => {
-    setRunLoading(true);
     api.get<any>('/export/channels/rozetka/taxonomy/status')
-      .then((d) => setRunStatus(d))
-      .catch(() => {})
-      .finally(() => setRunLoading(false));
+      .then((d) => {
+        if (d && d.status) d.status = d.status.toLowerCase();
+        setRunStatus(d);
+      })
+      .catch(() => {});
   };
 
   useEffect(() => { load(); loadRunStatus(); }, []);
 
-  // Poll for run status when a refresh is active
+  const isRunActive = runStatus && (runStatus.status === 'running' || runStatus.status === 'queued');
+
+  // Poll for run status while a refresh is active
   useEffect(() => {
-    if (!runStatus) return;
-    const isRunning = runStatus.status === 'running' || runStatus.status === 'queued';
-    if (!isRunning) return;
+    if (!isRunActive) return;
     const interval = setInterval(() => { loadRunStatus(); }, 5000);
     return () => clearInterval(interval);
-  }, [runStatus]);
+  }, [isRunActive]);
 
   const handleRefreshTaxonomy = async () => {
     setTaxRefreshing(true); setTaxResult('');
@@ -114,8 +114,6 @@ export default function RozetkaOverviewPage() {
       setTaxRefreshing(false);
     }
   };
-
-  const isRunActive = runStatus && (runStatus.status === 'running' || runStatus.status === 'queued');
 
   if (loading) return <LoadingState label="Завантаження статистики..." />;
   if (error) return <ErrorState message={error} onRetry={() => window.location.reload()} />;

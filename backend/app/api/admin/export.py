@@ -524,7 +524,7 @@ async def taxonomy_values(
             filters.append("(v.value ILIKE %s OR v.external_id ILIKE %s)")
             params.extend([f"%{q}%", f"%{q}%"])
         where = " AND ".join(filters)
-        count_sql = f"""SELECT count(*) AS c
+        count_sql = f"""SELECT count(DISTINCT v.id) AS c
                         FROM channel_external_values v
                         JOIN channel_external_attributes a
                           ON a.channel_id = v.channel_id AND a.external_id = v.attribute_external_id
@@ -532,7 +532,7 @@ async def taxonomy_values(
         cur.execute(count_sql, params)
         total = cur.fetchone()["c"]
         cur.execute(
-            f"""SELECT v.id, v.attribute_external_id, v.external_id, v.value, v.fetched_at,
+            f"""SELECT DISTINCT ON (v.id) v.id, v.attribute_external_id, v.external_id, v.value, v.fetched_at,
                        a.name AS attribute_name, a.category_external_id,
                        c.name AS category_name
                 FROM channel_external_values v
@@ -541,7 +541,7 @@ async def taxonomy_values(
                 LEFT JOIN channel_external_categories c
                        ON c.channel_id = a.channel_id AND c.external_id = a.category_external_id
                 WHERE {where}
-                ORDER BY v.value LIMIT %s OFFSET %s""",
+                ORDER BY v.id, v.value LIMIT %s OFFSET %s""",
             params + [per_page, (page - 1) * per_page],
         )
         return {"items": cur.fetchall(), "total": total, "page": page, "per_page": per_page}

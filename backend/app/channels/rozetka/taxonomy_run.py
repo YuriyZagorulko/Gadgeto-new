@@ -30,7 +30,7 @@ from app.core.db_connect import DB
 
 # A taxonomy run can legitimately take minutes.  Rows that remain QUEUED/RUNNING
 # longer than this without a heartbeat are declared orphaned (e.g. restart).
-STALE_RUN_MINUTES = int(os.getenv("TAXONOMY_STALE_MINUTES", "45"))
+STALE_RUN_MINUTES = int(os.getenv("TAXONOMY_STALE_MINUTES", "5"))
 # Aggregate progress DB writes: never hammer the DB on a per-category basis.
 WRITE_EVERY = 0.7  # seconds
 MAX_LOGS = 300
