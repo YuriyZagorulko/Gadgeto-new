@@ -83,7 +83,7 @@ export default function Header() {
           <div className="flex items-center justify-between h-16">
             <Link href="/" className="text-2xl font-bold text-blue-700">Gadgeto</Link>
             <nav className="hidden md:flex items-center gap-6 text-sm">
-              {categories.slice(0, 6).map((c: any) => (
+              {categories.slice(0, 3).map((c: any) => (
                 <Link key={c.slug} href={`/catalog/${c.slug}`} className="hover:text-blue-600 transition">{c.name}</Link>
               ))}
             </nav>

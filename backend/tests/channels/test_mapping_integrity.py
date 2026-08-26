@@ -43,6 +43,11 @@ class FakeResolver:
                 return result
         return self._vals.get((internal_value_id, None))
 
+    def resolve_value_by_text(self, attribute_id, value_text, external_category_id=None):
+        """Resolve a text value via the intermediate value bridge."""
+        # This test FakeResolver doesn't use value_text-based resolution
+        return None
+
     def has_rules(self):
         return True
 

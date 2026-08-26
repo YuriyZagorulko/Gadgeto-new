@@ -25,6 +25,8 @@ class ChannelMappingResolver:
         cat = resolver.resolve_category(internal_category_id=42)
         attr = resolver.resolve_attribute(internal_attribute_id=10, external_category_id='123')
         val = resolver.resolve_value(internal_value_id=100, external_category_id='123')
+        # Value resolution by text (when attribute_value_id is not set):
+        val = resolver.resolve_value_by_text(attribute_id=10, value_text='4 вентилятори', ext_cat_id='123')
     """
 
     def __init__(self, channel_id: int, channel_code: str = "rozetka"):
@@ -36,6 +38,8 @@ class ChannelMappingResolver:
         self._attrs: dict[tuple, dict] = {}
         # {(internal_value_id, external_category_id): {external_value_id, ...}}
         self._vals: dict[tuple, dict] = {}
+        # {(attribute_id, value_text): attribute_value_id} — preloaded bridge lookup
+        self._value_text_ids: dict[tuple, int] = {}
         self._load()
 
     # ------------------------------------------------------------------ load
@@ -80,6 +84,20 @@ class ChannelMappingResolver:
             for r in cur.fetchall():
                 key = (r["internal_value_id"], r["external_category_id"])
                 self._vals[key] = dict(r)
+
+            # Value-text bridge: preload (attribute_id, value_text) -> attribute_value_id
+            # for all attributes that have channel mappings, enabling O(1) text lookup.
+            cur.execute(
+                """SELECT av.attribute_id, av.value AS value_text, av.id AS av_id
+                   FROM attribute_values av
+                   JOIN channel_attribute_mappings cam
+                     ON cam.internal_attribute_id = av.attribute_id
+                   WHERE cam.channel_id = %s AND cam.status = 'accepted'""",
+                (self.channel_id,),
+            )
+            for r in cur.fetchall():
+                key = (r["attribute_id"], r["value_text"])
+                self._value_text_ids[key] = r["av_id"]
         finally:
             conn.close()
 
@@ -118,6 +136,27 @@ class ChannelMappingResolver:
             if result is not None:
                 return result
         return self._vals.get((internal_value_id, None))
+
+    def resolve_value_by_text(
+        self, attribute_id: int, value_text: str,
+        external_category_id: str | None = None,
+    ) -> dict | None:
+        """Resolve a text value (product_attributes.value_text) to its external
+        counterpart via the intermediate attribute_values bridge.
+
+        This enables value resolution for product attributes that store values
+        as free text rather than as foreign keys to attribute_values.
+
+        Resolution chain:
+            (attribute_id, value_text) → attribute_values.id → channel_value_mappings → Rozetka
+
+        Returns the external mapping dict (with external_value_id, external_value_name)
+        or None if no mapping exists.
+        """
+        av_id = self._value_text_ids.get((attribute_id, value_text))
+        if av_id is None:
+            return None
+        return self.resolve_value(av_id, external_category_id)
 
     def has_rules(self) -> bool:
         """True if any mapping rules are loaded."""

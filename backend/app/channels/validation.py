@@ -290,7 +290,15 @@ def _build_transform_payload(product: dict, resolver: ChannelMappingResolver,
             else:
                 entry["value"] = pa.get("attr_value_name") or ""
         elif pa["value_text"]:
-            entry["value"] = pa["value_text"]
+            # Try to resolve via the value_text bridge (attribute_values -> mappings)
+            val_mapping = resolver.resolve_value_by_text(
+                pa["attribute_id"], pa["value_text"], ext_cat_id,
+            )
+            if val_mapping:
+                entry["external_value_id"] = val_mapping.get("external_value_id")
+                entry["value"] = val_mapping.get("external_value_name")
+            else:
+                entry["value"] = pa["value_text"]
         transformed_attrs.append(entry)
     transformed_images = []
     for img in product.get("images") or []:

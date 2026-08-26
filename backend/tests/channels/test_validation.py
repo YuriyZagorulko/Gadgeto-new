@@ -72,6 +72,20 @@ class FakeResolver:
                 return result
         return self._vals.get((internal_value_id, None))
 
+    def resolve_value_by_text(self, attribute_id, value_text, external_category_id=None):
+        """Resolve a text value via the intermediate value bridge."""
+        # Only known text values resolve through the bridge
+        # Attribute 10 (Колір): "Чорний" → value ID 100, "Синій" → value ID 101
+        # Attribute 11 (Пам'ять): "128 ГБ" → value ID 110
+        text_to_vid = {
+            10: {"Чорний": 100, "Синій": 101},
+            11: {"128 ГБ": 110},
+        }
+        av_id = text_to_vid.get(attribute_id, {}).get(value_text)
+        if av_id is None:
+            return None
+        return self.resolve_value(av_id, external_category_id)
+
     def has_rules(self):
         return True
 

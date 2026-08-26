@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { api, qs } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import { PageHeader, Button, Badge, LoadingState, ErrorState } from '@/components/ui';
@@ -194,6 +195,13 @@ export default function RozetkaOverviewPage() {
             {runStatus.current_operation && (
               <div className="text-xs text-gray-600 mt-1">{runStatus.current_operation}</div>
             )}
+            {runStatus.run_id && (
+              <div className="mt-2">
+                <Link href={`/export/rozetka/taxonomy/runs/${runStatus.run_id}`} className="text-xs text-blue-600 hover:underline">
+                  Переглянути звіт →
+                </Link>
+              </div>
+            )}
           </div>
         )}
 
@@ -206,6 +214,11 @@ export default function RozetkaOverviewPage() {
             {runStatus.finished_at && <span>Завершено: {formatDateTime(runStatus.finished_at)}</span>}
             {runStatus.duration_seconds != null && <span>Тривалість: {fmtDuration(runStatus.duration_seconds)}</span>}
             {runStatus.errors > 0 && <span className="text-red-600">Помилок: {runStatus.errors}</span>}
+            {runStatus.run_id && (
+              <Link href={`/export/rozetka/taxonomy/runs/${runStatus.run_id}`} className="text-sm text-blue-600 hover:underline ml-2">
+                Звіт →
+              </Link>
+            )}
           </div>
         )}
 

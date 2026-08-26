@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import Link from 'next/link';
 import { api, qs } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import {
@@ -202,7 +203,12 @@ function HistoryTable({ refreshTrigger }: { refreshTrigger: number | null }) {
               <Td className="text-xs">{r.created_count ?? 0}</Td>
               <Td className="text-xs">{r.updated_count ?? 0}</Td>
               <Td className="text-xs"><span className={r.errors > 0 ? 'text-red-600 font-medium' : ''}>{r.errors}</span></Td>
-              <Td><button onClick={() => openDetail(r)} className="text-xs text-blue-600 hover:underline">Деталі</button></Td>
+              <Td>
+                <div className="flex gap-2">
+                  <button onClick={() => openDetail(r)} className="text-xs text-blue-600 hover:underline">Деталі</button>
+                  <Link href={`/export/rozetka/taxonomy/runs/${r.id}`} className="text-xs text-blue-600 hover:underline">Звіт</Link>
+                </div>
+              </Td>
             </tr>
           );
         })}
@@ -359,6 +365,11 @@ export default function RozetkaTaxonomyPage() {
               </div>
             )}
             {status.errors > 0 && (<div className="text-sm text-red-600">Помилок: {status.errors}</div>)}
+            <div className="mt-2">
+              <Link href={`/export/rozetka/taxonomy/runs/${status.run_id}`} className="text-xs text-blue-600 hover:underline">
+                Переглянути звіт →
+              </Link>
+            </div>
           </div>
         </div>
       )}
@@ -377,6 +388,11 @@ export default function RozetkaTaxonomyPage() {
             Категорії: {status.categories.total} | Атрибути: {status.attributes.total} | Значення: {status.values.total}
           </div>
           {status.errors > 0 && (<div className="mt-1 text-sm text-red-600">Помилок: {status.errors}</div>)}
+          <div className="mt-2">
+            <Link href={`/export/rozetka/taxonomy/runs/${status.run_id}`} className="text-sm text-blue-600 hover:underline">
+              Переглянути звіт →
+            </Link>
+          </div>
         </div>
       )}
 
