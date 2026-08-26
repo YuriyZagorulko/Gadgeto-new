@@ -549,6 +549,129 @@ async def taxonomy_values(
         conn.close()
 
 
+# ── Products ──────────────────────────────────────────────────────────────────
+
+
+@router.get("/export/channels/{code}/products")
+async def channel_products(
+        code: str,
+        page: int = Query(1, ge=1),
+        per_page: int = Query(20, ge=1, le=100),
+        q: Optional[str] = Query(None),
+        category_id: Optional[int] = Query(None),
+        publication_status: Optional[str] = Query(None),
+        sync_status: Optional[str] = Query(None),
+        stock_status: Optional[str] = Query(None),
+        has_mapping: Optional[bool] = Query(None),
+        user=Depends(require_admin),
+):
+    """Paginated list of products with Rozetka listing and mapping status.
+
+    Server-side pagination, search by SKU/name, category filter,
+    listing status filters, and mapping status indicator.
+    """
+    conn, cur = db()
+    try:
+        channel = _resolve_channel(cur, code)
+        cid = channel["id"]
+
+        filters = ["1 = 1"]
+        params: list = []
+
+        if q:
+            filters.append("(p.sku ILIKE %s OR p.name ILIKE %s)")
+            params.extend([f"%{q}%", f"%{q}%"])
+        if category_id is not None:
+            filters.append(
+                "EXISTS (SELECT 1 FROM product_categories pc "
+                "WHERE pc.product_id = p.id AND pc.category_id = %s)")
+            params.append(category_id)
+        if stock_status:
+            filters.append("p.stock_status = %s")
+            params.append(stock_status)
+        if publication_status is not None:
+            filters.append("COALESCE(cl.publication_status, 'draft') = %s")
+            params.append(publication_status)
+        if sync_status is not None:
+            filters.append("COALESCE(cl.sync_status, 'idle') = %s")
+            params.append(sync_status)
+        if has_mapping is not None:
+            exists_sql = (
+                "EXISTS (SELECT 1 FROM channel_category_mappings ccm "
+                "JOIN product_categories pc2 ON pc2.category_id = ccm.internal_category_id "
+                "WHERE ccm.channel_id = %s AND ccm.status = 'accepted' "
+                "AND pc2.product_id = p.id)")
+            if has_mapping:
+                filters.append(exists_sql)
+            else:
+                filters.append("NOT " + exists_sql)
+            params.append(cid)
+
+        where = " AND ".join(filters)
+        base_params = [cid] + params
+
+        cur.execute(
+            f"SELECT count(*) AS c FROM products p "
+            f"LEFT JOIN channel_listings cl ON cl.product_id = p.id AND cl.channel_id = %s "
+            f"WHERE {where}",
+            base_params)
+        total = cur.fetchone()["c"]
+
+        data_sql = f"""
+            SELECT p.id, p.sku, p.name,
+                   p.price, p.currency, p.stock_qty, p.stock_status,
+                   p.status AS product_status,
+                   (SELECT c.name FROM product_categories pc
+                    JOIN categories c ON c.id = pc.category_id
+                    WHERE pc.product_id = p.id ORDER BY pc.id LIMIT 1) AS category_name,
+                   (SELECT pc.category_id FROM product_categories pc
+                    WHERE pc.product_id = p.id ORDER BY pc.id LIMIT 1) AS category_id,
+                   cl.id AS listing_id,
+                   cl.publication_status, cl.sync_status,
+                   cl.external_id, cl.last_error_type, cl.last_error_message,
+                   cl.last_synced_at,
+                   EXISTS (SELECT 1 FROM channel_category_mappings ccm
+                           JOIN product_categories pc2 ON pc2.category_id = ccm.internal_category_id
+                           WHERE ccm.channel_id = %s AND ccm.status = 'accepted'
+                           AND pc2.product_id = p.id) AS has_mapping
+            FROM products p
+            LEFT JOIN channel_listings cl ON cl.product_id = p.id AND cl.channel_id = %s
+            WHERE {where}
+            ORDER BY p.id DESC
+            LIMIT %s OFFSET %s
+        """
+        cur.execute(
+            data_sql,
+            base_params + [per_page, (page - 1) * per_page])
+        items = []
+        for r in cur.fetchall():
+            item = {
+                "id": r["id"],
+                "sku": r["sku"] or "",
+                "name": r["name"] or "",
+                "category_name": r["category_name"],
+                "category_id": r["category_id"],
+                "price": float(r["price"]) if r["price"] else 0.0,
+                "stock_qty": r["stock_qty"] or 0,
+                "stock_status": r["stock_status"] or "out_of_stock",
+                "status": r["product_status"] or "DRAFT",
+                "publication_status": r["publication_status"] or "draft",
+                "sync_status": r["sync_status"] or "idle",
+                "external_id": r["external_id"],
+                "has_mapping": bool(r["has_mapping"]),
+                "validation_summary": {"errors": 0, "warnings": 0},
+            }
+            if r["sync_status"] == "error":
+                item["last_error"] = (
+                    r.get("last_error_type") or
+                    r.get("last_error_message") or "")
+            items.append(item)
+
+        return {"items": items, "total": total, "page": page, "per_page": per_page}
+    finally:
+        conn.close()
+
+
 # ── Validation ───────────────────────────────────────────────────────────────
 
 
@@ -568,3 +691,406 @@ async def validate_product_endpoint(
     result = _validate(body.product_id, channel_code=code,
                        public_base_url=body.public_base_url)
     return result
+
+
+# ── Export Preview ───────────────────────────────────────────────────────────
+
+MAX_PREVIEW_PRODUCTS = 50
+
+
+class PreviewSelectionFilters(BaseModel):
+    q: Optional[str] = None
+    category_id: Optional[int] = None
+    publication_status: Optional[str] = None
+    sync_status: Optional[str] = None
+    stock_status: Optional[str] = None
+    has_mapping: Optional[bool] = None
+
+
+class PreviewSelection(BaseModel):
+    all_matching_filters: bool = False
+    product_ids: Optional[list[int]] = None
+    filters: Optional[PreviewSelectionFilters] = None
+    exclude_ids: Optional[list[int]] = None
+
+
+class PreviewRequest(BaseModel):
+    selection: PreviewSelection
+    public_base_url: Optional[str] = None
+
+def _resolve_preview_product_ids(
+    cur, cid: int, selection: PreviewSelection,
+) -> list[int]:
+    """Resolve a PreviewSelection to a concrete list of product IDs."""
+    if not selection.all_matching_filters:
+        if not selection.product_ids:
+            raise HTTPException(
+                status_code=422,
+                detail="Виберіть товари для попереднього перегляду")
+        return selection.product_ids
+
+    sf = selection.filters or PreviewSelectionFilters()
+    filters = ["1 = 1"]
+    params: list = []
+
+    if sf.q:
+        filters.append("(p.sku ILIKE %s OR p.name ILIKE %s)")
+        params.extend([f"%{sf.q}%", f"%{sf.q}%"])
+    if sf.category_id is not None:
+        filters.append(
+            "EXISTS (SELECT 1 FROM product_categories pc "
+            "WHERE pc.product_id = p.id AND pc.category_id = %s)")
+        params.append(sf.category_id)
+    if sf.stock_status:
+        filters.append("p.stock_status = %s")
+        params.append(sf.stock_status)
+    if sf.publication_status is not None:
+        filters.append("COALESCE(cl.publication_status, 'draft') = %s")
+        params.append(sf.publication_status)
+    if sf.sync_status is not None:
+        filters.append("COALESCE(cl.sync_status, 'idle') = %s")
+        params.append(sf.sync_status)
+    if sf.has_mapping is not None:
+        exists_sql = (
+            "EXISTS (SELECT 1 FROM channel_category_mappings ccm "
+            "JOIN product_categories pc2 ON pc2.category_id = ccm.internal_category_id "
+            "WHERE ccm.channel_id = %s AND ccm.status = 'accepted' "
+            "AND pc2.product_id = p.id)")
+        if sf.has_mapping:
+            filters.append(exists_sql)
+        else:
+            filters.append("NOT " + exists_sql)
+        params.append(cid)
+
+    exclude_sql = ""
+    if selection.exclude_ids:
+        exclude_sql = " AND p.id != ALL(%s)"
+        params.append(selection.exclude_ids)
+
+    where = " AND ".join(filters)
+    limit = MAX_PREVIEW_PRODUCTS + 1
+    cur.execute(
+        "SELECT p.id FROM products p "
+        "LEFT JOIN channel_listings cl "
+        "  ON cl.product_id = p.id AND cl.channel_id = %s "
+        f"WHERE {where} {exclude_sql} ORDER BY p.id LIMIT %s",
+        [cid] + params + [limit],
+    )
+    ids = [r["id"] for r in cur.fetchall()]
+
+    if len(ids) > MAX_PREVIEW_PRODUCTS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Попередній перегляд обмежений {MAX_PREVIEW_PRODUCTS} "
+                f"товарами. Звужте фільтри або оберіть менше товарів."),
+        )
+    return ids
+
+
+@router.post("/export/channels/{code}/export/preview")
+async def export_preview(
+        code: str,
+        body: PreviewRequest,
+        user=Depends(require_admin),
+):
+    """Preview the export payload for selected products.
+
+    Resolves all mappings, builds the payload using the same logic as
+    the real export, runs validation.  Read-only.  Maximum 50 products.
+    NEVER sends data to Rozetka.
+    """
+    from app.channels.validation import (
+        validate_product as _validate,
+        _load_product_data,
+        _get_external_category_id,
+        _build_transform_payload,
+    )
+    from app.channels.mapping_resolver import ChannelMappingResolver
+    from app.channels.export_settings import (
+        load_export_settings,
+        apply_export_settings,
+        stock_exclusion_reason,
+    )
+
+    conn, cur = db()
+    try:
+        ch = _resolve_channel(cur, code)
+        cid = ch["id"]
+
+        product_ids = _resolve_preview_product_ids(cur, cid, body.selection)
+
+        # Single resolver shared across all preview products
+        resolver = ChannelMappingResolver(channel_id=cid, channel_code=code)
+
+        # Export settings so the preview can show the ACTUAL price that the
+        # real export would submit (single source of truth).
+        try:
+            export_settings = load_export_settings(cur, cid)
+        except Exception:
+            export_settings = None
+
+        preview_products = []
+        summary = {"total": len(product_ids), "exportable": 0,
+                    "errors": 0, "warnings": 0}
+
+        for pid in product_ids:
+            product = _load_product_data(cur, pid)
+            if product is None:
+                preview_products.append({
+                    "id": pid, "name": None, "sku": None,
+                    "exportable": False,
+                    "issues": [{"code": "PRODUCT_NOT_FOUND",
+                                "severity": "error",
+                                "message": f"Товар {pid} не знайдено"}],
+                    "category": None, "attributes": [], "payload": None,
+                })
+                summary["errors"] += 1
+                continue
+
+            ext_cat_id = _get_external_category_id(resolver, product)
+            try:
+                payload = _build_transform_payload(
+                    product, resolver, ext_cat_id, body.public_base_url)
+            except Exception:
+                payload = None
+
+            # Apply the SAME export settings/preview as the real export.
+            if payload is not None and export_settings is not None:
+                apply_export_settings(payload, export_settings)
+                product["export_price"] = payload.get("export_price")
+
+            validation = _validate(pid, channel_code=code,
+                                   public_base_url=body.public_base_url,
+                                   export_settings=export_settings)
+            exportable = validation.get("ready", False)
+            issues = validation.get("issues", [])
+
+            # Attribute preview details
+            attrs_preview = []
+            for pa in product.get("attributes") or []:
+                attr_map = resolver.resolve_attribute(
+                    pa["attribute_id"], ext_cat_id)
+                mapped = attr_map is not None
+                ext_attr_id = attr_map.get("external_attribute_id") if mapped else None
+                ext_attr_name = attr_map.get("external_attribute_name") if mapped else None
+
+                resolved_val = None
+                ext_val_id = None
+                warning = None
+                if pa["attribute_value_id"]:
+                    val_map = resolver.resolve_value(
+                        pa["attribute_value_id"], ext_cat_id)
+                    if val_map:
+                        resolved_val = val_map.get("external_value_name")
+                        ext_val_id = val_map.get("external_value_id")
+                elif pa.get("value_text"):
+                    val_map = resolver.resolve_value_by_text(
+                        pa["attribute_id"], pa["value_text"], ext_cat_id)
+                    if val_map:
+                        resolved_val = val_map.get("external_value_name")
+                        ext_val_id = val_map.get("external_value_id")
+                    else:
+                        resolved_val = pa["value_text"]
+                        if mapped:
+                            warning = "Не зіставлено — передається оригінальний текст"
+
+                attrs_preview.append({
+                    "internal_attribute_id": pa["attribute_id"],
+                    "internal_attribute_name": pa.get("attr_name", ""),
+                    "internal_value": pa.get("value_text") or "",
+                    "external_attribute_id": ext_attr_id,
+                    "external_attribute_name": ext_attr_name,
+                    "external_value_id": ext_val_id,
+                    "external_value": resolved_val,
+                    "mapped": mapped and (ext_val_id is not None
+                                          or not pa.get("value_text")),
+                    "warning": warning,
+                })
+
+            # Category preview
+            cat_preview = None
+            for cat in product.get("categories") or []:
+                cm = resolver.resolve_category(cat["category_id"])
+                if cm:
+                    cat_preview = {
+                        "internal_id": cat["category_id"],
+                        "internal_name": cat.get("category_name", ""),
+                        "external_id": cm.get("external_category_id"),
+                        "external_name": cm.get("external_category_name"),
+                        "mapped": True,
+                    }
+                    break
+            if cat_preview is None and product.get("categories"):
+                cat_preview = {
+                    "internal_id": product["categories"][0]["category_id"],
+                    "internal_name": product["categories"][0].get("category_name", ""),
+                    "external_id": None, "external_name": None,
+                    "mapped": False,
+                }
+
+            err_count = sum(1 for i in issues if i.get("severity") == "error")
+            warn_count = sum(1 for i in issues if i.get("severity") == "warning")
+
+            preview_products.append({
+                "id": pid,
+                "sku": product.get("sku") or "",
+                "name": product.get("name") or "",
+                "exportable": exportable,
+                "issues": issues,
+                "category": cat_preview,
+                "attributes": attrs_preview,
+                "payload": payload,
+            })
+            if exportable:
+                summary["exportable"] += 1
+            if err_count > 0:
+                summary["errors"] += 1
+            if warn_count > 0:
+                summary["warnings"] += 1
+
+        return {"products": preview_products, "summary": summary}
+    finally:
+        conn.close()
+
+
+# ── Export (real, async) ─────────────────────────────────────────────────────
+
+
+def _resolve_export_product_ids(cur, cid: int, selection: PreviewSelection) -> list[int]:
+    """Resolve a selection to a concrete product-ID list server-side.
+
+    Mirrors the preview resolution but WITHOUT the 50-product cap, so a
+    full "export all" works without loading the catalog into the browser.
+    `product_ids` never come from the browser as prices/categories/ids:
+    only the internal product ids (or filters) are accepted and everything
+    else is resolved from the database inside the engine.
+    """
+    if not selection.all_matching_filters:
+        if not selection.product_ids:
+            raise HTTPException(
+                status_code=422, detail="Виберіть товари для експорту")
+        # De-duplicate without trusting the client beyond internal ids.
+        return list(dict.fromkeys(int(x) for x in selection.product_ids))
+
+    sf = selection.filters or PreviewSelectionFilters()
+    filters = ["1 = 1"]
+    params: list = []
+    if sf.q:
+        filters.append("(p.sku ILIKE %s OR p.name ILIKE %s)")
+        params.extend([f"%{sf.q}%", f"%{sf.q}%"])
+    if sf.category_id is not None:
+        filters.append(
+            "EXISTS (SELECT 1 FROM product_categories pc "
+            "WHERE pc.product_id = p.id AND pc.category_id = %s)")
+        params.append(sf.category_id)
+    if sf.stock_status:
+        filters.append("p.stock_status = %s")
+        params.append(sf.stock_status)
+    if sf.publication_status is not None:
+        filters.append("COALESCE(cl.publication_status, 'draft') = %s")
+        params.append(sf.publication_status)
+    if sf.sync_status is not None:
+        filters.append("COALESCE(cl.sync_status, 'idle') = %s")
+        params.append(sf.sync_status)
+    if sf.has_mapping is not None:
+        exists_sql = (
+            "EXISTS (SELECT 1 FROM channel_category_mappings ccm "
+            "JOIN product_categories pc2 ON pc2.category_id = ccm.internal_category_id "
+            "WHERE ccm.channel_id = %s AND ccm.status = 'accepted' "
+            "AND pc2.product_id = p.id)")
+        if sf.has_mapping:
+            filters.append(exists_sql)
+        else:
+            filters.append("NOT " + exists_sql)
+        params.append(cid)
+
+    exclude_sql = ""
+    if selection.exclude_ids:
+        exclude_sql = " AND p.id != ALL(%s)"
+        params.append(list(int(x) for x in selection.exclude_ids))
+
+    where = " AND ".join(filters)
+    cur.execute(
+        "SELECT p.id FROM products p "
+        "LEFT JOIN channel_listings cl "
+        "  ON cl.product_id = p.id AND cl.channel_id = %s "
+        f"WHERE {where} {exclude_sql} ORDER BY p.id",
+        [cid] + params,
+    )
+    return [r["id"] for r in cur.fetchall()]
+
+
+class ExportRequest(BaseModel):
+    selection: PreviewSelection
+    public_base_url: Optional[str] = None
+
+
+@router.post("/export/channels/{code}/export")
+async def start_export(
+        code: str,
+        body: ExportRequest,
+        user=Depends(require_admin),
+):
+    """Start a real (async) Rozetka export of the selected products.
+
+    Selection is resolved SERVER-SIDE.  Returns immediately with a run_id;
+    progress/status is polled via GET .../export/status/{run_id}.
+    """
+    from app.channels.export_run import (
+        ExportRunBusy,
+        start_export_run,
+        run_export,
+    )
+
+    conn, cur = db()
+    try:
+        ch = _resolve_channel(cur, code)
+        cid = ch["id"]
+        product_ids = _resolve_export_product_ids(cur, cid, body.selection)
+    finally:
+        conn.close()
+
+    if not product_ids:
+        raise HTTPException(status_code=422,
+                            detail="Не вибрано жодного товару для експорту")
+
+    try:
+        run_id = start_export_run(cid, product_ids, body.public_base_url,
+                                  user_id=user.get("id"))
+    except ExportRunBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    # Offload to a worker thread so the async event loop stays free.
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, run_export, cid, code, run_id,
+                         product_ids, body.public_base_url)
+
+    return {
+        "run_id": run_id,
+        "status": "queued",
+        "total": len(product_ids),
+    }
+
+
+@router.get("/export/channels/{code}/export/status/{run_id}")
+async def export_status(
+        code: str,
+        run_id: int,
+        user=Depends(require_admin),
+):
+    """Poll the live progress/final result of an export run."""
+    from app.channels.export_run import get_export_run_status
+
+    conn, cur = db()
+    try:
+        ch = _resolve_channel(cur, code)
+        status = get_export_run_status(cur, ch["id"], run_id)
+    finally:
+        conn.close()
+
+    if status is None:
+        raise HTTPException(status_code=404,
+                            detail="Експорт не знайдено")
+    return status

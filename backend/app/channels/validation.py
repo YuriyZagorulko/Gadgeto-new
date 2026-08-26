@@ -33,6 +33,10 @@ ISSUE_MISSING_BRAND = "MISSING_BRAND"
 ISSUE_MISSING_STOCK = "MISSING_STOCK"
 ISSUE_NO_TAXONOMY = "NO_TAXONOMY"
 ISSUE_MISSING_REQUIRED_ATTR_MAPPING = "MISSING_REQUIRED_ATTR_MAPPING"
+# Phase 6.3: export-settings driven exclusion (stock rules).  Only reported
+# when an ExportSettings dict is passed; keeps validate_product() backwards
+# compatible.
+ISSUE_EXCLUDED_BY_STOCK_RULE = "EXCLUDED_BY_STOCK_RULE"
 
 SEVERITY_ERROR = "error"
 SEVERITY_WARNING = "warning"
@@ -109,17 +113,27 @@ def _get_required_attributes(cur, channel_id: int, external_category_id: str) ->
 
 
 def validate_product(product_id: int, channel_code: str = "rozetka",
-                     public_base_url: str | None = None) -> dict:
+                     public_base_url: str | None = None,
+                     export_settings: dict | None = None) -> dict:
+    """Validate a product for export.
+
+    When `export_settings` is provided (loaded via
+    app.channels.export_settings.load_export_settings), stock-rule
+    exclusions are reported as blocking issues so preview and real export
+    share one decision path.
+    """
     conn = psycopg2.connect(DB)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
-        return _validate(cur, product_id, channel_code, public_base_url)
+        return _validate(cur, product_id, channel_code, public_base_url,
+                         export_settings=export_settings)
     finally:
         conn.close()
 
 
 def _validate(cur, product_id: int, channel_code: str = "rozetka",
-              public_base_url: str | None = None) -> dict:
+              public_base_url: str | None = None,
+              export_settings: dict | None = None) -> dict:
     issues: list[dict] = []
     product = _load_product_data(cur, product_id)
     if product is None:
@@ -163,6 +177,24 @@ def _validate(cur, product_id: int, channel_code: str = "rozetka",
         issues.append({"code": ISSUE_MISSING_STOCK, "severity": SEVERITY_WARNING,
                         "message": "Товар відсутній на складі",
                         "details": {"stock_qty": stock_qty, "stock_status": stock_status}})
+    if export_settings is not None:
+        from app.channels.export_settings import (
+            EXCLUDED_BY_STOCK_RULE,
+            stock_exclusion_reason,
+        )
+        reason = stock_exclusion_reason(stock_qty, export_settings)
+        if reason:
+            issues.append({
+                "code": ISSUE_EXCLUDED_BY_STOCK_RULE,
+                "severity": SEVERITY_ERROR,
+                "message": reason,
+                "details": {"stock_qty": stock_qty,
+                            "min_stock_for_export":
+                                export_settings.get("min_stock_for_export"),
+                            "export_out_of_stock":
+                                bool(export_settings.get("export_out_of_stock"))},
+            })
+            ready = False
     if not product.get("brand"):
         issues.append({"code": ISSUE_MISSING_BRAND, "severity": SEVERITY_WARNING,
                         "message": "Відсутній бренд", "details": {}})

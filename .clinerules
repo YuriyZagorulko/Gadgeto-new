@@ -732,3 +732,46 @@ Current development database revision:
 
 DO NOT change Alembic state or execute migrations without explicit user
 approval.
+
+### Temporary Files and Test Artifacts
+
+When working on the project, do NOT leave temporary, diagnostic, experimental, debug, or one-off test files in the repository after completing the task.
+
+If you need to create temporary files for investigation, debugging, API testing, data inspection, experiments, scripts, or diagnostics:
+
+1. Create them only when necessary.
+2. Clearly treat them as temporary artifacts.
+3. Delete all temporary files and artifacts when the task is complete.
+4. Before finishing, inspect the working tree/project directories and remove any temporary files created during the task.
+
+Examples include, but are not limited to:
+- `_test*.py`
+- `_diag*.py`
+- `_debug*.py`
+- `_tmp*.py`
+- `_find*.py`
+- `_check*.py`
+- `_inspect*.py`
+- temporary `.txt`, `.json`, `.log`, `.csv`, `.sql` files
+- one-off API test scripts
+- generated diagnostic reports
+- scratch files
+- temporary payload files
+- temporary endpoint dumps
+- temporary migration/debug artifacts
+
+IMPORTANT:
+If a temporary file turns out to be genuinely useful as a permanent project tool, utility, test, fixture, documentation file, or reusable script, DO NOT keep it automatically.
+
+Instead:
+- Ask for explicit user permission before leaving it in the project.
+- Explain what the file is, why it is useful, and where it would be kept.
+- Only keep it after the user approves.
+
+The default rule is:
+
+CREATE TEMPORARY FILE → USE IT → DELETE IT.
+
+Never leave temporary files in the repository merely because they may be useful later.
+
+Before reporting the task as complete, verify that no temporary artifacts created during the task remain unless they were explicitly approved by the user.

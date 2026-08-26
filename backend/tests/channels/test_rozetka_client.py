@@ -70,15 +70,24 @@ class TestRozetkaAuthClient:
         assert encoded == "dGVzdF9wYXNzd29yZA=="
 
     def test_empty_password_raises(self):
-        """Empty username or password should raise RozetkaAuthError."""
-        client = RozetkaAuthClient(username="", password="")
-        with pytest.raises(RozetkaAuthError, match="must be set"):
-            client.authenticate()
+        """Empty username or password should raise RozetkaAuthError.
+
+        Tags the empty values by forcing the env fallback to empty too, so
+        the test is deterministic even when Rozetka credentials are set in
+        the environment.
+        """
+        with patch("app.channels.rozetka.client.settings.ROZETKA_SELLER_USERNAME", ""), \
+             patch("app.channels.rozetka.client.settings.ROZETKA_SELLER_PASSWORD", ""):
+            client = RozetkaAuthClient(username="", password="")
+            with pytest.raises(RozetkaAuthError, match="must be set"):
+                client.authenticate()
 
     def test_none_password_raises(self):
-        client = RozetkaAuthClient(username=None, password=None)  # type: ignore
-        with pytest.raises(RozetkaAuthError, match="must be set"):
-            client.authenticate()
+        with patch("app.channels.rozetka.client.settings.ROZETKA_SELLER_USERNAME", ""), \
+             patch("app.channels.rozetka.client.settings.ROZETKA_SELLER_PASSWORD", ""):
+            client = RozetkaAuthClient(username=None, password=None)  # type: ignore
+            with pytest.raises(RozetkaAuthError, match="must be set"):
+                client.authenticate()
 
     def test_successful_response_parsing(self):
         """A successful API response should be parsed into RozetkaAuthResult."""
