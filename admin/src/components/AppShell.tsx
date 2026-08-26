@@ -48,6 +48,7 @@ const navItems: NavItem[] = [
         label: 'Rozetka',
         children: [
           { href: '/export/rozetka', label: 'Огляд' },
+          { href: '/export/rozetka/products', label: 'Товари Rozetka' },
           { href: '/export/rozetka/mapping', label: 'Мапінг' },
           { href: '/export/rozetka/taxonomy', label: 'Таксономія' },
           { href: '/export/rozetka/settings', label: 'Налаштування' },

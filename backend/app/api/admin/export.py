@@ -292,6 +292,130 @@ async def taxonomy_run_status(code: str, user=Depends(require_admin)):
         conn.close()
 
 
+@router.get("/export/channels/{code}/taxonomy/runs")
+async def taxonomy_runs_history(
+        code: str,
+        page: int = Query(1, ge=1),
+        per_page: int = Query(25, ge=1, le=100),
+        user=Depends(require_admin),
+):
+    """Paginated list of historical taxonomy runs for the channel."""
+    conn, cur = db()
+    try:
+        channel = _resolve_channel(cur, code)
+        cid = channel["id"]
+
+        cur.execute(
+            "SELECT count(*) AS c FROM sync_runs WHERE channel_id=%s AND run_type='TAXONOMY'",
+            (cid,),
+        )
+        total = cur.fetchone()["c"]
+
+        cur.execute(
+            """SELECT id, status, total_count, processed_count, created_count,
+                      updated_count, failed_count, skipped_count,
+                      current_stage, started_at, finished_at, created_at,
+                      heartbeat_at
+               FROM sync_runs
+               WHERE channel_id=%s AND run_type='TAXONOMY'
+               ORDER BY id DESC
+               LIMIT %s OFFSET %s""",
+            (cid, per_page, (page - 1) * per_page),
+        )
+        rows = cur.fetchall()
+
+        # Attach error count from progress_json
+        result = []
+        for r in rows:
+            item = dict(r)
+            errors = 0
+            if r.get("progress_json"):
+                try:
+                    import json
+                    pj = json.loads(r["progress_json"])
+                    if isinstance(pj, dict):
+                        errors = int(pj.get("errors") or 0)
+                except (ValueError, TypeError):
+                    pass
+            item["errors"] = errors
+            item.pop("progress_json", None)
+            result.append(item)
+
+        return {"items": result, "total": total, "page": page, "per_page": per_page}
+    finally:
+        conn.close()
+
+
+@router.get("/export/channels/{code}/taxonomy/runs/{run_id}")
+async def taxonomy_run_detail(
+        code: str,
+        run_id: int,
+        user=Depends(require_admin),
+):
+    """Detailed progress and logs for a specific taxonomy run."""
+    conn, cur = db()
+    try:
+        channel = _resolve_channel(cur, code)
+        cur.execute(
+            "SELECT * FROM sync_runs WHERE id=%s AND channel_id=%s AND run_type='TAXONOMY'",
+            (run_id, channel["id"]),
+        )
+        run = cur.fetchone()
+        if not run:
+            raise HTTPException(status_code=404, detail="Запуск не знайдено")
+
+        progress = {}
+        if run.get("progress_json"):
+            try:
+                import json
+                progress = json.loads(run["progress_json"]) or {}
+            except (ValueError, TypeError):
+                progress = {}
+        if not isinstance(progress, dict):
+            progress = {}
+        logs = progress.get("logs") or []
+        started_at = run.get("started_at")
+        finished_at = run.get("finished_at")
+        duration = None
+        if started_at:
+            delta = (finished_at or datetime.now()) - started_at
+            duration = max(0, round(delta.total_seconds()))
+
+        cat = progress.get("categories") or {}
+        attrs = progress.get("attributes") or {}
+        vals = progress.get("values") or {}
+        return {
+            "run_id": run["id"],
+            "status": run.get("status"),
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "duration_seconds": duration,
+            "categories": {
+                "processed": int(cat.get("processed") or 0),
+                "total": int(cat.get("total") or 0),
+                "created": int(cat.get("created") or 0),
+                "updated": int(cat.get("updated") or 0),
+            },
+            "attributes": {
+                "categories_processed": int(attrs.get("categories_processed") or 0),
+                "categories_total": int(attrs.get("categories_total") or 0),
+                "total": int(attrs.get("created") or 0) + int(attrs.get("updated") or 0),
+                "created": int(attrs.get("created") or 0),
+                "updated": int(attrs.get("updated") or 0),
+            },
+            "values": {
+                "total": int(vals.get("total") or 0),
+                "created": int(vals.get("created") or 0),
+                "updated": int(vals.get("updated") or 0),
+            },
+            "errors": int(progress.get("errors") or 0),
+            "current_operation": progress.get("current_operation") or run.get("current_stage"),
+            "logs": logs,
+        }
+    finally:
+        conn.close()
+
+
 # ── Taxonomy (local reference data browsing) ─────────────────────────────────
 
 

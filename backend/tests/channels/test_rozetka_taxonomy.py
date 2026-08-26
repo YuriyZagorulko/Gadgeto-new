@@ -198,7 +198,7 @@ class TestErrorHandling:
                 service._parse_response(resp.json.return_value)
 
     def test_http_401_error(self):
-        """HTTP 401 should raise auth error."""
+        """HTTP 401 should retry auth once then raise."""
         with patch(
             "app.channels.rozetka.taxonomy.RozetkaAuthClient"
         ) as MockAuth:
@@ -213,11 +213,11 @@ class TestErrorHandling:
             )
 
             service = RozetkaTaxonomyService(http_client=http_client)
-            with pytest.raises(RozetkaTaxonomyError, match="expired"):
-                service._api_get("http://test/", {"Authorization": "Bearer x"}, {})
+            with pytest.raises(RozetkaTaxonomyError, match="Re-authentication|expired|aborting"):
+                service._api_get_with_retry("http://test/", {"Authorization": "Bearer x"}, {})
 
     def test_http_500_error(self):
-        """HTTP 500 should raise RozetkaTaxonomyError."""
+        """HTTP 500 should retry then raise RozetkaTaxonomyError."""
         http_client = MagicMock(spec=httpx.Client)
         mock_response = MagicMock(spec=httpx.Response)
         mock_response.status_code = 500
@@ -227,8 +227,8 @@ class TestErrorHandling:
         )
 
         service = RozetkaTaxonomyService(http_client=http_client)
-        with pytest.raises(RozetkaTaxonomyError, match="500"):
-            service._api_get("http://test/", {"Authorization": "Bearer x"}, {})
+        with pytest.raises(RozetkaTaxonomyError, match="HTTP 500 after"):
+            service._api_get_with_retry("http://test/", {"Authorization": "Bearer x"}, {})
 
 
 class TestAuthIntegration:

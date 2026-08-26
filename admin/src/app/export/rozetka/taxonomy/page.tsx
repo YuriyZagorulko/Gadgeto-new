@@ -5,14 +5,15 @@ import { api, qs } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import {
   PageHeader, Button, Input, Table, Th, Td,
-  Badge, LoadingState, ErrorState, Pagination, Spinner, useToast,
+  Badge, LoadingState, ErrorState, Pagination, Spinner, useToast, Modal,
 } from '@/components/ui';
 
-type TabName = 'categories' | 'attributes' | 'values';
+type TabName = 'categories' | 'attributes' | 'values' | 'history';
 const TABS: { key: TabName; label: string }[] = [
   { key: 'categories', label: 'Категорії' },
   { key: 'attributes', label: 'Атрибути' },
   { key: 'values', label: 'Значення' },
+  { key: 'history', label: 'Історія оновлень' },
 ];
 
 type TaxonomyStats = { categories: number; attributes: number; values: number };
@@ -93,6 +94,117 @@ function ProgressBar({ pct }: { pct: number }) {
   );
 }
 
+type RunHistoryRow = {
+  id: number; status: string; total_count: number;
+  processed_count: number; created_count: number;
+  updated_count: number; failed_count: number;
+  started_at: string | null; finished_at: string | null;
+  created_at: string; errors: number;
+};
+
+function HistoryTable({ refreshTrigger }: { refreshTrigger: number | null }) {
+  const [runs, setRuns] = useState<RunHistoryRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedRun, setSelectedRun] = useState<RunHistoryRow | null>(null);
+  const [selectedDetail, setSelectedDetail] = useState<RunStatus | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    api.get<{ items: RunHistoryRow[]; total: number }>('/export/channels/rozetka/taxonomy/runs?per_page=50')
+      .then((d) => setRuns(d.items || []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load, refreshTrigger]);
+
+  const openDetail = async (run: RunHistoryRow) => {
+    setSelectedRun(run);
+    setDetailLoading(true);
+    try {
+      const d = await api.get<RunStatus>(`/export/channels/rozetka/taxonomy/runs/${run.id}`);
+      setSelectedDetail(d);
+    } catch { setSelectedDetail(null); }
+    setDetailLoading(false);
+  };
+
+  if (loading) return <LoadingState label="Завантаження історії..." />;
+  if (runs.length === 0) return <p className="text-gray-400 italic text-sm py-6 text-center">Ще не було оновлень таксономії</p>;
+
+  return (
+    <>
+      <Modal open={!!selectedRun} onClose={() => { setSelectedRun(null); setSelectedDetail(null); }}
+        title={`Оновлення #${selectedRun?.id}`}>
+        {detailLoading ? <LoadingState /> : selectedDetail ? (
+          <div className="space-y-3 text-sm">
+            <div className="flex items-center gap-2">
+              <Badge tone={badgeTone[selectedDetail.status] || 'gray'}>{fmtStatus(selectedDetail.status).label}</Badge>
+            </div>
+            {selectedDetail.started_at && <div>Початок: {formatDateTime(selectedDetail.started_at)}</div>}
+            {selectedDetail.finished_at && <div>Завершення: {formatDateTime(selectedDetail.finished_at)}</div>}
+            {selectedDetail.duration_seconds != null && <div>Тривалість: {fmtDuration(selectedDetail.duration_seconds)}</div>}
+            <div className="grid grid-cols-2 gap-3 bg-gray-50 p-3 rounded-lg">
+              <div>
+                <span className="text-gray-500">Категорії:</span>{' '}
+                {selectedDetail.categories.total} (оброблено: {selectedDetail.categories.processed})
+              </div>
+              <div>
+                <span className="text-gray-500">Створено:</span>{' '}
+                {selectedDetail.categories.created}
+              </div>
+              <div>
+                <span className="text-gray-500">Атрибути:</span>{' '}
+                {selectedDetail.attributes.total}
+              </div>
+              <div>
+                <span className="text-gray-500">Значення:</span>{' '}
+                {selectedDetail.values.total}
+              </div>
+              <div>
+                <span className="text-gray-500">Помилки:</span>{' '}
+                <span className={selectedDetail.errors > 0 ? 'text-red-600 font-medium' : ''}>{selectedDetail.errors}</span>
+              </div>
+            </div>
+            {selectedDetail.logs && selectedDetail.logs.length > 0 && (
+              <details>
+                <summary className="cursor-pointer text-sm font-medium text-gray-700">Журнал ({selectedDetail.logs.length})</summary>
+                <div className="mt-2 max-h-40 overflow-y-auto text-xs font-mono space-y-0.5">
+                  {selectedDetail.logs.map((l, i) => (
+                    <div key={i} className="flex gap-2">
+                      <span className="text-gray-400 w-16">{l.level}</span>
+                      <span className="text-gray-600 break-all">{l.message}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+          </div>
+        ) : <p className="text-gray-400">Деталі недоступні</p>}
+      </Modal>
+
+      <Table head={<><Th>#</Th><Th>Статус</Th><Th>Початок</Th><Th>Завершення</Th><Th>Категорії</Th><Th>Атрибути</Th><Th>Значення</Th><Th>Помилки</Th><Th>Дії</Th></>}>
+        {runs.map((r) => {
+          const st = fmtStatus(r.status);
+          return (
+            <tr key={r.id} className="hover:bg-gray-50">
+              <Td className="text-xs font-mono">{r.id}</Td>
+              <Td><Badge tone={st.tone}>{st.label}</Badge></Td>
+              <Td className="text-xs">{r.started_at ? formatDateTime(r.started_at) : '—'}</Td>
+              <Td className="text-xs">{r.finished_at ? formatDateTime(r.finished_at) : '—'}</Td>
+              <Td className="text-xs">{r.total_count ?? 0}</Td>
+              <Td className="text-xs">{r.created_count ?? 0}</Td>
+              <Td className="text-xs">{r.updated_count ?? 0}</Td>
+              <Td className="text-xs"><span className={r.errors > 0 ? 'text-red-600 font-medium' : ''}>{r.errors}</span></Td>
+              <Td><button onClick={() => openDetail(r)} className="text-xs text-blue-600 hover:underline">Деталі</button></Td>
+            </tr>
+          );
+        })}
+      </Table>
+    </>
+  );
+}
+
 function useTaxonomyStatusPoll() {
   const [status, setStatus] = useState<RunStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -164,7 +276,7 @@ export default function RozetkaTaxonomyPage() {
 
   useEffect(() => {
     if (statusError) toast.push('error', statusError);
-  }, [statusError, toast]);
+  }, [statusError]);
 
   if (statusLoading || !status) {
     return <LoadingState label="Завантаження таксономії..." />;
@@ -287,18 +399,22 @@ export default function RozetkaTaxonomyPage() {
         ))}
       </div>
 
-      {/* Search / filters */}
-      <div className="flex flex-wrap items-end gap-3 mb-4">
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Пошук</label>
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Назва або ID" className="w-48"
-            onKeyDown={(e) => { if (e.key === 'Enter') handleApplySearch(); }} />
+      {/* Search / filters — not shown for history tab */}
+      {tab !== 'history' && (
+        <div className="flex flex-wrap items-end gap-3 mb-4">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Пошук</label>
+            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Назва або ID" className="w-48"
+              onKeyDown={(e) => { if (e.key === 'Enter') handleApplySearch(); }} />
+          </div>
+          <Button onClick={handleApplySearch}>Застосувати</Button>
         </div>
-        <Button onClick={handleApplySearch}>Застосувати</Button>
-      </div>
+      )}
 
       {/* Tables */}
-      {list.loading ? <LoadingState /> : list.error ? <ErrorState message={list.error} onRetry={() => window.location.reload()} /> : (
+      {tab === 'history' ? (
+        <HistoryTable refreshTrigger={status?.run_id} />
+      ) : list.loading ? <LoadingState /> : list.error ? <ErrorState message={list.error} onRetry={() => window.location.reload()} /> : (
         <>
                     {tab === 'categories' && (
             <Table head={<><Th>Rozetka ID</Th><Th>Назва</Th><Th>Батьківська</Th><Th>Шлях</Th><Th>Атриб.</Th></>}>

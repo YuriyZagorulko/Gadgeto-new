@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api, qs } from '@/lib/api';
+import { formatDateTime } from '@/lib/format';
 import { PageHeader, Button, Badge, LoadingState, ErrorState } from '@/components/ui';
 
 type Stats = {
@@ -33,6 +34,18 @@ const statusLabel = (s: string) => {
   }
 };
 
+function fmtDuration(seconds?: number | null): string {
+  if (seconds == null || seconds < 0) return '—';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  const parts: string[] = [];
+  if (h > 0) parts.push(`${h}г`);
+  if (m > 0 || h > 0) parts.push(`${m}хв`);
+  parts.push(`${s}с`);
+  return parts.join(' ');
+}
+
 function StatCard({ label, value, tone = 'gray' }: { label: string; value: string | number; tone?: 'gray' | 'green' | 'red' | 'blue' | 'yellow' }) {
   const colors: Record<string, string> = {
     gray: 'bg-gray-50 text-gray-700 border-gray-200',
@@ -56,6 +69,8 @@ export default function RozetkaOverviewPage() {
   const [error, setError] = useState('');
   const [taxRefreshing, setTaxRefreshing] = useState(false);
   const [taxResult, setTaxResult] = useState('');
+  const [runStatus, setRunStatus] = useState<any>(null);
+  const [runLoading, setRunLoading] = useState(false);
 
   const load = () => {
     setLoading(true); setError('');
@@ -68,20 +83,39 @@ export default function RozetkaOverviewPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); }, []);
+  const loadRunStatus = () => {
+    setRunLoading(true);
+    api.get<any>('/export/channels/rozetka/taxonomy/status')
+      .then((d) => setRunStatus(d))
+      .catch(() => {})
+      .finally(() => setRunLoading(false));
+  };
+
+  useEffect(() => { load(); loadRunStatus(); }, []);
+
+  // Poll for run status when a refresh is active
+  useEffect(() => {
+    if (!runStatus) return;
+    const isRunning = runStatus.status === 'running' || runStatus.status === 'queued';
+    if (!isRunning) return;
+    const interval = setInterval(() => { loadRunStatus(); }, 5000);
+    return () => clearInterval(interval);
+  }, [runStatus]);
 
   const handleRefreshTaxonomy = async () => {
     setTaxRefreshing(true); setTaxResult('');
     try {
-      const res = await api.post<{ categories?: number }>('/export/channels/rozetka/taxonomy/refresh');
-      setTaxResult(`Таксономію оновлено: +${res.categories ?? 0} категорій`);
+      const res = await api.post<{ run_id: number }>('/export/channels/rozetka/taxonomy/refresh');
+      setTaxResult('Оновлення таксономії запущено у фоновому режимі');
+      loadRunStatus();
     } catch (e: any) {
       setTaxResult(e.message || 'Помилка');
     } finally {
       setTaxRefreshing(false);
-      load();
     }
   };
+
+  const isRunActive = runStatus && (runStatus.status === 'running' || runStatus.status === 'queued');
 
   if (loading) return <LoadingState label="Завантаження статистики..." />;
   if (error) return <ErrorState message={error} onRetry={() => window.location.reload()} />;
@@ -132,11 +166,61 @@ export default function RozetkaOverviewPage() {
         ) : (
           <p className="text-gray-400 italic text-sm mb-3">Таксономія не завантажена</p>
         )}
-        <Button onClick={handleRefreshTaxonomy} disabled={taxRefreshing}>
-          {taxRefreshing ? 'Оновлення...' : 'Оновити таксономію'}
-        </Button>
+
+        {/* Active run status */}
+        {isRunActive && runStatus && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="inline-block w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+              <span className="text-sm font-medium text-blue-800">Оновлення таксономії виконується</span>
+            </div>
+            <div className="grid grid-cols-3 gap-3 text-sm">
+              <div>
+                <span className="text-gray-500">Категорії:</span>{' '}
+                {runStatus.categories.total} всього, {runStatus.categories.processed} оброблено
+              </div>
+              <div>
+                <span className="text-gray-500">Атрибути:</span>{' '}
+                {runStatus.attributes.total}
+              </div>
+              <div>
+                <span className="text-gray-500">Значення:</span>{' '}
+                {runStatus.values.total}
+              </div>
+              {runStatus.errors > 0 && (
+                <div className="text-red-600">
+                  <span className="text-gray-500">Помилки:</span> {runStatus.errors}
+                </div>
+              )}
+            </div>
+            {runStatus.current_operation && (
+              <div className="text-xs text-gray-600 mt-1">{runStatus.current_operation}</div>
+            )}
+          </div>
+        )}
+
+        {/* Last run result */}
+        {runStatus && !isRunActive && runStatus.status !== 'never' && (
+          <div className="flex items-center gap-2 text-sm text-gray-600 mb-3">
+            <Badge tone={runStatus.status === 'succeeded' ? 'green' : runStatus.status === 'partial' ? 'yellow' : 'red'}>
+              {runStatus.status === 'succeeded' ? 'Успішно' : runStatus.status === 'partial' ? 'Частково' : 'Помилка'}
+            </Badge>
+            {runStatus.finished_at && <span>Завершено: {formatDateTime(runStatus.finished_at)}</span>}
+            {runStatus.duration_seconds != null && <span>Тривалість: {fmtDuration(runStatus.duration_seconds)}</span>}
+            {runStatus.errors > 0 && <span className="text-red-600">Помилок: {runStatus.errors}</span>}
+          </div>
+        )}
+
+        <div className="flex items-center gap-3">
+          <Button onClick={handleRefreshTaxonomy} disabled={taxRefreshing || isRunActive}>
+            {taxRefreshing ? 'Оновлення...' : isRunActive ? 'Виконується...' : 'Оновити таксономію'}
+          </Button>
+          <a href="/export/rozetka/taxonomy" className="text-sm text-blue-600 hover:underline">
+            Детальніше →
+          </a>
+        </div>
         {taxResult && (
-          <p className={`text-sm mt-2 ${taxResult.startsWith('Помилка') || taxResult.startsWith('501') ? 'text-red-600' : 'text-green-600'}`}>
+          <p className={`text-sm mt-2 ${taxResult.startsWith('Помилка') ? 'text-red-600' : 'text-green-600'}`}>
             {taxResult}
           </p>
         )}
