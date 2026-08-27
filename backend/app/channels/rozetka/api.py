@@ -231,6 +231,16 @@ class RozetkaApiClient:
                         error_type="server_5xx", retryable=True,
                         status_code=resp.status_code) from exc
                 return self._check_envelope(method, path, resp.status_code, data)
+            except RozetkaApiError as env_exc:
+                # Envelope-level auth error (e.g. code 6001 session expired
+                # in a 200-OK response) → re-authenticate & retry once.
+                if (not reauthenticated and env_exc.error_type == "auth"
+                        and env_exc.api_code in (CODE_SESSION_EXPIRED,
+                                                 CODE_INVALID_CREDENTIALS)):
+                    reauthenticated = True
+                    self._refresh_token()
+                    continue
+                raise
             except httpx.TimeoutException as exc:
                 last_exc = RozetkaApiError(
                     f"Timeout request {method} {path}: {exc}",
@@ -396,37 +406,55 @@ class RozetkaApiClient:
             "isIgnoreCheck": 1 if ignore_check else 0,
             "items": items,
         }
-        try:
-            resp = self._http.request(
-                "PUT", f"{ROZETKA_API_URL}/items/mass-update",
-                headers=self._headers(self._ensure_token()),
-                json=body,
-            )
-            resp.raise_for_status()
+        reauthenticated = False
+        while True:
             try:
-                data = resp.json()
-            except ValueError as exc:
+                resp = self._http.request(
+                    "PUT", f"{ROZETKA_API_URL}/items/mass-update",
+                    headers=self._headers(self._ensure_token()),
+                    json=body,
+                )
+                if resp.status_code == 401 and not reauthenticated:
+                    reauthenticated = True
+                    self._refresh_token()
+                    continue
+                resp.raise_for_status()
+                try:
+                    data = resp.json()
+                except ValueError as exc:
+                    raise RozetkaApiError(
+                        f"Invalid JSON from Rozetka on PUT /items/mass-update: {exc}",
+                        error_type="server_5xx", retryable=True,
+                        status_code=resp.status_code) from exc
+                if isinstance(data, dict) and not data.get("success"):
+                    errs = data.get("errors")
+                    # Envelope-level auth error → re-authenticate & retry once
+                    if isinstance(errs, dict):
+                        code = errs.get("code")
+                        if not reauthenticated and code in (
+                                CODE_SESSION_EXPIRED, CODE_INVALID_CREDENTIALS):
+                            reauthenticated = True
+                            self._refresh_token()
+                            continue
+                    if isinstance(errs, dict) and errs:
+                        raise RozetkaMassUpdateError(errs)
+                return self._check_envelope("PUT", "/items/mass-update",
+                                            resp.status_code, data) or {}
+            except httpx.TimeoutException as exc:
+                raise RozetkaApiError(f"Timeout PUT /items/mass-update: {exc}",
+                                      error_type="timeout", retryable=True) from exc
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if status == 401 and not reauthenticated:
+                    reauthenticated = True
+                    self._refresh_token()
+                    continue
+                etype = ("rate_limit" if status == 429
+                         else "server_5xx" if status >= 500 else "validation")
                 raise RozetkaApiError(
-                    f"Invalid JSON from Rozetka on PUT /items/mass-update: {exc}",
-                    error_type="server_5xx", retryable=True,
-                    status_code=resp.status_code) from exc
-            if isinstance(data, dict) and not data.get("success"):
-                errs = data.get("errors")
-                if isinstance(errs, dict) and errs:
-                    raise RozetkaMassUpdateError(errs)
-            return self._check_envelope("PUT", "/items/mass-update",
-                                        resp.status_code, data) or {}
-        except httpx.TimeoutException as exc:
-            raise RozetkaApiError(f"Timeout PUT /items/mass-update: {exc}",
-                                  error_type="timeout", retryable=True) from exc
-        except httpx.HTTPStatusError as exc:
-            status = exc.response.status_code
-            etype = ("rate_limit" if status == 429
-                     else "server_5xx" if status >= 500 else "validation")
-            raise RozetkaApiError(
-                f"HTTP {status} on PUT /items/mass-update",
-                error_type=etype, retryable=(etype != "validation"),
-                status_code=status) from exc
+                    f"HTTP {status} on PUT /items/mass-update",
+                    error_type=etype, retryable=(etype != "validation"),
+                    status_code=status) from exc
 
     def search_producers(self, title: str | None = None,
                          page_size: int = 50) -> list[dict]:

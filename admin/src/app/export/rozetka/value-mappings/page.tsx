@@ -137,59 +137,59 @@ export default function RozetkaValueMappingsPage() {
 
   return (
     <div>
-      <PageHeader title="Mapppihr 3haveHb Rozetka" />
+      <PageHeader title="Маппінг значень Rozetka" />
       <p className="text-sm text-gray-500 mb-4">
-        3haveHHa aTpM6yTiB ToBapIB, 3Ki ue He 3icTaBneHi 3 BignoBiAHuMu 3haveHHamu Rozetka.
-        CopTyBaHHa 3a KimbKicTio ToBapIB (HaMBnMB0BiUi nepuUuMu).
+        Значення атрибутів товарів, які ще не зіставлені з відповідними значеннями Rozetka.
+        Сортування за кількістю товарів (найбільші першими).
       </p>
 
       <div className="flex flex-wrap items-end gap-3 mb-4">
         <div>
-          <label className="block text-xs text-gray-500 mb-1">PouyK</label>
+          <label className="block text-xs text-gray-500 mb-1">Пошук</label>
           <Input value={q} onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') { setAppliedQ(q); setPage(1); } }}
-            placeholder="aTpM6yT / 3Ha4eHHa" className="w-48" />
+            placeholder="Атрибут / Значення" className="w-48" />
         </div>
         <div>
           <label className="block text-xs text-gray-500 mb-1">KaTeropia Rozetka</label>
           <Select value={catFilter} onChange={(e) => { setCatFilter(e.target.value); setPage(1); }}>
-            <option value="">Bci kaTeropii</option>
+            <option value="">Всі категорії</option>
             {categories.map((c) => (
               <option key={c.external_id} value={c.external_id}>{c.name}</option>
             ))}
           </Select>
         </div>
         <div>
-          <label className="block text-xs text-gray-500 mb-1">Cratyc</label>
+          <label className="block text-xs text-gray-500 mb-1">Статус</label>
           <Select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}>
-            <option value="unmapped">He 3icTaBneHo</option>
-            <option value="mapped">3icTaBneHo</option>
-            <option value="all">Bci</option>
+            <option value="unmapped">Не зіставлено</option>
+            <option value="mapped">Зіставлено</option>
+            <option value="all">Всі</option>
           </Select>
         </div>
         <div className="text-sm text-gray-600 pt-4">
-          <strong>{total}</strong> KaHAuAaTiB
+          <strong>{total}</strong> кандидатів
         </div>
         <div className="pt-4">
-          <Button variant="primary" onClick={load}>OhoBumu</Button>
+          <Button variant="primary" onClick={load}>Оновити</Button>
         </div>
       </div>
 
-      {loading ? <LoadingState label="3aBaHTaxeHHa..." /> :
+      {loading ? <LoadingState label="Завантаження..." /> :
        error ? <ErrorState message={error} onRetry={load} /> : (
         <div className="overflow-x-auto">
           <Table head={<>
-            <Th>ATpH6yT</Th>
-            <Th>3HayeHH</Th>
-            <Th className="text-right">TOBapIB</Th>
-            <Th>KaTeropia Rozetka</Th>
-            <Th>ATpH6yT Rozetka</Th>
-            <Th>3HayeHH Rozetka</Th>
-            <Th>Cratyc</Th>
+            <Th>Атрибут</Th>
+            <Th>Значення</Th>
+            <Th className="text-right">Товарів</Th>
+            <Th>Категорія Rozetka</Th>
+            <Th>Атрибут Rozetka</Th>
+            <Th>Значення Rozetka</Th>
+            <Th>Статус</Th>
             <Th></Th>
           </>}>
             {rows.length === 0 ? (
-              <tr><td colSpan={8} className="p-6 text-center text-gray-400">HeMaE KaHAuAaTiB</td></tr>
+              <tr><td colSpan={8} className="p-6 text-center text-gray-400">Немає кандидатів</td></tr>
             ) : rows.map((r) => (
               <tr key={r.internal_value_id} className="hover:bg-gray-50">
                 <Td className="font-medium">{r.attribute_name}</Td>
@@ -198,12 +198,12 @@ export default function RozetkaValueMappingsPage() {
                 <Td className="text-xs">{r.external_category_name || <span className="text-gray-400">—</span>}</Td>
                 <Td className="text-xs">{r.external_attribute_name || <span className="text-gray-400">—</span>}</Td>
                 <Td className="text-xs">{r.external_value_name || <span className="text-gray-400">—</span>}</Td>
-                <Td><Badge tone={r.mapped ? 'green' : 'red'}>{r.mapped ? '3icTaBneHo' : 'He 3icTaBneHo'}</Badge></Td>
+                <Td><Badge tone={r.mapped ? 'green' : 'red'}>{r.mapped ? 'Зіставлено' : 'Не зіставлено'}</Badge></Td>
                 <Td>
                   {!r.mapped && r.external_attribute_id ? (
-                    <Button size="sm" variant="secondary" onClick={() => openReview(r)}>3icTaBumu</Button>
+                    <Button size="sm" variant="secondary" onClick={() => openReview(r)}>Зіставити</Button>
                   ) : (
-                    <span className="text-xs text-gray-400">{r.mapped ? '—' : 'HeMaE aTpH6yTa'}</span>
+                    <span className="text-xs text-gray-400">{r.mapped ? '—' : 'Немає атрибута'}</span>
                   )}
                 </Td>
               </tr>
@@ -216,17 +216,17 @@ export default function RozetkaValueMappingsPage() {
         onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}
         pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }} />
 
-      <Modal open={reviewItem !== null} onClose={() => setReviewItem(null)} title="OrnaA 3icTaBneHHa 3HayeHHa">
+      <Modal open={reviewItem !== null} onClose={() => setReviewItem(null)} title="Огляд зіставлення значення">
         {reviewItem && (
           <div className="space-y-4">
             <div className="bg-gray-50 rounded p-3 text-sm space-y-1">
-              <div><span className="text-gray-500">ATpH6yT:</span> <strong>{reviewItem.attribute_name}</strong></div>
-              <div><span className="text-gray-500">3HayeHHa:</span> <strong>{reviewItem.internal_value}</strong></div>
-              <div><span className="text-gray-500">TOBapIB:</span> <strong>{reviewItem.product_count.toLocaleString('uk-UA')}</strong></div>
+              <div><span className="text-gray-500">Атрибут:</span> <strong>{reviewItem.attribute_name}</strong></div>
+              <div><span className="text-gray-500">Значення:</span> <strong>{reviewItem.internal_value}</strong></div>
+              <div><span className="text-gray-500">Товарів:</span> <strong>{reviewItem.product_count.toLocaleString('uk-UA')}</strong></div>
             </div>
 
             <div className="bg-gray-50 rounded p-3 text-sm">
-              <div className="text-gray-500 mb-1">ATpH6yT Rozetka:</div>
+              <div className="text-gray-500 mb-1">Атрибут Rozetka:</div>
               <div className="font-medium">{reviewItem.external_attribute_name || '—'}</div>
               {reviewItem.external_attribute_id && (
                 <div className="text-xs text-gray-400">ID: {reviewItem.external_attribute_id}</div>
@@ -234,13 +234,13 @@ export default function RozetkaValueMappingsPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">3HayeHHa Rozetka</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Значення Rozetka</label>
               <Input value={extValSearch} onChange={(e) => setExtValSearch(e.target.value)}
-                placeholder="PouyK 3HaveHb Rozetka..." className="w-full mb-2" />
+                placeholder="Пошук значень Rozetka..." className="w-full mb-2" />
               {extValLoading ? (
-                <LoadingState label="3aBaHTaxeHHa 3Ha4eHb..." />
+                <LoadingState label="Завантаження значень..." />
               ) : filteredExtValues.length === 0 ? (
-                <p className="text-sm text-gray-400">HeMaE 3Ha4eHb Rozetka AAR uboro aTpH6yTa</p>
+                <p className="text-sm text-gray-400">Немає значень Rozetka для цього атрибута</p>
               ) : (
                 <div className="max-h-48 overflow-y-auto border border-gray-200 rounded text-sm">
                   {filteredExtValues.map((v) => (
@@ -261,17 +261,17 @@ export default function RozetkaValueMappingsPage() {
 
             {selectedExtValId && (
               <div className="bg-blue-50 rounded p-3 text-sm">
-                <div className="font-medium text-blue-800">BupaHo 3HayeHHa Rozetka</div>
+                <div className="font-medium text-blue-800">Вибрано значення Rozetka</div>
                 <div className="text-blue-600">{selectedExtValName}</div>
                 <div className="text-xs text-blue-400">ID: {selectedExtValId}</div>
               </div>
             )}
 
             <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
-              <Button variant="ghost" onClick={() => setReviewItem(null)}>3akpuTu</Button>
+              <Button variant="ghost" onClick={() => setReviewItem(null)}>Закрити</Button>
               <Button variant="primary" onClick={saveMapping}
                 disabled={!selectedExtValId || saving}>
-                {saving ? '3gepexeHHa...' : '3geperu Mannir'}
+                {saving ? 'Збереження...' : 'Зберегти Маппінг'}
               </Button>
             </div>
           </div>

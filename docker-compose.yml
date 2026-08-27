@@ -34,6 +34,15 @@ services:
       - ${SUPPLIER_FEEDS_HOST_DIR:-./data/feeds}:/data/feeds
       # Mounted entrypoint so we can override uvicorn args without rebuilding
       - ./backend/entrypoint.sh:/entrypoint.sh
+      # Overlay missing admin API files (not in the built image yet) — remove after image rebuild
+      - ./backend/app/api/admin/__init__.py:/app/app/api/admin/__init__.py
+      - ./backend/app/api/admin/export.py:/app/app/api/admin/export.py
+      - ./backend/app/api/admin/export_mapping.py:/app/app/api/admin/export_mapping.py
+      # Overlay missing channels module (not in the built image yet) — remove after image rebuild
+      - ./backend/app/channels:/app/app/channels
+      - ./backend/app/api/admin/category_attributes.py:/app/app/api/admin/category_attributes.py
+      # Overlay config.py (built image is older, missing ROZETKA_API_URL etc.)
+      - ./backend/app/core/config.py:/app/app/core/config.py
     ports:
       - "8000:8000"
     healthcheck:

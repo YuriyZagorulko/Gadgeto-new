@@ -1141,7 +1141,7 @@ async def value_mapping_candidates(
             filters.append("cvm.external_category_id IS NOT DISTINCT FROM %s")
             params.append(external_category_id)
 
-        filters.append("sq.product_count >= %s")
+        having = f"count(DISTINCT pa.product_id) >= %s"
         params.append(min_products)
 
         where = " AND ".join(filters)
@@ -1159,6 +1159,7 @@ async def value_mapping_candidates(
                     AND cvm.channel_id = %s
                 WHERE {where}
                 GROUP BY av.attribute_id, av.value, av.id
+                HAVING {having}
             ) AS sq
         """
         cur.execute(count_sql, [cid] + params)
@@ -1186,6 +1187,7 @@ async def value_mapping_candidates(
                     AND cvm.channel_id = %s
                 WHERE {where}
                 GROUP BY av.attribute_id, av.value, av.id
+                HAVING {having}
             ) AS sq
             JOIN attributes a ON a.id = sq.attribute_id
             LEFT JOIN channel_attribute_mappings cam
@@ -1202,7 +1204,7 @@ async def value_mapping_candidates(
             ORDER BY sq.product_count DESC
             LIMIT %s OFFSET %s
         """
-        cur.execute(data_sql, [cid] + params + [cid, cid, cid, cid, cid, per_page, (page - 1) * per_page])
+        cur.execute(data_sql, [cid] + params + [cid, cid, cid, cid, per_page, (page - 1) * per_page])
         items = []
         for r in cur.fetchall():
             items.append({

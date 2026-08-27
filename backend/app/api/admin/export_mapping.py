@@ -545,7 +545,7 @@ async def pick_values(code: str, attribute_id: Optional[int] = Query(None),
 
 @router.get("/export/channels/{code}/pickers/external-categories")
 async def pick_external_categories(code: str, q: Optional[str] = Query(None),
-                                   page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
+                                   page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=200),
                                    user=Depends(require_admin)):
     """Rozetka categories from the LOCAL taxonomy (never an API call)."""
     conn, cur = db()

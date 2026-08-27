@@ -382,12 +382,32 @@ class RozetkaTaxonomyService:
     def _api_get_with_retry(self, url: str, headers: dict, params: dict) -> dict:
         last_exc: Optional[Exception] = None
         _headers = dict(headers)
+        reauthenticated = False
 
         for attempt in range(1, self.MAX_RETRIES + 1):
             try:
                 response = self._http_client.get(url, headers=_headers, params=params)
                 response.raise_for_status()
-                return response.json()
+                resp_json = response.json()
+                # Envelope-level auth error → re-authenticate & retry once
+                if isinstance(resp_json, dict) and not resp_json.get("success"):
+                    errs = resp_json.get("errors")
+                    if isinstance(errs, dict):
+                        code = errs.get("code")
+                        if not reauthenticated and code in (6001, 5401):
+                            reauthenticated = True
+                            try:
+                                _, fresh_headers = self._reauthenticate()
+                                _headers = dict(fresh_headers)
+                                response = self._http_client.get(url, headers=_headers, params=params)
+                                response.raise_for_status()
+                                return response.json()
+                            except Exception as auth_exc:
+                                last_exc = RozetkaTaxonomyError(
+                                    f"Re-authentication failed, aborting: {auth_exc}"
+                                )
+                                break
+                return resp_json
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
                 if status == 401 and attempt == 1:
