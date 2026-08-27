@@ -25,13 +25,6 @@ from app.core.db_connect import admin_cursor
 router = APIRouter()
 
 
-def db():
-    conn = psycopg2.connect(DB)
-    conn.autocommit = True
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn, cur
-
-
 def _resolve_channel(cur, code: str) -> dict:
     """Fetch a channel by stable code or raise 404."""
     cur.execute("SELECT * FROM channels WHERE code = %s", (code,))
@@ -234,7 +227,7 @@ def channel_taxonomy_stats(code: str, user=Depends(require_admin)):
 
 
 @router.post("/export/channels/{code}/taxonomy/refresh")
-def refresh_taxonomy(code: str, user=Depends(require_admin)):
+async def refresh_taxonomy(code: str, user=Depends(require_admin)):
     """Start a full taxonomy refresh in a background job and return immediately.
 
     The long-running fetch/upsert never blocks the HTTP request.  Progress and
@@ -1025,7 +1018,7 @@ class ExportRequest(BaseModel):
 
 
 @router.post("/export/channels/{code}/export")
-def start_export(
+async def start_export(
         code: str,
         body: ExportRequest,
         user=Depends(require_admin),

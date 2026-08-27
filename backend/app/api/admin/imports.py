@@ -16,13 +16,6 @@ from app.imports.job_health import reconcile_stale_jobs, request_cancellation
 router = APIRouter()
 
 
-def db():
-    conn = psycopg2.connect(DB)
-    conn.autocommit = True
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn, cur
-
-
 IMPORT_STATUSES = ("QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "ABORTED", "STALE", "CANCELLED")
 IMPORT_TYPES = ("full", "prices", "stock")
 
@@ -139,7 +132,7 @@ class ImportRun(BaseModel):
 
 
 @router.post("/imports/run")
-def run_import_job(
+async def run_import_job(
     data: ImportRun,
     background: BackgroundTasks,
     user: dict = Depends(require_admin),
@@ -177,7 +170,7 @@ def run_import_job(
 
 
 @router.post("/imports/start")
-def start_import(
+async def start_import(
     data: ImportRun,
     background: BackgroundTasks,
     user: dict = Depends(require_admin),
@@ -473,7 +466,7 @@ class GlobalImportRun(BaseModel):
 
 
 @router.post("/imports/run-all")
-def run_all_imports(
+async def run_all_imports(
     data: GlobalImportRun,
     background: BackgroundTasks,
     user: dict = Depends(require_admin),
