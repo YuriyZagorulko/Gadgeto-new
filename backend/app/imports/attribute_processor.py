@@ -30,9 +30,13 @@ ATTR_UNKNOWN_VALUE = "UNKNOWN_VALUE"
 # ── Public API ────────────────────────────────────────────────────────────
 
 
-def process_attribute(supplier_name: str, supplier_value: str):
+def process_attribute(supplier_name: str, supplier_value: str,
+                      category_id: int | None = None):
     """
     Process a supplier attribute through the mapping pipeline.
+
+    When category_id is provided, category-specific mappings take
+    precedence over global mappings.
 
     Returns:
         (mapped_name, mapped_value)  — successful mapping
@@ -44,7 +48,8 @@ def process_attribute(supplier_name: str, supplier_value: str):
     supplier_value = str(supplier_value).strip()
 
     if _db_resolver is not None:
-        return _db_resolver.process_attribute(supplier_name, supplier_value)
+        return _db_resolver.process_attribute(supplier_name, supplier_value,
+                                              category_id=category_id)
 
     if not supplier_name or not supplier_value:
         return ATTR_SKIP

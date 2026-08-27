@@ -370,6 +370,19 @@ class DCLinkImporter:
                 self.stats.skipped += 1
                 continue
 
+            # Look up internal category_id for category-scoped attribute resolution
+            try:
+                import psycopg2
+                from app.core.db_connect import DB
+                _conn = psycopg2.connect(DB)
+                _cur = _conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                _cur.execute("SELECT id FROM categories WHERE name = %s", (category_path,))
+                _cat_row = _cur.fetchone()
+                _internal_cat_id = _cat_row["id"] if _cat_row else None
+                _conn.close()
+            except Exception:
+                _internal_cat_id = None
+
             price = self._pick_price(item, category_path=category_path)
             images = []
             full_image = item.get("full_image")
@@ -404,7 +417,8 @@ class DCLinkImporter:
 
             raw_attributes = _validate_attributes(raw_attributes, self.stats, sku, "DC-Link")
 
-            processed, unknown_names, unknown_values = self._process_attributes(raw_attributes, sku=sku)
+            processed, unknown_names, unknown_values = self._process_attributes(
+                raw_attributes, sku=sku, category_id=_internal_cat_id)
 
             merged_list = list(merge_attributes(processed).items())
 
@@ -431,10 +445,12 @@ class DCLinkImporter:
             )
             yield product
 
-    def _process_attributes(self, raw_attrs, sku: str = ""):
+    def _process_attributes(self, raw_attrs, sku: str = "",
+                              category_id: int | None = None):
         processed = []
         for attr_name, attr_value in raw_attrs:
-            result = process_attribute(attr_name, attr_value)
+            result = process_attribute(attr_name, attr_value,
+                                      category_id=category_id)
             if isinstance(result, tuple) and len(result) == 2:
                 processed.append(result)
             elif result == ATTR_SKIP:

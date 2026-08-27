@@ -20,6 +20,7 @@ class Category(Base):
 
     products = relationship("ProductCategory", back_populates="category")
     filters = relationship("CategoryFilter", back_populates="category")
+    category_attributes = relationship("CategoryAttribute", back_populates="category")
 
 
 # Define parent relationship AFTER class creation to properly reference Category.id

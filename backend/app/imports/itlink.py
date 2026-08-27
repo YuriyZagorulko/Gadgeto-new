@@ -161,6 +161,15 @@ class ITLinkImporter:
             category_name = xml_categories.get(category_id, "")
             try:
                 category_path = resolve_category_path(category_name, self.category_map)
+                # Look up internal category_id for category-scoped attribute resolution
+                import psycopg2
+                from app.core.db_connect import DB
+                _conn = psycopg2.connect(DB)
+                _cur = _conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                _cur.execute("SELECT id FROM categories WHERE name = %s", (category_path,))
+                _cat_row = _cur.fetchone()
+                _internal_cat_id = _cat_row["id"] if _cat_row else None
+                _conn.close()
             except (ValueError, KeyError) as e:
                 self.stats.record_unmapped_category(
                     name=category_name,
@@ -206,7 +215,8 @@ class ITLinkImporter:
 
             processed_attrs = []
             for attr_name, attr_value in raw_attributes:
-                result = process_attribute(attr_name, attr_value)
+                result = process_attribute(attr_name, attr_value,
+                                          category_id=_internal_cat_id)
                 if isinstance(result, tuple) and len(result) == 2:
                     processed_attrs.append(result)
                 elif result == ATTR_SKIP:

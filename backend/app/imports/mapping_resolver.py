@@ -2,9 +2,10 @@
 Database-backed mapping resolution for supplier imports.
 
 Priority (highest first):
-    1. supplier-specific mapping   (supplier_attributes.supplier_id = <sid>)
-    2. global mapping              (supplier_id IS NULL)
-    3. fallback                    (legacy JSON behaviour / pass-through)
+    1. category-specific supplier mapping   (attribute_mappings.category_id = X)
+    2. supplier-specific mapping            (supplier_attributes.supplier_id = <sid>)
+    3. global mapping                       (supplier_id IS NULL)
+    4. fallback                             (legacy JSON behaviour / pass-through)
 
 The resolver preloads every rule once per importer run, so resolution cost is
 in-memory — same model the legacy JSON loader used.
@@ -37,6 +38,7 @@ class MappingResolver:
             cur.execute(
                 """SELECT sa.supplier_name AS raw, m.is_active,
                           m.attribute_id, a.name AS internal_name,
+                          m.category_id,
                           (sa.supplier_id IS NOT NULL) AS specific
                    FROM attribute_mappings m
                    JOIN supplier_attributes sa ON sa.id = m.supplier_attribute_id
@@ -46,16 +48,25 @@ class MappingResolver:
                 (self.supplier_code,),
             )
             for r in cur.fetchall():
-                key = r["raw"].strip()
+                raw_name = r["raw"].strip()
+                cat_id = r["category_id"]
+                if cat_id is not None:
+                    key = (raw_name, cat_id)
+                else:
+                    key = raw_name
                 prev = self.attrs.get(key)
-                # specific rows are applied after global ones -> they win
                 if prev is not None and prev["specific"] and not r["specific"]:
                     continue
-                self.attrs[key] = {
+                entry = {
                     "internal_name": r["internal_name"],
                     "active": r["is_active"],
                     "specific": r["specific"],
+                    "category_id": cat_id,
                 }
+                self.attrs[key] = entry
+                # Ensure global mapping accessible by name for fallback
+                if cat_id is None and raw_name not in self.attrs:
+                    self.attrs[raw_name] = entry
 
             cur.execute(
                 """SELECT ha.supplier_name AS holder, sav.supplier_value AS raw_value,
@@ -111,8 +122,13 @@ class MappingResolver:
         """False => caller should fall back to the legacy JSON pipeline."""
         return bool(self.attrs or self.values or self.cats)
 
-    def process_attribute(self, supplier_name: str, supplier_value: str):
-        """Same contract as attribute_processor.process_attribute()."""
+    def process_attribute(self, supplier_name: str, supplier_value: str,
+                          category_id: int | None = None):
+        """Resolve a supplier attribute to an internal attribute name.
+
+        When category_id is provided, category-specific mappings take
+        precedence over global mappings.
+        """
         from app.imports.attribute_processor import (
             ATTR_SKIP, ATTR_UNKNOWN_NAME, ATTR_UNKNOWN_VALUE,
         )
@@ -121,33 +137,27 @@ class MappingResolver:
         if not name or not value:
             return ATTR_SKIP
 
-        entry = self.attrs.get(name)
+        # Priority 1: category-specific mapping
+        entry = None
+        if category_id is not None:
+            entry = self.attrs.get((name, category_id))
+
+        # Priority 2: global mapping (by name)
+        if entry is None:
+            entry = self.attrs.get(name)
+
         if entry is None:
             return ATTR_UNKNOWN_NAME
         if not entry["active"] or entry["internal_name"] is None:
             return ATTR_SKIP
         internal = entry["internal_name"]
 
-        # BUGFIX: use the supplier attribute name (not internal name) for the value
-        # lookup key, because self.values is keyed by (supplier_attr, raw_value).
-        # When supplier_name != internal_name (e.g. "Цвет" → "Колір",
-        # "Формфактор" → "Форм-фактор"), using internal_name caused every
-        # value-level mapping to be invisible → "UNKNOWN_VALUE" for every product.
         key = (name.strip(), value)
         ventry = self.values.get(key)
         if ventry is not None:
             if not ventry["active"]:
                 return ATTR_SKIP
-            # active but unresolved target -> pass raw value through (no data loss)
             return (internal, ventry["value_name"] or value)
-        # No value-level mapping found for this attribute+value combination.
-        # If the attribute participates in the value allowlist (has >=1 active
-        # value rule) AND this specific value is not in the list -> unknown.
-        # If the attribute has NO value-level mappings at all, the raw value
-        # was previously passed through, which silently created internal values
-        # for every supplier variant.  This behaviour is now disabled: every
-        # unmapped value is treated as unknown so that it is dropped and logged
-        # instead of auto-creating catalog entries.
         return ATTR_UNKNOWN_VALUE
 
     def build_category_map(self) -> dict:

@@ -14,6 +14,7 @@ class Attribute(Base):
     values = relationship("AttributeValue", back_populates="attribute")
     product_attributes = relationship("ProductAttribute", back_populates="attribute")
     category_filters = relationship("CategoryFilter", back_populates="attribute")
+    category_attributes = relationship("CategoryAttribute", back_populates="attribute")
 
 class AttributeValue(Base):
     __tablename__ = "attribute_values"
@@ -24,4 +25,5 @@ class AttributeValue(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     attribute = relationship("Attribute", back_populates="values")
     product_attributes = relationship("ProductAttribute", back_populates="attribute_value")
+    category_attribute_values = relationship("CategoryAttributeValue", back_populates="attribute_value")
     __table_args__ = (UniqueConstraint('attribute_id', 'value'),)

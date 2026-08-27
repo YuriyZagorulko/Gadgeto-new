@@ -1094,3 +1094,132 @@ async def export_status(
         raise HTTPException(status_code=404,
                             detail="Експорт не знайдено")
     return status
+
+# ── Value Mapping Candidates (read-only) ────────────────────────────────────
+
+
+@router.get("/export/channels/{code}/value-mappings/candidates")
+async def value_mapping_candidates(
+        code: str,
+        q: Optional[str] = Query(None),
+        status: Optional[str] = Query(None),
+        attribute_id: Optional[int] = Query(None),
+        external_category_id: Optional[str] = Query(None),
+        min_products: int = Query(1, ge=1),
+        page: int = Query(1, ge=1),
+        per_page: int = Query(25, ge=1, le=200),
+        user=Depends(require_admin),
+):
+    """Paginated list of internal attribute values with their Rozetka mapping
+    status, sorted by product count descending.  Supports filtering by Rozetka
+    category context via external_category_id.
+
+    Status options: 'unmapped' (default), 'mapped', or None for all.
+    """
+    conn, cur = db()
+    try:
+        ch = _resolve_channel(cur, code)
+        cid = ch["id"]
+
+        filters = ["1 = 1"]
+        params: list = []
+
+        if status == "mapped":
+            filters.append("cvm.id IS NOT NULL")
+        elif status != "all":
+            filters.append("cvm.id IS NULL")  # default: unmapped only
+
+        if q:
+            filters.append("(a.name ILIKE %s OR av.value ILIKE %s)")
+            params.extend([f"%{q}%", f"%{q}%"])
+
+        if attribute_id is not None:
+            filters.append("av.attribute_id = %s")
+            params.append(attribute_id)
+
+        if external_category_id:
+            filters.append("cvm.external_category_id IS NOT DISTINCT FROM %s")
+            params.append(external_category_id)
+
+        filters.append("sq.product_count >= %s")
+        params.append(min_products)
+
+        where = " AND ".join(filters)
+
+        # Count query
+        count_sql = f"""
+            SELECT count(*) AS c FROM (
+                SELECT av.attribute_id, av.value, av.id AS av_id,
+                       count(DISTINCT pa.product_id) AS product_count
+                FROM attribute_values av
+                JOIN product_attributes pa ON pa.attribute_id = av.attribute_id
+                    AND pa.value_text = av.value
+                LEFT JOIN channel_value_mappings cvm
+                    ON cvm.internal_value_id = av.id
+                    AND cvm.channel_id = %s
+                WHERE {where}
+                GROUP BY av.attribute_id, av.value, av.id
+            ) AS sq
+        """
+        cur.execute(count_sql, [cid] + params)
+        total = cur.fetchone()["c"]
+
+        # Data query
+        data_sql = f"""
+            SELECT sq.attribute_id, sq.av_id, a.name AS attribute_name,
+                   sq.value AS internal_value, sq.product_count,
+                   cam.external_attribute_id AS rozetka_attr_id,
+                   cea.name AS rozetka_attr_name,
+                   cvm.id AS cvm_id,
+                   cvm.external_value_id,
+                   cvm.external_value_name AS rozetka_value_name,
+                   cvm.external_category_id,
+                   ec.name AS rozetka_category_name
+            FROM (
+                SELECT av.attribute_id, av.value, av.id AS av_id,
+                       count(DISTINCT pa.product_id) AS product_count
+                FROM attribute_values av
+                JOIN product_attributes pa ON pa.attribute_id = av.attribute_id
+                    AND pa.value_text = av.value
+                LEFT JOIN channel_value_mappings cvm
+                    ON cvm.internal_value_id = av.id
+                    AND cvm.channel_id = %s
+                WHERE {where}
+                GROUP BY av.attribute_id, av.value, av.id
+            ) AS sq
+            JOIN attributes a ON a.id = sq.attribute_id
+            LEFT JOIN channel_attribute_mappings cam
+                ON cam.internal_attribute_id = sq.attribute_id
+                AND cam.channel_id = %s AND cam.status = 'accepted'
+            LEFT JOIN channel_external_attributes cea
+                ON cea.external_id = cam.external_attribute_id
+                AND cea.channel_id = %s
+            LEFT JOIN channel_value_mappings cvm
+                ON cvm.internal_value_id = sq.av_id
+                AND cvm.channel_id = %s
+            LEFT JOIN channel_external_categories ec
+                ON ec.channel_id = %s AND ec.external_id = cvm.external_category_id
+            ORDER BY sq.product_count DESC
+            LIMIT %s OFFSET %s
+        """
+        cur.execute(data_sql, [cid] + params + [cid, cid, cid, cid, cid, per_page, (page - 1) * per_page])
+        items = []
+        for r in cur.fetchall():
+            items.append({
+                "attribute_id": r["attribute_id"],
+                "attribute_name": r["attribute_name"],
+                "internal_value_id": r["av_id"],
+                "internal_value": r["internal_value"],
+                "product_count": r["product_count"],
+                "external_attribute_id": r["rozetka_attr_id"],
+                "external_attribute_name": r["rozetka_attr_name"],
+                "mapped": r["cvm_id"] is not None,
+                "external_value_id": r["external_value_id"],
+                "external_value_name": r["rozetka_value_name"],
+                "external_category_id": r["external_category_id"],
+                "external_category_name": r["rozetka_category_name"],
+            })
+
+        return {"items": items, "total": total, "page": page, "per_page": per_page}
+    finally:
+        conn.close()

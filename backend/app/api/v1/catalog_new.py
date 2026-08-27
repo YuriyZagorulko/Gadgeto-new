@@ -95,26 +95,43 @@ async def get_category_filters(slug: str):
         cur.connection.close()
         raise HTTPException(status_code=404, detail="Category not found")
     
-    # Get filters configured for this category
+    # Primary: use category_attributes (new architecture)
+    # Fallback: use category_filters (legacy, kept for compatibility)
     cur.execute("""
-        SELECT a.id, a.name, a.slug as attr_slug, cf.position, cf.filter_type
-        FROM category_filters cf
-        JOIN attributes a ON a.id = cf.attribute_id
-        WHERE cf.category_id = %s AND cf.enabled = true
-        ORDER BY cf.position, a.name
+        SELECT a.id, a.name, a.slug as attr_slug,
+               COALESCE(ca.sort_order, cf.position, 0) AS position,
+               COALESCE(ca.filter_type, cf.filter_type, NULL) AS filter_type
+        FROM category_attributes ca
+        JOIN attributes a ON a.id = ca.attribute_id
+        LEFT JOIN category_filters cf
+            ON cf.category_id = ca.category_id AND cf.attribute_id = ca.attribute_id
+        WHERE ca.category_id = %s AND ca.filterable = true
+        ORDER BY ca.sort_order, a.name
     """, (cat["id"],))
     filters = cur.fetchall()
+    
+    # If no category_attributes found, fall back to legacy category_filters
+    if not filters:
+        cur.execute("""
+            SELECT a.id, a.name, a.slug as attr_slug, cf.position, cf.filter_type
+            FROM category_filters cf
+            JOIN attributes a ON a.id = cf.attribute_id
+            WHERE cf.category_id = %s AND cf.enabled = true
+            ORDER BY cf.position, a.name
+        """, (cat["id"],))
+        filters = cur.fetchall()
     
     result = []
     for f in filters:
         # Get available values with counts for this category
         cur.execute("""
-            SELECT av.value, count(*) as cnt
+            SELECT COALESCE(av.value, pa.value_text, '') AS value,
+                   count(*) as cnt
             FROM product_attributes pa
-            JOIN attribute_values av ON av.id = pa.attribute_value_id
+            LEFT JOIN attribute_values av ON av.id = pa.attribute_value_id
             JOIN product_categories pc ON pc.product_id = pa.product_id
             WHERE pa.attribute_id = %s AND pc.category_id = %s
-            GROUP BY av.value
+            GROUP BY COALESCE(av.value, pa.value_text, '')
             ORDER BY cnt DESC
             LIMIT 50
         """, (f["id"], cat["id"]))

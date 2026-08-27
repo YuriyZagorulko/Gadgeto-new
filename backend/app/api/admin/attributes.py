@@ -45,7 +45,8 @@ async def list_attributes(page: int = Query(1, ge=1), per_page: int = Query(50, 
         cur.execute(f"""
             SELECT a.id, a.name, a.slug, a.type, a.is_filterable, a.sort_order,
                    (SELECT count(*) FROM attribute_values av WHERE av.attribute_id=a.id) AS values_count,
-                   (SELECT count(*) FROM product_attributes pa WHERE pa.attribute_id=a.id) AS products_count
+                   (SELECT count(*) FROM product_attributes pa WHERE pa.attribute_id=a.id) AS products_count,
+                   (SELECT count(*) FROM category_attributes ca WHERE ca.attribute_id=a.id) AS categories_count
             FROM attributes a WHERE {where}
             ORDER BY a.sort_order, a.name LIMIT %s OFFSET %s
         """, params + [per_page, offset])
@@ -146,3 +147,62 @@ async def delete_value(aid: int, vid: int, user: dict = Depends(require_admin)):
     finally:
         conn.close()
 
+
+
+@router.get("/attributes/{aid}/categories")
+async def attribute_categories(aid: int, user: dict = Depends(require_admin)):
+    """Get all categories that use this attribute."""
+    conn, cur = db()
+    try:
+        cur.execute("""
+            SELECT c.id, c.name, c.slug, ca.filterable, ca.required,
+                   ca.multiple, ca.sort_order
+            FROM category_attributes ca
+            JOIN categories c ON c.id = ca.category_id
+            WHERE ca.attribute_id = %s
+            ORDER BY c.name
+        """, (aid,))
+        return {"items": cur.fetchall()}
+    finally:
+        conn.close()
+
+
+@router.post("/attributes/{aid}/categories")
+async def assign_attribute_categories(aid: int, category_ids: list[int],
+                                       filterable: bool = True,
+                                       user: dict = Depends(require_admin)):
+    """Assign this attribute to multiple categories."""
+    conn, cur = db()
+    try:
+        cur.execute("SELECT id FROM attributes WHERE id=%s", (aid,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="\u0410\u0442\u0440\u0438\u0431\u0443\u0442 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e")
+        created = 0
+        for cid in category_ids:
+            cur.execute(
+                """INSERT INTO category_attributes
+                    (category_id, attribute_id, filterable, required, multiple,
+                     searchable, sort_order, filter_type, created_at, updated_at)
+                VALUES (%s,%s,%s,false,false,false,0,NULL,NOW(),NOW())
+                ON CONFLICT (category_id, attribute_id) DO NOTHING""",
+                (cid, aid, filterable),
+            )
+            if cur.rowcount > 0:
+                created += 1
+        return {"ok": True, "created": created, "skipped": len(category_ids) - created}
+    finally:
+        conn.close()
+
+
+@router.delete("/attributes/{aid}/categories/{cid}")
+async def remove_attribute_from_category(aid: int, cid: int, user: dict = Depends(require_admin)):
+    """Remove an attribute from a specific category."""
+    conn, cur = db()
+    try:
+        cur.execute(
+            "DELETE FROM category_attributes WHERE attribute_id=%s AND category_id=%s",
+            (aid, cid),
+        )
+        return {"ok": True, "deleted": cur.rowcount > 0}
+    finally:
+        conn.close()

@@ -14,6 +14,7 @@ from app.models.settings import Setting
 from app.models.pricing import MarkupRule
 from app.models.url_alias import URLAlias
 from app.models.filter import CategoryFilter
+from app.models.category_attribute import CategoryAttribute, CategoryAttributeValue
 from app.models.product_relations import ProductRelated
 from app.models.channel import (
     Channel,
@@ -57,7 +58,7 @@ __all__ = [
     "Cart", "CartItem",
     "Order", "OrderItem", "OrderEvent", "Payment", "ShippingAddress", "OrderStatus",
     "ImportJob", "ImportLog", "ImportJobStatus",
-    "Setting", "MarkupRule", "URLAlias", "CategoryFilter", "ProductRelated",
+    "Setting", "MarkupRule", "URLAlias", "CategoryFilter", "CategoryAttribute", "CategoryAttributeValue", "ProductRelated",
     "Channel", "ChannelSetting", "ChannelListing", "ChannelValidationIssue",
     "PublicationStatus", "ChannelSyncStatus",
     "SyncRun", "SyncJob", "SyncLog",
