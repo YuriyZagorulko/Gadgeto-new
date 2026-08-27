@@ -135,13 +135,49 @@ async def update_value(aid: int, vid: int, data: AttributeValueIn, user: dict = 
         conn.close()
 
 
+@router.get("/attributes/{aid}/values/{vid}/usage")
+async def check_value_usage(aid: int, vid: int, user: dict = Depends(require_admin)):
+    """Check where an AttributeValue is referenced."""
+    conn, cur = db()
+    try:
+        cur.execute("SELECT count(*) AS c FROM product_attributes WHERE attribute_value_id=%s", (vid,))
+        products = cur.fetchone()["c"]
+        cur.execute("SELECT count(*) AS c FROM category_attribute_values WHERE attribute_value_id=%s", (vid,))
+        categories = cur.fetchone()["c"]
+        cur.execute("SELECT count(*) AS c FROM attribute_value_mappings WHERE attribute_value_id=%s", (vid,))
+        mappings = cur.fetchone()["c"]
+        return {
+            "product_count": products,
+            "category_count": categories,
+            "mapping_count": mappings,
+            "can_delete": products == 0 and mappings == 0,
+        }
+    finally:
+        conn.close()
+
+
 @router.delete("/attributes/{aid}/values/{vid}")
 async def delete_value(aid: int, vid: int, user: dict = Depends(require_admin)):
     conn, cur = db()
     try:
         cur.execute("SELECT count(*) AS c FROM product_attributes WHERE attribute_value_id=%s", (vid,))
-        if cur.fetchone()["c"]:
-            raise HTTPException(status_code=409, detail="Значення використовується товарами — деактивуйте його замість видалення.")
+        prod_usage = cur.fetchone()["c"]
+        cur.execute("SELECT count(*) AS c FROM attribute_value_mappings WHERE attribute_value_id=%s", (vid,))
+        map_usage = cur.fetchone()["c"]
+
+        if prod_usage > 0 or map_usage > 0:
+            parts = []
+            if prod_usage > 0:
+                parts.append(f"{prod_usage} товарами")
+            if map_usage > 0:
+                parts.append(f"{map_usage} маппінгами")
+            raise HTTPException(
+                status_code=409,
+                detail=("Значення використовується "
+                        f"{' і '.join(parts)} — деактивуйте замість видалення."),
+            )
+        # Clean up category_attribute_values for this value
+        cur.execute("DELETE FROM category_attribute_values WHERE attribute_value_id=%s", (vid,))
         cur.execute("DELETE FROM attribute_values WHERE id=%s AND attribute_id=%s", (vid, aid))
         return {"ok": True}
     finally:

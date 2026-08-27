@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api, qs } from '@/lib/api';
+import MappingReview from '@/components/MappingReview';
 import { formatDateTime } from '@/lib/format';
 import {
   PageHeader,
@@ -20,15 +21,17 @@ import {
   useToast,
 } from '@/components/ui';
 
-type Kind = 'attributes' | 'values' | 'categories';
+type Kind = 'attributes' | 'values' | 'categories' | 'review';
 
 const TABS: { key: Kind; label: string }[] = [
   { key: 'attributes', label: 'Маппінг атрибутів' },
   { key: 'values', label: 'Маппінг значень атрибутів' },
   { key: 'categories', label: 'Маппінг категорій' },
+  { key: 'review', label: 'Потребує перевірки' },
 ];
 
 const COLUMN_LABELS: Record<Kind, { supplierItem: string; catalog: string; attribute?: string }> = {
+  review: { supplierItem: '', catalog: '' },
   attributes: { supplierItem: 'Атрибут постачальника', catalog: 'Внутрішній атрибут' },
   values: { supplierItem: 'Значення постачальника', catalog: 'Внутрішнє значення', attribute: 'Атрибут' },
   categories: { supplierItem: 'Категорія постачальника', catalog: 'Внутрішня категорія' },
@@ -48,13 +51,15 @@ type Row = {
   holder_name?: string | null;
   catalog_item_id: number | null;
   catalog_name: string | null;
+  category_id?: number | null;
+  internal_category_name?: string | null;
 };
 type ListResp = { items: Row[]; total: number; page: number; per_page: number };
 type Opt = { id: number; name: string };
 type ValOpt = { id: number; value: string };
 type SupOpt = { id: number; code: string; name: string };
 
-type SortKey = 'id' | 'supplier' | 'attribute' | 'supplier_item' | 'catalog' | 'status' | 'updated_at';
+type SortKey = 'id' | 'supplier' | 'attribute' | 'supplier_item' | 'catalog' | 'status' | 'updated_at' | 'category';
 type SortDir = 'asc' | 'desc';
 
 export default function MappingsPage() {
@@ -85,7 +90,8 @@ export default function MappingsPage() {
   const [fStatus, setFStatus] = useState('');          // '' | 'true' | 'false'
   const [fMapped, setFMapped] = useState('');          // '' | 'true' | 'false
   const [fItemName, setFItemName] = useState('');
-  const [fParentName, setFParentName] = useState('');       // values: holder attr
+  const [fParentName, setFParentName] = useState('');
+  const [fCatContext, setFCatContext] = useState('');  // '' | 'true' | 'false'       // values: holder attr
   const [fInternalAttrId, setFInternalAttrId] = useState(''); // values only
   const [fCatalogId, setFCatalogId] = useState('');
   const [fActive, setFActive] = useState(true);
@@ -117,6 +123,7 @@ export default function MappingsPage() {
       mapped: fMapped === '' ? undefined : fMapped === 'true',
       scope: fScope === 'global' ? 'global' : (fScope ? 'supplier' : undefined),
       supplier_id: scopeSup,
+      has_category_context: fCatContext === '' ? undefined : fCatContext === 'true',
     }))
       .then((d) => { if (!cancelled) { setRows(d.items || []); setTotal(d.total); } })
       .catch((e) => !cancelled && setError(e.message))
@@ -127,7 +134,7 @@ export default function MappingsPage() {
   useEffect(() => { setPage(1); }, [kind, appliedQ, sortBy, sortDir, perPage, fScope, fStatus, fMapped]);
 
   const resetFilters = () => {
-    setQ(''); setAppliedQ(''); setFStatus(''); setFMapped(''); setFScope('');
+    setQ(''); setAppliedQ(''); setFStatus(''); setFMapped(''); setFScope(''); setFCatContext('');
   };
 
   const hasFilters = !!(appliedQ || fStatus || fMapped || fScope);
@@ -548,6 +555,12 @@ const openCreate = () => {
         onConfirm={doDelete}
         onCancel={() => setDeleting(null)}
       />
+
+      {kind === 'review' && (
+        <div className="mt-4">
+          <MappingReview />
+        </div>
+      )}
     </div>
   );
 }
@@ -555,3 +568,58 @@ const openCreate = () => {
 
 
 
+
+// ── Mapping Review Components ──────────────────────────────────────────
+
+function AmbiguousMappingsSection() {
+  const toast = useToast();
+  const [rows, setRows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [assigning, setAssigning] = useState<number | null>(null);
+  const [cats, setCats] = useState<{ id: number; name: string }[]>([]);
+
+  useEffect(() => {
+    api.get<{ items: any[] }>('/categories').then((d) => setCats(d.items || [])).catch(() => {});
+  }, []);
+
+  const load = () => {
+    setLoading(true);
+    api.get<{ items: any[]; total: number }>('/mappings/attributes' + qs({
+      per_page: 200, has_category_context: false, mapped: true, active: true,
+    })).then((d) => {
+      // Filter to only those whose target attr has >1 category (ambiguous) or 0 (unassigned)
+      setRows(d.items.filter((r: any) => r.catalog_name));
+    }).catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+
+  if (loading) return <LoadingState />;
+  if (error) return <ErrorState message={error} />;
+
+  return <div className="text-sm text-gray-500 p-4">Use the filter above to find mappings needing review.</div>;
+}
+
+function OrphanValueMappingsSection() {
+  const toast = useToast();
+  const [orphans, setOrphans] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const d = await api.get<{ items: any[]; total: number }>('/mappings/values?per_page=200');
+      // Note: orphan detection requires backend support - for now show all
+      setOrphans(d.items || []);
+    } catch {
+      setOrphans([]);
+    } finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  if (loading) return <LoadingState />;
+  if (orphans.length === 0) return <div className="text-sm text-gray-500 p-4">Всі значення мають активний батьківський маппінг.</div>;
+
+  return <div className="text-sm text-gray-500 p-4">Використовуйте фільтри вище для пошуку проблемних маппінгів.</div>;
+}

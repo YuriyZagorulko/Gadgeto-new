@@ -313,12 +313,12 @@ class ImportRunner:
         for attr_name, attr_value in attributes:
             a_id = self.create_attribute(attr_name)
             if a_id:
-                self.create_attribute_value(a_id, attr_value)
+                av_id = self.create_attribute_value(a_id, attr_value)
                 cur.execute(
                     """INSERT INTO product_attributes
-                       (product_id, attribute_id, value_text, created_at, updated_at)
-                       VALUES (%s,%s,%s,NOW(),NOW())""",
-                    (product_id, a_id, attr_value),
+                       (product_id, attribute_id, attribute_value_id, value_text, created_at, updated_at)
+                       VALUES (%s,%s,%s,%s,NOW(),NOW())""",
+                    (product_id, a_id, av_id, attr_value),
                 )
 
     def _upsert_images(self, cur, product_id, images):

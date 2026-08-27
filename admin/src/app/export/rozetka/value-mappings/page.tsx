@@ -65,7 +65,7 @@ export default function RozetkaValueMappingsPage() {
   }, [catLoaded]);
 
   const filterParams = useMemo(() => {
-    const p: Record<string, string | number | undefined> = { page, per_page };
+    const p: Record<string, string | number | undefined> = { page, per_page: perPage };
     if (appliedQ) p.q = appliedQ;
     if (statusFilter !== 'all') p.status = statusFilter;
     if (catFilter) p.external_category_id = catFilter;

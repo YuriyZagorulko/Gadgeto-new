@@ -243,3 +243,209 @@ async def remove_attribute_from_category(
         return {"ok": True}
     finally:
         conn.close()
+
+# ── CategoryAttributeValue endpoints ────────────────────────────────────────
+
+@router.get("/categories/{cid}/attributes/{caid}/values")
+async def list_category_attribute_values(
+    cid: int, caid: int,
+    user: dict = Depends(require_admin),
+):
+    """List all canonical AttributeValues assigned to this CategoryAttribute."""
+    conn, cur = db()
+    try:
+        cur.execute(
+            "SELECT id FROM category_attributes WHERE id=%s AND category_id=%s",
+            (caid, cid),
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="\u0417\u0430\u043f\u0438\u0441 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e")
+
+        cur.execute(
+            """
+            SELECT cav.id, cav.attribute_value_id, av.value, av.slug,
+                   av.sort, av.is_active,
+                   (SELECT count(*) FROM product_attributes pa
+                    JOIN product_categories pc ON pc.product_id = pa.product_id
+                    WHERE pa.attribute_value_id = av.id
+                      AND pc.category_id = %s
+                   ) AS product_count_in_category
+            FROM category_attribute_values cav
+            JOIN attribute_values av ON av.id = cav.attribute_value_id
+            WHERE cav.category_attribute_id = %s
+            ORDER BY av.sort, av.value
+            """,
+            (cid, caid),
+        )
+        return {"items": cur.fetchall()}
+    finally:
+        conn.close()
+
+
+@router.post("/categories/{cid}/attributes/{caid}/values")
+async def add_value_to_category_attribute(
+    cid: int, caid: int,
+    attribute_value_id: int,
+    user: dict = Depends(require_admin),
+):
+    """Add a canonical AttributeValue to a CategoryAttribute.
+
+    Validates:
+      - CategoryAttribute exists for this category
+      - AttributeValue exists
+      - AttributeValue.attribute_id == CategoryAttribute.attribute_id
+    """
+    conn, cur = db()
+    try:
+        # Get CategoryAttribute to verify ownership and get the attribute_id
+        cur.execute(
+            "SELECT id, attribute_id FROM category_attributes WHERE id=%s AND category_id=%s",
+            (caid, cid),
+        )
+        ca = cur.fetchone()
+        if not ca:
+            raise HTTPException(status_code=404, detail="\u0417\u0430\u043f\u0438\u0441 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e")
+
+        # Verify the attribute value exists and belongs to the same attribute
+        cur.execute(
+            "SELECT id, attribute_id FROM attribute_values WHERE id=%s",
+            (attribute_value_id,),
+        )
+        av = cur.fetchone()
+        if not av:
+            raise HTTPException(status_code=404, detail="\u0417\u043d\u0430\u0447\u0435\u043d\u043d\u044f \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e")
+
+        if av["attribute_id"] != ca["attribute_id"]:
+            raise HTTPException(
+                status_code=422,
+                detail="\u0417\u043d\u0430\u0447\u0435\u043d\u043d\u044f \u043d\u0435 \u043d\u0430\u043b\u0435\u0436\u0438\u0442\u044c \u0434\u043e \u0446\u044c\u043e\u0433\u043e \u0430\u0442\u0440\u0438\u0431\u0443\u0442\u0430",
+            )
+
+        try:
+            cur.execute(
+                """INSERT INTO category_attribute_values
+                    (category_attribute_id, attribute_value_id, created_at, updated_at)
+                VALUES (%s, %s, NOW(), NOW())
+                RETURNING id""",
+                (caid, attribute_value_id),
+            )
+            return {"ok": True, "id": cur.fetchone()["id"]}
+        except psycopg2.errors.UniqueViolation:
+            raise HTTPException(status_code=409, detail="\u0417\u043d\u0430\u0447\u0435\u043d\u043d\u044f \u0432\u0436\u0435 \u0434\u043e\u0434\u0430\u043d\u043e \u0434\u043e \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0456\u0457")
+    finally:
+        conn.close()
+
+
+@router.post("/categories/{cid}/attributes/{caid}/values/bulk")
+async def bulk_add_values_to_category_attribute(
+    cid: int, caid: int,
+    attribute_value_ids: list[int],
+    user: dict = Depends(require_admin),
+):
+    """Add multiple AttributeValues to a CategoryAttribute at once."""
+    conn, cur = db()
+    try:
+        cur.execute(
+            "SELECT id, attribute_id FROM category_attributes WHERE id=%s AND category_id=%s",
+            (caid, cid),
+        )
+        ca = cur.fetchone()
+        if not ca:
+            raise HTTPException(status_code=404, detail="\u0417\u0430\u043f\u0438\u0441 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e")
+
+        created = 0
+        skipped = 0
+        for avid in attribute_value_ids:
+            try:
+                cur.execute(
+                    "SELECT id, attribute_id FROM attribute_values WHERE id=%s",
+                    (avid,),
+                )
+                av = cur.fetchone()
+                if not av or av["attribute_id"] != ca["attribute_id"]:
+                    skipped += 1
+                    continue
+                cur.execute(
+                    """INSERT INTO category_attribute_values
+                        (category_attribute_id, attribute_value_id, created_at, updated_at)
+                    VALUES (%s, %s, NOW(), NOW())
+                    ON CONFLICT (category_attribute_id, attribute_value_id) DO NOTHING""",
+                    (caid, avid),
+                )
+                if cur.rowcount > 0:
+                    created += 1
+                else:
+                    skipped += 1
+            except Exception:
+                skipped += 1
+        return {"ok": True, "created": created, "skipped": skipped}
+    finally:
+        conn.close()
+
+
+@router.delete("/categories/{cid}/attributes/{caid}/values/{cavid}")
+async def remove_value_from_category_attribute(
+    cid: int, caid: int, cavid: int,
+    user: dict = Depends(require_admin),
+):
+    """Remove a value from a CategoryAttribute.
+
+    This removes only the CategoryAttributeValue bridge.
+    It does NOT delete the canonical AttributeValue.
+    """
+    conn, cur = db()
+    try:
+        cur.execute(
+            "DELETE FROM category_attribute_values WHERE id=%s AND category_attribute_id=%s",
+            (cavid, caid),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="\u0417\u0430\u043f\u0438\u0441 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@router.get("/categories/{cid}/attributes/{caid}/available-values")
+async def list_available_values_for_category_attribute(
+    cid: int, caid: int,
+    q: Optional[str] = None,
+    user: dict = Depends(require_admin),
+):
+    """List canonical values that are NOT yet assigned to this CategoryAttribute.
+
+    This allows the administrator to search and add missing values.
+    """
+    conn, cur = db()
+    try:
+        cur.execute(
+            "SELECT attribute_id FROM category_attributes WHERE id=%s AND category_id=%s",
+            (caid, cid),
+        )
+        ca = cur.fetchone()
+        if not ca:
+            raise HTTPException(status_code=404, detail="\u0417\u0430\u043f\u0438\u0441 \u043d\u0435 \u0437\u043d\u0430\u0439\u0434\u0435\u043d\u043e")
+
+        conds, params = ["av.attribute_id = %s"], [ca["attribute_id"]]
+        if q:
+            conds.append("av.value ILIKE %s")
+            params.append(f"%{q}%")
+
+        where = " AND ".join(conds)
+        cur.execute(
+            f"""SELECT av.id, av.value, av.slug, av.is_active
+                FROM attribute_values av
+                WHERE {where}
+                  AND av.is_active = true
+                  AND NOT EXISTS (
+                      SELECT 1 FROM category_attribute_values cav
+                      WHERE cav.category_attribute_id = %s
+                        AND cav.attribute_value_id = av.id
+                  )
+                ORDER BY av.sort, av.value
+                LIMIT 200""",
+            params + [caid],
+        )
+        return {"items": cur.fetchall()}
+    finally:
+        conn.close()

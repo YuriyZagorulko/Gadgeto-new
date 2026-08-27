@@ -86,6 +86,69 @@ def get_editor(product_id: int, user: dict = Depends(require_admin)):
                WHERE pa.product_id=%s ORDER BY pa.id""", (product_id,))
         attributes = cur.fetchall()
 
+        # Load attribute_definitions: category-scoped attributes + legacy fallback
+        cur.execute(
+            """
+            SELECT DISTINCT a.id, a.name, a.slug, a.type,
+                   (SELECT count(*) FROM attribute_values av2 WHERE av2.attribute_id = a.id AND av2.is_active = true) AS values_count
+            FROM category_attributes ca
+            JOIN attributes a ON a.id = ca.attribute_id
+            WHERE ca.category_id = ANY(
+                SELECT category_id FROM product_categories WHERE product_id = %s
+            )
+            ORDER BY a.name
+            """, (product_id,))
+        attribute_definitions = cur.fetchall()
+
+        # Also include any attributes already used by this product that may not be
+        # in the category's attribute set (legacy compatibility)
+        existing_ids = {a["id"] for a in attribute_definitions}
+        if existing_ids:
+            cur.execute(
+                """SELECT DISTINCT a.id, a.name, a.slug, a.type,
+                          (SELECT count(*) FROM attribute_values av2 WHERE av2.attribute_id = a.id AND av2.is_active = true) AS values_count
+                   FROM product_attributes pa
+                   JOIN attributes a ON a.id = pa.attribute_id
+                   WHERE pa.product_id = %s AND a.id NOT IN (SELECT unnest(ARRAY[%s]))""",
+                (product_id, list(existing_ids)),
+            )
+            legacy_attrs = cur.fetchall()
+        else:
+            cur.execute(
+                """SELECT DISTINCT a.id, a.name, a.slug, a.type,
+                          (SELECT count(*) FROM attribute_values av2 WHERE av2.attribute_id = a.id AND av2.is_active = true) AS values_count
+                   FROM product_attributes pa
+                   JOIN attributes a ON a.id = pa.attribute_id
+                   WHERE pa.product_id = %s""",
+                (product_id,),
+            )
+            legacy_attrs = cur.fetchall()
+        legacy_attrs = cur.fetchall()
+        attribute_definitions.extend(legacy_attrs)
+
+        # Load attribute values for all relevant attributes
+        all_attr_ids = set()
+        for a in attribute_definitions:
+            all_attr_ids.add(a["id"])
+        for pa in attributes:
+            if pa["attribute_id"]:
+                all_attr_ids.add(pa["attribute_id"])
+        
+        attribute_values_by_id = {}
+        if all_attr_ids:
+            cur.execute(
+                """SELECT av.id, av.attribute_id, av.value
+                   FROM attribute_values av
+                   WHERE av.attribute_id = ANY(%s) AND av.is_active = true
+                   ORDER BY av.sort, av.value""",
+                (list(all_attr_ids),),
+            )
+            for row in cur.fetchall():
+                aid = row["attribute_id"]
+                if aid not in attribute_values_by_id:
+                    attribute_values_by_id[aid] = []
+                attribute_values_by_id[aid].append({"id": row["id"], "value": row["value"]})
+
         cur.execute(
             """SELECT * FROM product_reviews WHERE product_id=%s
                ORDER BY created_at DESC LIMIT 200""", (product_id,))
@@ -102,6 +165,8 @@ def get_editor(product_id: int, user: dict = Depends(require_admin)):
             "category_ids": category_ids,
             "categories": all_categories,
             "attributes": attributes,
+            "attribute_definitions": attribute_definitions,
+            "attribute_values_by_id": attribute_values_by_id,
             "reviews": reviews,
             "variations": variations,
             "custom_fields": meta.get("custom_fields", []),
@@ -254,12 +319,15 @@ async def ed_attributes(product_id: int, payload: dict = _Body(...), _u=Depends(
             continue
         collist = ["product_id", "attribute_id"]
         vals = [product_id, int(aid)]
-        if fk and r.get("value_id"):
+        # Handle both snake_case (backend) and camelCase (frontend) value IDs
+        vid = r.get("attribute_value_id") or r.get("value_id") or r.get("valueId")
+        if fk and vid:
             collist.append(fk)
-            vals.append(int(r["value_id"]))
-        if txt and (r.get("value") or r.get("valueText")):
+            vals.append(int(vid))
+        val = r.get("value_text") or r.get("value") or r.get("valueText")
+        if txt and val:
             collist.append(txt)
-            vals.append(str(r.get("value") or r.get("valueText")))
+            vals.append(str(val))
         ph = ",".join(["%s"] * len(collist))
         cur.execute(f"INSERT INTO product_attributes ({','.join(collist)}) VALUES ({ph})", vals)
         n += 1

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { api, qs } from '@/lib/api';
 import {
   PageHeader, Table, Th, Td, Badge, Button, Input, Select,
@@ -78,7 +78,7 @@ export default function RozetkaExportPage() {
   }, [settingsLoaded]);
 
   const filterParams = useMemo(() => {
-    const p: Record<string, string | number | undefined> = { page, per_page };
+    const p: Record<string, string | number | undefined> = { page, per_page: perPage };
     if (appliedQ) p.q = appliedQ;
     if (catFilter) p.category_id = Number(catFilter);
     if (stockFilter) p.stock_status = stockFilter;
@@ -248,19 +248,23 @@ export default function RozetkaExportPage() {
           <Th className="w-20 text-right">Ціна</Th><Th className="w-16 text-right">Зал.</Th>
           <Th className="w-28">Мапінг</Th><Th className="w-28">Експорт</Th></>}>
             {rows.length === 0 ? <tr><td colSpan={8} className="p-6 text-center text-gray-400">Немає товарів</td></tr> :
-              rows.map((r) => { const mb = mappingBadge(r.has_mapping, r.validation_summary);
+              rows.map((r) => {
+                const mb = mappingBadge(r.has_mapping, r.validation_summary);
                 const pb = pubBadge[r.publication_status] || { tone: 'gray' as const, label: r.publication_status };
-                return (<tr key={r.id} className="hover:bg-gray-50">
-                  <Td><input type="checkbox" checked={selectedIds.has(r.id)}
-                    onChange={() => toggleSelect(r.id)} className="rounded border-gray-300" /></Td>
-                  <Td className="text-xs font-mono max-w-28 truncate" title={r.sku}>{r.sku || '—'}</Td>
-                  <Td className="max-w-xs truncate" title={r.name}>{r.name || '—'}</Td>
-                  <Td className="text-xs max-w-36 truncate">{r.category_name || '—'}</Td>
-                  <Td className="text-right text-xs font-mono">{r.price ? r.price.toLocaleString('uk-UA') : '—'}</Td>
-                  <Td className="text-right text-xs">{r.stock_qty}</Td>
-                  <Td><Badge tone={mb.tone}>{mb.label}</Badge></Td>
-                  <Td><Badge tone={pb.tone}>{pb.label}</Badge></Td>
-                </tr>); }))}</Table></div>
+                return (
+                  <tr key={r.id} className="hover:bg-gray-50">
+                    <Td><input type="checkbox" checked={selectedIds.has(r.id)}
+                      onChange={() => toggleSelect(r.id)} className="rounded border-gray-300" /></Td>
+                    <Td className="text-xs font-mono max-w-28 truncate" title={r.sku}>{r.sku || '—'}</Td>
+                    <Td className="max-w-xs truncate" title={r.name}>{r.name || '—'}</Td>
+                    <Td className="text-xs max-w-36 truncate">{r.category_name || '—'}</Td>
+                    <Td className="text-right text-xs font-mono">{r.price ? r.price.toLocaleString('uk-UA') : '—'}</Td>
+                    <Td className="text-right text-xs">{r.stock_qty}</Td>
+                    <Td><Badge tone={mb.tone}>{mb.label}</Badge></Td>
+                    <Td><Badge tone={pb.tone}>{pb.label}</Badge></Td>
+                  </tr>
+                );
+              })}</Table></div>
       )}
       <Pagination page={page} pages={pages} total={total} onPage={setPage}
         onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}

@@ -83,7 +83,12 @@ export default function AttributesEditor({ rows, allAttributes, attrValuesByAttr
                         className="input-field w-full"
                         value={r.valueText}
                         placeholder="Оберіть або введіть значення"
-                        onChange={(e) => update(r.key, { valueText: e.target.value, valueId: null })}
+                        onChange={(e) => {
+                          const text = e.target.value;
+                          // Check if the typed value matches a known suggestion
+                          const matched = valuesFor(r.attributeId).find((v: any) => v.value === text);
+                          update(r.key, { valueText: text, valueId: matched ? matched.id : null });
+                        }}
                       />
                       <datalist id={`vals-${r.key}`}>
                         {valuesFor(r.attributeId).map((v, i) => (
