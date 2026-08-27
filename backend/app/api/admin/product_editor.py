@@ -11,13 +11,11 @@ import re
 from itertools import product as cartesian
 from typing import Optional, List
 
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Body as FBody
 from pydantic import BaseModel
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 
 router = APIRouter()
 
@@ -49,7 +47,7 @@ PRODUCT_COLS = """id, legacy_id, supplier_id, supplier_sku, sku, name, slug, des
 
 @router.get("/products/{product_id}/editor")
 def get_editor(product_id: int, user: dict = Depends(require_admin)):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         _get_or_404(cur, product_id)
         cur.execute(
@@ -229,7 +227,7 @@ def _apply_update(product_id: int, mapping: dict, payload: dict):
 
 
 @router.put("/products/{product_id}/pricing")
-async def ed_pricing(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
+def ed_pricing(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     _apply_update(product_id, {
         "price": "price", "regularPrice": "price",
         "old_price": "old_price", "oldPrice": "old_price",
@@ -241,7 +239,7 @@ async def ed_pricing(product_id: int, payload: dict = _Body(...), _u=Depends(req
 
 
 @router.put("/products/{product_id}/inventory")
-async def ed_inventory(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
+def ed_inventory(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     _apply_update(product_id, {
         "stock": "stock", "quantity": "stock",
         "stock_status": "stock_status", "stockStatus": "stock_status",
@@ -257,7 +255,7 @@ async def ed_inventory(product_id: int, payload: dict = _Body(...), _u=Depends(r
 
 
 @router.put("/products/{product_id}/seo")
-async def ed_seo(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
+def ed_seo(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     _apply_update(product_id, {
         "seo_title": "seo_title", "seoTitle": "seo_title",
         "seo_description": "seo_description", "seoDescription": "seo_description",
@@ -271,7 +269,7 @@ async def ed_seo(product_id: int, payload: dict = _Body(...), _u=Depends(require
 
 
 @router.put("/products/{product_id}/general")
-async def ed_general(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
+def ed_general(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     _apply_update(product_id, {
         "name": "name", "slug": "slug", "sku": "sku",
         "brand_id": "brand_id", "brandId": "brand_id",
@@ -284,7 +282,7 @@ async def ed_general(product_id: int, payload: dict = _Body(...), _u=Depends(req
 
 
 @router.put("/products/{product_id}/categories")
-async def ed_categories(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
+def ed_categories(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     ids = payload.get("category_ids") or payload.get("ids") or []
     con = _ed_conn()
     cur = con.cursor()
@@ -304,7 +302,7 @@ async def ed_categories(product_id: int, payload: dict = _Body(...), _u=Depends(
 
 
 @router.put("/products/{product_id}/attributes")
-async def ed_attributes(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
+def ed_attributes(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     rows = payload.get("rows") or []
     con = _ed_conn()
     cur = con.cursor()
@@ -337,7 +335,7 @@ async def ed_attributes(product_id: int, payload: dict = _Body(...), _u=Depends(
 
 
 @router.put("/products/{product_id}/images")
-async def ed_images(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
+def ed_images(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     rows = payload.get("images") or []
     con = _ed_conn()
     cur = _ed_cursor(con)
@@ -434,7 +432,7 @@ async def ed_images(product_id: int, payload: dict = _Body(...), _u=Depends(requ
 
 
 @router.get("/products/{product_id}/custom-fields")
-async def cf_get(product_id: int, _u=Depends(require_admin)):
+def cf_get(product_id: int, _u=Depends(require_admin)):
     con = _ed_conn()
     cur = con.cursor()
     cols = _tcols(cur, "products")
@@ -453,7 +451,7 @@ async def cf_get(product_id: int, _u=Depends(require_admin)):
 
 
 @router.put("/products/{product_id}/custom-fields")
-async def cf_put(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
+def cf_put(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     fields = payload.get("fields") or []
     clean = [{"name": str(f.get("name", "")).strip(), "value": str(f.get("value", ""))} for f in fields if str(f.get("name", "")).strip()]
     con = _ed_conn()
@@ -522,7 +520,7 @@ def _vr_norm(cols, r):
 
 
 @router.get("/products/{product_id}/variations")
-async def vr_list(product_id: int, _u=Depends(require_admin)):
+def vr_list(product_id: int, _u=Depends(require_admin)):
     con = _ed_conn()
     cur = con.cursor()
     cols = _tcols(cur, "product_variations")
@@ -534,7 +532,7 @@ async def vr_list(product_id: int, _u=Depends(require_admin)):
 
 
 @router.put("/products/{product_id}/variations")
-async def vr_put(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
+def vr_put(product_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     rows = payload.get("rows") or []
     con = _ed_conn()
     cur = con.cursor()
@@ -593,7 +591,7 @@ async def upload_image(
     # Creates media_files record + physical file (shared Media Library entry)
     media = save_upload(body, mime)
 
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         _get_or_404(cur, product_id)
         cur.execute("SELECT MAX(sort_order) FROM product_images WHERE product_id=%s", (product_id,))
@@ -615,7 +613,7 @@ async def upload_image(
 
 
 @router.get("/products/{product_id}/reviews")
-async def rv_list(product_id: int, _u=Depends(require_admin)):
+def rv_list(product_id: int, _u=Depends(require_admin)):
     con = _ed_conn(); cur = con.cursor()
     cur.execute(
         "SELECT id, product_id, user_id, author_name, author_email, rating, content, status, created_at, updated_at "
@@ -625,7 +623,7 @@ async def rv_list(product_id: int, _u=Depends(require_admin)):
 
 
 @router.put("/products/{product_id}/reviews/{review_id}/moderate")
-async def rv_moderate(product_id: int, review_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
+def rv_moderate(product_id: int, review_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     status = payload.get("status", "").strip()
     if status not in ("published", "pending", "hidden"):
         raise HTTPException(400, "Невірний статус")
@@ -636,7 +634,7 @@ async def rv_moderate(product_id: int, review_id: int, payload: dict = _Body(...
 
 
 @router.put("/products/{product_id}/reviews/{review_id}")
-async def rv_update(product_id: int, review_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
+def rv_update(product_id: int, review_id: int, payload: dict = _Body(...), _u=Depends(require_admin)):
     allowed = {"author_name", "author_email", "rating", "content", "status"}
     sets, params = [], []
     for key in allowed:
@@ -656,7 +654,7 @@ async def rv_update(product_id: int, review_id: int, payload: dict = _Body(...),
 
 
 @router.post("/products/{product_id}/storefront-reviews")
-async def storefront_create_review(product_id: int, payload: dict = FBody(...)):
+def storefront_create_review(product_id: int, payload: dict = FBody(...)):
     rating = payload.get("rating")
     text = (payload.get("content") or payload.get("text") or "").strip()
     user_id = payload.get("user_id")
@@ -682,7 +680,7 @@ async def storefront_create_review(product_id: int, payload: dict = FBody(...)):
 
 
 @router.get("/products/{product_id}/storefront-reviews")
-async def storefront_list_reviews(product_id: int):
+def storefront_list_reviews(product_id: int):
     con = _ed_conn(); cur = con.cursor()
     cur.execute(
         "SELECT id, author_name, rating, content, created_at FROM product_reviews "

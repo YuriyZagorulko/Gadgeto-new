@@ -1,12 +1,10 @@
 import json
 from typing import Optional, List
 from pydantic import BaseModel
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, HTTPException, Query, Depends
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 from app.imports.registry import SUPPLIERS as SYSTEM_SUPPLIERS
 
 router = APIRouter()
@@ -20,13 +18,13 @@ def db():
 
 
 @router.get("/suppliers")
-async def list_suppliers(
+def list_suppliers(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     q: Optional[str] = None,
     user: dict = Depends(require_admin),
 ):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         conds, params = ["1=1"], []
         if q:
@@ -64,8 +62,8 @@ async def list_suppliers(
 
 
 @router.get("/suppliers/{sid}")
-async def get_supplier(sid: int, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def get_supplier(sid: int, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT * FROM suppliers WHERE id = %s", (sid,))
         row = cur.fetchone()
@@ -91,9 +89,9 @@ class SupplierConfigUpdate(BaseModel):
 
 
 @router.put("/suppliers/{sid}/config")
-async def update_supplier_config(sid: int, body: SupplierConfigUpdate, user: dict = Depends(require_admin)):
+def update_supplier_config(sid: int, body: SupplierConfigUpdate, user: dict = Depends(require_admin)):
     """Update supplier config_json (e.g. image storage settings)."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM suppliers WHERE id = %s", (sid,))
         if not cur.fetchone():

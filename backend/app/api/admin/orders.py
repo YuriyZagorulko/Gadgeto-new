@@ -1,14 +1,12 @@
 """Admin orders API."""
 import json
 
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 
 router = APIRouter()
 
@@ -33,7 +31,7 @@ class OrderStatusUpdate(BaseModel):
 
 
 @router.get("/orders")
-async def list_orders(
+def list_orders(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     q: Optional[str] = None,
@@ -42,7 +40,7 @@ async def list_orders(
     user: dict = Depends(require_admin),
 ):
     """Paginated order list with search and filters."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         conds, params = ["1=1"], []
         if q:
@@ -81,9 +79,9 @@ async def list_orders(
 
 
 @router.get("/orders/{order_id}")
-async def get_order(order_id: int, user: dict = Depends(require_admin)):
+def get_order(order_id: int, user: dict = Depends(require_admin)):
     """Full order details: items, events, payments, shipping info."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT * FROM orders WHERE id = %s", (order_id,))
         order = cur.fetchone()
@@ -141,7 +139,7 @@ async def get_order(order_id: int, user: dict = Depends(require_admin)):
 
 
 @router.patch("/orders/{order_id}/status")
-async def update_order_status(
+def update_order_status(
     order_id: int,
     data: OrderStatusUpdate,
     user: dict = Depends(require_admin),
@@ -150,7 +148,7 @@ async def update_order_status(
     if data.status not in ORDER_STATUSES:
         raise HTTPException(status_code=400, detail="Невірний статус замовлення")
 
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id, status FROM orders WHERE id = %s", (order_id,))
         order = cur.fetchone()

@@ -1,21 +1,13 @@
 # Admin attributes API
 import re
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import Optional
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 
 router = APIRouter()
-
-
-def db():
-    conn = psycopg2.connect(DB); conn.autocommit = True
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn, cur
 
 
 class AttributeIn(BaseModel):
@@ -30,10 +22,10 @@ class AttributeValueIn(BaseModel):
 
 
 @router.get("/attributes")
-async def list_attributes(page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=200),
+def list_attributes(page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=200),
                           search: Optional[str] = None,
                           user: dict = Depends(require_admin)):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         conds, params = ["1=1"], []
         if search:
@@ -58,8 +50,8 @@ async def list_attributes(page: int = Query(1, ge=1), per_page: int = Query(50, 
 
 
 @router.post("/attributes")
-async def create_attribute(data: AttributeIn, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def create_attribute(data: AttributeIn, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         slug = re.sub(r"[^a-z0-9]+", "-", data.name.lower()).strip("-") or "attr"
         cur.execute("""INSERT INTO attributes (name, slug, type, is_filterable)
@@ -71,8 +63,8 @@ async def create_attribute(data: AttributeIn, user: dict = Depends(require_admin
 
 
 @router.put("/attributes/{aid}")
-async def update_attribute(aid: int, data: AttributeIn, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def update_attribute(aid: int, data: AttributeIn, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("UPDATE attributes SET name=%s, type=%s, is_filterable=%s, updated_at=NOW() WHERE id=%s",
                     (data.name.strip(), data.type, data.is_filterable, aid))
@@ -82,9 +74,9 @@ async def update_attribute(aid: int, data: AttributeIn, user: dict = Depends(req
 
 
 @router.delete("/attributes/{aid}")
-async def delete_attribute(aid: int, user: dict = Depends(require_admin)):
+def delete_attribute(aid: int, user: dict = Depends(require_admin)):
     """Delete an attribute. Blocked when products reference it — deactivate instead."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT count(*) AS c FROM product_attributes WHERE attribute_id=%s", (aid,))
         if cur.fetchone()["c"]:
@@ -99,8 +91,8 @@ async def delete_attribute(aid: int, user: dict = Depends(require_admin)):
 
 
 @router.get("/attributes/{aid}/values")
-async def list_values(aid: int, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def list_values(aid: int, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("""
             SELECT av.id, av.value, av.slug, av.is_active, av.sort,
@@ -113,8 +105,8 @@ async def list_values(aid: int, user: dict = Depends(require_admin)):
 
 
 @router.post("/attributes/{aid}/values")
-async def create_value(aid: int, data: AttributeValueIn, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def create_value(aid: int, data: AttributeValueIn, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         slug = re.sub(r"[^a-z0-9]+", "-", data.value.lower()).strip("-") or "value"
         cur.execute("""INSERT INTO attribute_values (attribute_id, value, slug, is_active)
@@ -125,8 +117,8 @@ async def create_value(aid: int, data: AttributeValueIn, user: dict = Depends(re
 
 
 @router.put("/attributes/{aid}/values/{vid}")
-async def update_value(aid: int, vid: int, data: AttributeValueIn, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def update_value(aid: int, vid: int, data: AttributeValueIn, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("UPDATE attribute_values SET value=%s, is_active=%s, updated_at=NOW() WHERE id=%s AND attribute_id=%s",
                     (data.value.strip(), data.is_active, vid, aid))
@@ -136,9 +128,9 @@ async def update_value(aid: int, vid: int, data: AttributeValueIn, user: dict = 
 
 
 @router.get("/attributes/{aid}/values/{vid}/usage")
-async def check_value_usage(aid: int, vid: int, user: dict = Depends(require_admin)):
+def check_value_usage(aid: int, vid: int, user: dict = Depends(require_admin)):
     """Check where an AttributeValue is referenced."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT count(*) AS c FROM product_attributes WHERE attribute_value_id=%s", (vid,))
         products = cur.fetchone()["c"]
@@ -157,8 +149,8 @@ async def check_value_usage(aid: int, vid: int, user: dict = Depends(require_adm
 
 
 @router.delete("/attributes/{aid}/values/{vid}")
-async def delete_value(aid: int, vid: int, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def delete_value(aid: int, vid: int, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT count(*) AS c FROM product_attributes WHERE attribute_value_id=%s", (vid,))
         prod_usage = cur.fetchone()["c"]
@@ -186,9 +178,9 @@ async def delete_value(aid: int, vid: int, user: dict = Depends(require_admin)):
 
 
 @router.get("/attributes/{aid}/categories")
-async def attribute_categories(aid: int, user: dict = Depends(require_admin)):
+def attribute_categories(aid: int, user: dict = Depends(require_admin)):
     """Get all categories that use this attribute."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("""
             SELECT c.id, c.name, c.slug, ca.filterable, ca.required,
@@ -204,11 +196,11 @@ async def attribute_categories(aid: int, user: dict = Depends(require_admin)):
 
 
 @router.post("/attributes/{aid}/categories")
-async def assign_attribute_categories(aid: int, category_ids: list[int],
+def assign_attribute_categories(aid: int, category_ids: list[int],
                                        filterable: bool = True,
                                        user: dict = Depends(require_admin)):
     """Assign this attribute to multiple categories."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM attributes WHERE id=%s", (aid,))
         if not cur.fetchone():
@@ -231,9 +223,9 @@ async def assign_attribute_categories(aid: int, category_ids: list[int],
 
 
 @router.delete("/attributes/{aid}/categories/{cid}")
-async def remove_attribute_from_category(aid: int, cid: int, user: dict = Depends(require_admin)):
+def remove_attribute_from_category(aid: int, cid: int, user: dict = Depends(require_admin)):
     """Remove an attribute from a specific category."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute(
             "DELETE FROM category_attributes WHERE attribute_id=%s AND category_id=%s",

@@ -1,18 +1,10 @@
 """Admin dashboard API - real PostgreSQL data."""
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, Depends
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 
 router = APIRouter()
-
-
-def db():
-    conn = psycopg2.connect(DB); conn.autocommit = True
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn, cur
 
 
 def _count(cur, sql):
@@ -21,8 +13,8 @@ def _count(cur, sql):
 
 
 @router.get("/dashboard/stats")
-async def stats(user: dict = Depends(require_admin)):
-    conn, cur = db()
+def stats(user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         products = {
             "total": _count(cur, "SELECT count(*) FROM products"),

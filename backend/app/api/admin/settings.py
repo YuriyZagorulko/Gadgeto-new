@@ -5,23 +5,15 @@ overwritten. Infrastructure secrets (env vars) are not exposed at all.
 """
 from typing import Optional
 
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 
 router = APIRouter()
 
 _KEY_RE = r"^[a-z0-9_.-]{1,255}$"
-
-
-def db():
-    conn = psycopg2.connect(DB); conn.autocommit = True
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn, cur
 
 
 class SettingUpdate(BaseModel):
@@ -29,9 +21,9 @@ class SettingUpdate(BaseModel):
 
 
 @router.get("/settings")
-async def list_settings(user: dict = Depends(require_admin)):
+def list_settings(user: dict = Depends(require_admin)):
     """All settings; secret values are masked."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT key, value, is_secret FROM settings ORDER BY key")
         items = []
@@ -48,12 +40,12 @@ async def list_settings(user: dict = Depends(require_admin)):
 
 
 @router.put("/settings/{key}")
-async def update_setting(key: str, body: SettingUpdate,
+def update_setting(key: str, body: SettingUpdate,
                          user: dict = Depends(require_admin)):
     import re
     if not re.match(_KEY_RE, key):
         raise HTTPException(status_code=422, detail="Невірний ключ налаштування")
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT key, is_secret FROM settings WHERE key=%s", (key,))
         row = cur.fetchone()

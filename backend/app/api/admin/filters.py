@@ -1,12 +1,10 @@
 """Admin category-filters API (manages the EXISTING category_filters system)."""
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import Optional
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 
 router = APIRouter()
 
@@ -31,7 +29,7 @@ class FilterUpdate(BaseModel):
 
 
 @router.get("/filters")
-async def list_filters(
+def list_filters(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     category_id: Optional[int] = None,
@@ -39,7 +37,7 @@ async def list_filters(
     q: Optional[str] = None,
     user: dict = Depends(require_admin),
 ):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         conds, params = ["1=1"], []
         if category_id is not None:
@@ -76,8 +74,8 @@ async def list_filters(
 
 
 @router.post("/filters")
-async def create_filter(data: FilterIn, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def create_filter(data: FilterIn, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT 1 FROM attributes WHERE id=%s", (data.attribute_id,))
         if not cur.fetchone():
@@ -100,8 +98,8 @@ async def create_filter(data: FilterIn, user: dict = Depends(require_admin)):
 
 
 @router.patch("/filters/{fid}")
-async def update_filter(fid: int, data: FilterUpdate, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def update_filter(fid: int, data: FilterUpdate, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM category_filters WHERE id=%s", (fid,))
         if not cur.fetchone():
@@ -122,8 +120,8 @@ async def update_filter(fid: int, data: FilterUpdate, user: dict = Depends(requi
 
 
 @router.delete("/filters/{fid}")
-async def delete_filter(fid: int, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def delete_filter(fid: int, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("DELETE FROM category_filters WHERE id=%s", (fid,))
         return {"ok": True}

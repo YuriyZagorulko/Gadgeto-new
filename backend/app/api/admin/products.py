@@ -1,21 +1,14 @@
 """Admin products API."""
 import json, re
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 
 
 router = APIRouter()
-
-def db():
-    conn = psycopg2.connect(DB); conn.autocommit = True
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn, cur
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
@@ -58,7 +51,7 @@ SORT_COLUMNS = {
 }
 
 @router.get("/products")
-async def list_products(page: int = Query(1,ge=1), per_page: int = Query(20,ge=1,le=100),
+def list_products(page: int = Query(1,ge=1), per_page: int = Query(20,ge=1,le=100),
     search: Optional[str] = None, category_id: Optional[int] = None,
     brand_id: Optional[int] = None, status: Optional[str] = None,
     stock: Optional[str] = None,
@@ -66,102 +59,110 @@ async def list_products(page: int = Query(1,ge=1), per_page: int = Query(20,ge=1
     sort: Optional[str] = Query(None, pattern="^(" + "|".join(SORT_COLUMNS) + ")$"),
     order: str = Query("desc", pattern="^(asc|desc)$"),
     user: dict = Depends(require_admin)):
-    conn, cur = db()
-    conds, params = ["1=1"], []
-    if search:
-        conds.append("(p.name ILIKE %s OR p.sku ILIKE %s)")
-        params.extend([f"%{search}%", f"%{search}%"])
-    if category_id:
-        conds.append("EXISTS (SELECT 1 FROM product_categories pc WHERE pc.product_id=p.id AND pc.category_id=%s)")
-        params.append(category_id)
-    if brand_id:
-        conds.append("p.brand_id=%s"); params.append(brand_id)
-    if status:
-        conds.append("p.status=%s"); params.append(status)
-    if stock == "in_stock": conds.append("p.stock_status='in_stock'")
-    elif stock == "out_of_stock": conds.append("p.stock_status='out_of_stock'")
-    if no_image:
-        conds.append("NOT EXISTS (SELECT 1 FROM product_images pi WHERE pi.product_id=p.id)")
-    if no_price:
-        conds.append("(p.price IS NULL OR p.price = 0)")
-    where = " AND ".join(conds)
-    offset = (page - 1) * per_page
-    # Server-side sorting on the full dataset (DB-level ORDER BY + LIMIT/OFFSET).
-    # p.id is always appended as a stable tiebreaker so OFFSET pagination
-    # never skips or repeats rows with equal sort values.
-    if sort:
-        direction = "ASC" if order == "asc" else "DESC"
-        order_by = f"{SORT_COLUMNS[sort]} {direction} NULLS LAST, p.id {direction}"
-    else:
-        order_by = "p.updated_at DESC, p.id DESC"
-    cur.execute(f"SELECT count(*) FROM products p WHERE {where}", params)
-    total = cur.fetchone()["count"]
-    cur.execute(f"""
-        SELECT p.id, p.sku, p.name, p.slug, p.price, p.old_price, p.stock_status,
-               p.stock_qty, p.status, p.is_active, p.updated_at,
-               b.name as brand_name,
-               (SELECT url FROM product_images WHERE product_id=p.id AND is_primary=true AND is_suppressed=FALSE LIMIT 1) as image,
-               (SELECT string_agg(c.name, ', ') FROM product_categories pc JOIN categories c ON c.id=pc.category_id WHERE pc.product_id=p.id) as categories
-        FROM products p LEFT JOIN brands b ON b.id=p.brand_id
-        WHERE {where} ORDER BY {order_by} LIMIT %s OFFSET %s
-    """, params + [per_page, offset])
-    items = cur.fetchall(); conn.close()
-    return {"items": items, "total": total, "page": page, "per_page": per_page,
-            "total_pages": max(1, (total + per_page - 1) // per_page)}
+    conn, cur = admin_cursor()
+    try:
+        conds, params = ["1=1"], []
+        if search:
+            conds.append("(p.name ILIKE %s OR p.sku ILIKE %s)")
+            params.extend([f"%{search}%", f"%{search}%"])
+        if category_id:
+            conds.append("EXISTS (SELECT 1 FROM product_categories pc WHERE pc.product_id=p.id AND pc.category_id=%s)")
+            params.append(category_id)
+        if brand_id:
+            conds.append("p.brand_id=%s"); params.append(brand_id)
+        if status:
+            conds.append("p.status=%s"); params.append(status)
+        if stock == "in_stock": conds.append("p.stock_status='in_stock'")
+        elif stock == "out_of_stock": conds.append("p.stock_status='out_of_stock'")
+        if no_image:
+            conds.append("NOT EXISTS (SELECT 1 FROM product_images pi WHERE pi.product_id=p.id)")
+        if no_price:
+            conds.append("(p.price IS NULL OR p.price = 0)")
+        where = " AND ".join(conds)
+        offset = (page - 1) * per_page
+        # Server-side sorting on the full dataset (DB-level ORDER BY + LIMIT/OFFSET).
+        # p.id is always appended as a stable tiebreaker so OFFSET pagination
+        # never skips or repeats rows with equal sort values.
+        if sort:
+            direction = "ASC" if order == "asc" else "DESC"
+            order_by = f"{SORT_COLUMNS[sort]} {direction} NULLS LAST, p.id {direction}"
+        else:
+            order_by = "p.updated_at DESC, p.id DESC"
+        cur.execute(f"SELECT count(*) FROM products p WHERE {where}", params)
+        total = cur.fetchone()["count"]
+        cur.execute(f"""
+            SELECT p.id, p.sku, p.name, p.slug, p.price, p.old_price, p.stock_status,
+                   p.stock_qty, p.status, p.is_active, p.updated_at,
+                   b.name as brand_name,
+                   (SELECT url FROM product_images WHERE product_id=p.id AND is_primary=true AND is_suppressed=FALSE LIMIT 1) as image,
+                   (SELECT string_agg(c.name, ', ') FROM product_categories pc JOIN categories c ON c.id=pc.category_id WHERE pc.product_id=p.id) as categories
+            FROM products p LEFT JOIN brands b ON b.id=p.brand_id
+            WHERE {where} ORDER BY {order_by} LIMIT %s OFFSET %s
+        """, params + [per_page, offset])
+        items = cur.fetchall()
+        return {"items": items, "total": total, "page": page, "per_page": per_page,
+                "total_pages": max(1, (total + per_page - 1) // per_page)}
+    finally:
+        conn.close()
 
 @router.get("/products/{pid}")
-async def get_product(pid: int, user: dict = Depends(require_admin)):
-    conn, cur = db()
-    cur.execute("SELECT p.*, b.name as brand_name FROM products p LEFT JOIN brands b ON b.id=p.brand_id WHERE p.id=%s", (pid,))
-    p = cur.fetchone()
-    if not p: conn.close(); raise HTTPException(status_code=404)
-    cur.execute("SELECT c.id, c.name, c.slug FROM product_categories pc JOIN categories c ON c.id=pc.category_id WHERE pc.product_id=%s", (pid,))
-    cats = cur.fetchall()
-    cur.execute("""
-        SELECT a.id, a.name, a.slug, av.value as attr_val, av.id as val_id
-        FROM product_attributes pa JOIN attributes a ON a.id=pa.attribute_id
-        LEFT JOIN attribute_values av ON av.id=pa.attribute_value_id
-        WHERE pa.product_id=%s ORDER BY a.name
-    """, (pid,))
-    attrs = cur.fetchall()
-    cur.execute("SELECT id, url, sort_order, is_primary FROM product_images WHERE product_id=%s AND is_suppressed=FALSE ORDER BY sort_order", (pid,))
-    imgs = cur.fetchall()
-    conn.close()
-    return {"product": p, "categories": cats, "attributes": attrs, "images": imgs}
+def get_product(pid: int, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
+    try:
+        cur.execute("SELECT p.*, b.name as brand_name FROM products p LEFT JOIN brands b ON b.id=p.brand_id WHERE p.id=%s", (pid,))
+        p = cur.fetchone()
+        if not p:
+            raise HTTPException(status_code=404)
+        cur.execute("SELECT c.id, c.name, c.slug FROM product_categories pc JOIN categories c ON c.id=pc.category_id WHERE pc.product_id=%s", (pid,))
+        cats = cur.fetchall()
+        cur.execute("""
+            SELECT a.id, a.name, a.slug, av.value as attr_val, av.id as val_id
+            FROM product_attributes pa JOIN attributes a ON a.id=pa.attribute_id
+            LEFT JOIN attribute_values av ON av.id=pa.attribute_value_id
+            WHERE pa.product_id=%s ORDER BY a.name
+        """, (pid,))
+        attrs = cur.fetchall()
+        cur.execute("SELECT id, url, sort_order, is_primary FROM product_images WHERE product_id=%s AND is_suppressed=FALSE ORDER BY sort_order", (pid,))
+        imgs = cur.fetchall()
+        return {"product": p, "categories": cats, "attributes": attrs, "images": imgs}
+    finally:
+        conn.close()
 
 @router.put("/products/{pid}")
-async def update_product(pid: int, data: ProductUpdate, user: dict = Depends(require_admin)):
+def update_product(pid: int, data: ProductUpdate, user: dict = Depends(require_admin)):
     if data.status is not None and data.status not in PRODUCT_STATUSES:
         raise HTTPException(status_code=400, detail="Невірний статус товару")
     if data.stock_status is not None and data.stock_status not in STOCK_STATUSES:
         raise HTTPException(status_code=400, detail="Невірний статус залишку")
-    conn, cur = db()
-    sets, params = [], []
-    for f in ["name","slug","sku","price","old_price","stock_qty","stock_status",
-              "status","description","short_description","brand_id",
-              "seo_title","seo_description","focus_keyphrase",
-              "barcode","low_stock_threshold","manage_stock","allow_backorders",
-              "purchase_cost","warehouse","supplier_sku"]:
-        v = getattr(data, f, None)
-        if v is not None: sets.append(f"{f}=%s"); params.append(v)
-    # Nullable text/datetime fields: empty string means "clear the value"
-    for f in ["sale_start_at", "sale_end_at", "canonical_url", "og_title", "og_description", "og_image_url"]:
-        v = getattr(data, f, None)
-        if v is not None:
-            sets.append(f"{f}=%s")
-            params.append(v if v != "" else None)
-    if sets:
-        params.append(pid)
-        cur.execute(f"UPDATE products SET {','.join(sets)}, updated_at=NOW() WHERE id=%s", params)
-    if data.category_ids is not None:
-        cur.execute("DELETE FROM product_categories WHERE product_id=%s", (pid,))
-        for cid in data.category_ids:
-            cur.execute("INSERT INTO product_categories (product_id,category_id) VALUES (%s,%s) ON CONFLICT DO NOTHING", (pid, cid))
-    conn.close()
-    return {"ok": True, "id": pid}
+    conn, cur = admin_cursor()
+    try:
+        sets, params = [], []
+        for f in ["name","slug","sku","price","old_price","stock_qty","stock_status",
+                  "status","description","short_description","brand_id",
+                  "seo_title","seo_description","focus_keyphrase",
+                  "barcode","low_stock_threshold","manage_stock","allow_backorders",
+                  "purchase_cost","warehouse","supplier_sku"]:
+            v = getattr(data, f, None)
+            if v is not None: sets.append(f"{f}=%s"); params.append(v)
+        # Nullable text/datetime fields: empty string means "clear the value"
+        for f in ["sale_start_at", "sale_end_at", "canonical_url", "og_title", "og_description", "og_image_url"]:
+            v = getattr(data, f, None)
+            if v is not None:
+                sets.append(f"{f}=%s")
+                params.append(v if v != "" else None)
+        if sets:
+            params.append(pid)
+            cur.execute(f"UPDATE products SET {','.join(sets)}, updated_at=NOW() WHERE id=%s", params)
+        if data.category_ids is not None:
+            cur.execute("DELETE FROM product_categories WHERE product_id=%s", (pid,))
+            for cid in data.category_ids:
+                cur.execute("INSERT INTO product_categories (product_id,category_id) VALUES (%s,%s) ON CONFLICT DO NOTHING", (pid, cid))
+        return {"ok": True, "id": pid}
+    finally:
+        conn.close()
 
 @router.delete("/products/{pid}")
-async def delete_product(pid: int, user: dict = Depends(require_admin)):
+def delete_product(pid: int, user: dict = Depends(require_admin)):
     """Permanently delete a product and its associations.
 
     Safety rules (no cascade-delete on business-critical data):
@@ -173,7 +174,7 @@ async def delete_product(pid: int, user: dict = Depends(require_admin)):
     - Physical image/media files are deleted only when no other product
       references them (handled by _cleanup_product_media).
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         # 1. Clean up associated media (files + DB refs)
         _cleanup_product_media(cur, pid)
@@ -250,11 +251,11 @@ class BulkDelete(BaseModel):
 
 
 @router.post("/products/bulk-delete")
-async def bulk_delete_products(data: BulkDelete, user: dict = Depends(require_admin)):
+def bulk_delete_products(data: BulkDelete, user: dict = Depends(require_admin)):
     """Permanently delete multiple products in a single transaction."""
     if not data.ids:
         raise HTTPException(status_code=400, detail="Список ID порожній")
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         for pid in data.ids:
             _cleanup_product_media(cur, pid)
@@ -281,11 +282,11 @@ def _slugify(name: str) -> str:
 
 
 @router.post("/products")
-async def create_product(data: ProductCreate, user: dict = Depends(require_admin)):
+def create_product(data: ProductCreate, user: dict = Depends(require_admin)):
     """Create a new product (draft by default)."""
     if data.status is not None and data.status not in PRODUCT_STATUSES:
         raise HTTPException(status_code=400, detail="Невірний статус товару")
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         slug = data.slug or _slugify(data.name)
         base, i = slug, 2
@@ -318,7 +319,7 @@ class BulkAction(BaseModel):
 
 
 @router.post("/products/bulk")
-async def bulk_action(data: BulkAction, user: dict = Depends(require_admin)):
+def bulk_action(data: BulkAction, user: dict = Depends(require_admin)):
     """Bulk status change for products."""
     actions = {
         "publish": ("status='PUBLISHED', is_active=true, is_visible=true",),
@@ -332,7 +333,7 @@ async def bulk_action(data: BulkAction, user: dict = Depends(require_admin)):
     }
     if data.action not in actions or not data.ids:
         raise HTTPException(status_code=400, detail="Невірна дія")
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute(
             f"UPDATE products SET {actions[data.action][0]}, updated_at=NOW() WHERE id = ANY(%s)",

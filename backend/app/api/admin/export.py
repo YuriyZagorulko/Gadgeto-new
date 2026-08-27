@@ -16,13 +16,11 @@ Endpoints:
 from datetime import datetime
 from typing import Optional
 
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 
 router = APIRouter()
 
@@ -58,8 +56,8 @@ class ChannelSettingUpdate(BaseModel):
 
 
 @router.get("/export/channels")
-async def list_channels(user=Depends(require_admin)):
-    conn, cur = db()
+def list_channels(user=Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute(
             "SELECT id, code, name, is_enabled, created_at, updated_at FROM channels ORDER BY code"
@@ -70,8 +68,8 @@ async def list_channels(user=Depends(require_admin)):
 
 
 @router.get("/export/channels/{code}")
-async def get_channel(code: str, user=Depends(require_admin)):
-    conn, cur = db()
+def get_channel(code: str, user=Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         return _resolve_channel(cur, code)
     finally:
@@ -79,8 +77,8 @@ async def get_channel(code: str, user=Depends(require_admin)):
 
 
 @router.get("/export/channels/{code}/settings")
-async def list_settings(code: str, user=Depends(require_admin)):
-    conn, cur = db()
+def list_settings(code: str, user=Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         channel = _resolve_channel(cur, code)
         cur.execute(
@@ -93,8 +91,8 @@ async def list_settings(code: str, user=Depends(require_admin)):
 
 
 @router.put("/export/channels/{code}/settings")
-async def upsert_setting(code: str, body: ChannelSettingUpdate, user=Depends(require_admin)):
-    conn, cur = db()
+def upsert_setting(code: str, body: ChannelSettingUpdate, user=Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         channel = _resolve_channel(cur, code)
         cur.execute(
@@ -115,7 +113,7 @@ async def upsert_setting(code: str, body: ChannelSettingUpdate, user=Depends(req
 
 
 @router.get("/export/channels/{code}/listings")
-async def list_listings(
+def list_listings(
         code: str,
         page: int = Query(1, ge=1),
         per_page: int = Query(20, ge=1, le=100),
@@ -124,7 +122,7 @@ async def list_listings(
         q: Optional[str] = Query(None),
         user=Depends(require_admin),
 ):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         channel = _resolve_channel(cur, code)
         filters = ["cl.channel_id = %s"]
@@ -175,8 +173,8 @@ async def list_listings(
 
 
 @router.get("/export/channels/{code}/stats")
-async def channel_stats(code: str, user=Depends(require_admin)):
-    conn, cur = db()
+def channel_stats(code: str, user=Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         channel = _resolve_channel(cur, code)
 
@@ -224,9 +222,9 @@ async def channel_stats(code: str, user=Depends(require_admin)):
 
 
 @router.get("/export/channels/{code}/taxonomy")
-async def channel_taxonomy_stats(code: str, user=Depends(require_admin)):
+def channel_taxonomy_stats(code: str, user=Depends(require_admin)):
     """Return taxonomy counts for the channel."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         channel = _resolve_channel(cur, code)
         from app.channels.taxonomy import get_taxonomy_stats as _stats
@@ -236,13 +234,13 @@ async def channel_taxonomy_stats(code: str, user=Depends(require_admin)):
 
 
 @router.post("/export/channels/{code}/taxonomy/refresh")
-async def refresh_taxonomy(code: str, user=Depends(require_admin)):
+def refresh_taxonomy(code: str, user=Depends(require_admin)):
     """Start a full taxonomy refresh in a background job and return immediately.
 
     The long-running fetch/upsert never blocks the HTTP request.  Progress and
     logs are available via GET /export/channels/{code}/taxonomy/status.
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         channel = _resolve_channel(cur, code)
     finally:
@@ -267,9 +265,9 @@ async def refresh_taxonomy(code: str, user=Depends(require_admin)):
 
 
 @router.get("/export/channels/{code}/taxonomy/status")
-async def taxonomy_run_status(code: str, user=Depends(require_admin)):
+def taxonomy_run_status(code: str, user=Depends(require_admin)):
     """Current progress of the latest (or running) taxonomy refresh job."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         channel = _resolve_channel(cur, code)
         from app.channels.rozetka.taxonomy_run import get_taxonomy_run_status
@@ -293,14 +291,14 @@ async def taxonomy_run_status(code: str, user=Depends(require_admin)):
 
 
 @router.get("/export/channels/{code}/taxonomy/runs")
-async def taxonomy_runs_history(
+def taxonomy_runs_history(
         code: str,
         page: int = Query(1, ge=1),
         per_page: int = Query(25, ge=1, le=100),
         user=Depends(require_admin),
 ):
     """Paginated list of historical taxonomy runs for the channel."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         channel = _resolve_channel(cur, code)
         cid = channel["id"]
@@ -347,13 +345,13 @@ async def taxonomy_runs_history(
 
 
 @router.get("/export/channels/{code}/taxonomy/runs/{run_id}")
-async def taxonomy_run_detail(
+def taxonomy_run_detail(
         code: str,
         run_id: int,
         user=Depends(require_admin),
 ):
     """Detailed progress and logs for a specific taxonomy run."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         channel = _resolve_channel(cur, code)
         cur.execute(
@@ -420,7 +418,7 @@ async def taxonomy_run_detail(
 
 
 @router.get("/export/channels/{code}/taxonomy/categories")
-async def taxonomy_categories(
+def taxonomy_categories(
         code: str,
         q: Optional[str] = Query(None),
         page: int = Query(1, ge=1),
@@ -428,7 +426,7 @@ async def taxonomy_categories(
         user=Depends(require_admin),
 ):
     """Paginated list of local Rozetka categories with attribute counts."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         channel = _resolve_channel(cur, code)
         filters = ["c.channel_id = %s"]
@@ -458,7 +456,7 @@ async def taxonomy_categories(
 
 
 @router.get("/export/channels/{code}/taxonomy/attributes")
-async def taxonomy_attributes(
+def taxonomy_attributes(
         code: str,
         q: Optional[str] = Query(None),
         category_external_id: Optional[str] = Query(None),
@@ -467,7 +465,7 @@ async def taxonomy_attributes(
         user=Depends(require_admin),
 ):
     """Paginated local Rozetka attributes (optionally scoped to a category)."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         channel = _resolve_channel(cur, code)
         filters = ["a.channel_id = %s"]
@@ -499,7 +497,7 @@ async def taxonomy_attributes(
 
 
 @router.get("/export/channels/{code}/taxonomy/values")
-async def taxonomy_values(
+def taxonomy_values(
         code: str,
         q: Optional[str] = Query(None),
         attribute_external_id: Optional[str] = Query(None),
@@ -509,7 +507,7 @@ async def taxonomy_values(
         user=Depends(require_admin),
 ):
     """Paginated local Rozetka values (optionally scoped to attr/category)."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         channel = _resolve_channel(cur, code)
         filters = ["v.channel_id = %s"]
@@ -553,7 +551,7 @@ async def taxonomy_values(
 
 
 @router.get("/export/channels/{code}/products")
-async def channel_products(
+def channel_products(
         code: str,
         page: int = Query(1, ge=1),
         per_page: int = Query(20, ge=1, le=100),
@@ -570,7 +568,7 @@ async def channel_products(
     Server-side pagination, search by SKU/name, category filter,
     listing status filters, and mapping status indicator.
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         channel = _resolve_channel(cur, code)
         cid = channel["id"]
@@ -681,7 +679,7 @@ class ValidateRequest(BaseModel):
 
 
 @router.post("/export/channels/{code}/validate")
-async def validate_product_endpoint(
+def validate_product_endpoint(
         code: str,
         body: ValidateRequest,
         user=Depends(require_admin),
@@ -789,7 +787,7 @@ def _resolve_preview_product_ids(
 
 
 @router.post("/export/channels/{code}/export/preview")
-async def export_preview(
+def export_preview(
         code: str,
         body: PreviewRequest,
         user=Depends(require_admin),
@@ -813,7 +811,7 @@ async def export_preview(
         stock_exclusion_reason,
     )
 
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         ch = _resolve_channel(cur, code)
         cid = ch["id"]
@@ -1027,7 +1025,7 @@ class ExportRequest(BaseModel):
 
 
 @router.post("/export/channels/{code}/export")
-async def start_export(
+def start_export(
         code: str,
         body: ExportRequest,
         user=Depends(require_admin),
@@ -1043,7 +1041,7 @@ async def start_export(
         run_export,
     )
 
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         ch = _resolve_channel(cur, code)
         cid = ch["id"]
@@ -1075,7 +1073,7 @@ async def start_export(
 
 
 @router.get("/export/channels/{code}/export/status/{run_id}")
-async def export_status(
+def export_status(
         code: str,
         run_id: int,
         user=Depends(require_admin),
@@ -1083,7 +1081,7 @@ async def export_status(
     """Poll the live progress/final result of an export run."""
     from app.channels.export_run import get_export_run_status
 
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         ch = _resolve_channel(cur, code)
         status = get_export_run_status(cur, ch["id"], run_id)
@@ -1099,7 +1097,7 @@ async def export_status(
 
 
 @router.get("/export/channels/{code}/value-mappings/candidates")
-async def value_mapping_candidates(
+def value_mapping_candidates(
         code: str,
         q: Optional[str] = Query(None),
         status: Optional[str] = Query(None),
@@ -1116,7 +1114,7 @@ async def value_mapping_candidates(
 
     Status options: 'unmapped' (default), 'mapped', or None for all.
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         ch = _resolve_channel(cur, code)
         cid = ch["id"]

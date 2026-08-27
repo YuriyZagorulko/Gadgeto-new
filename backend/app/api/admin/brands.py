@@ -1,21 +1,13 @@
 # Admin brands API
 import re
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import Optional
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 
 router = APIRouter()
-
-
-def db():
-    conn = psycopg2.connect(DB); conn.autocommit = True
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn, cur
 
 
 class BrandIn(BaseModel):
@@ -26,9 +18,9 @@ class BrandIn(BaseModel):
 
 
 @router.get("/brands")
-async def list_brands(page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
+def list_brands(page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
                       search: Optional[str] = None, user: dict = Depends(require_admin)):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         conds, params = ["1=1"], []
         if search:
@@ -51,8 +43,8 @@ async def list_brands(page: int = Query(1, ge=1), per_page: int = Query(20, ge=1
 
 
 @router.post("/brands")
-async def create_brand(data: BrandIn, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def create_brand(data: BrandIn, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         slug = re.sub(r"[^a-z0-9]+", "-", data.name.lower()).strip("-") or "brand"
         base, i = slug, 2
@@ -70,8 +62,8 @@ async def create_brand(data: BrandIn, user: dict = Depends(require_admin)):
 
 
 @router.put("/brands/{bid}")
-async def update_brand(bid: int, data: BrandIn, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def update_brand(bid: int, data: BrandIn, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("UPDATE brands SET name=%s, description=%s, logo=%s, is_active=%s, updated_at=NOW() WHERE id=%s",
                     (data.name.strip(), data.description, data.logo, data.is_active, bid))
@@ -81,8 +73,8 @@ async def update_brand(bid: int, data: BrandIn, user: dict = Depends(require_adm
 
 
 @router.delete("/brands/{bid}")
-async def delete_brand(bid: int, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def delete_brand(bid: int, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT count(*) AS c FROM products WHERE brand_id=%s", (bid,))
         if cur.fetchone()["c"]:

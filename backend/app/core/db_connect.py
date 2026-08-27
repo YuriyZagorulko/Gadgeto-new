@@ -113,3 +113,14 @@ def get_connection_dep():
     """Like get_cursor_dep but yields (conn, cur) for handlers that need conn."""
     with managed_connection() as (conn, cur):
         yield conn, cur
+
+
+def admin_cursor():
+    """Return (conn, cur) with RealDictCursor and autocommit — same pattern as the
+    local db() helpers previously duplicated across every admin API file, but now
+    using connection timeout and TCP keepalives.
+
+    Connections are standalone (not pooled).  The caller must close them,
+    typically via try/finally.
+    """
+    return cursor()

@@ -9,15 +9,13 @@ references its URL. Removing an image from a product never deletes media.
 import os
 import uuid
 
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Query
 from typing import Optional, List
 from pydantic import BaseModel
 
 from app.api.admin.deps import require_admin
 from app.core.config import settings
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 
 router = APIRouter()
 
@@ -38,10 +36,7 @@ MAX_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
 def db():
-    conn = psycopg2.connect(DB)
-    conn.autocommit = True
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn, cur
+    return admin_cursor()
 
 
 def detect_mime(body: bytes) -> Optional[str]:
@@ -78,7 +73,7 @@ def save_upload(body: bytes, mime: str) -> dict:
     base_url = (settings.MEDIA_BASE_URL or "/media").rstrip("/")
     url = f"{base_url}/{rel_path}"
 
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute(
             """INSERT INTO media_files (filename, storage_path, url, mime_type,
@@ -104,7 +99,7 @@ async def upload_media(file: UploadFile = File(...), user: dict = Depends(requir
     return save_upload(body, mime)
 
 @router.get("/media")
-async def list_media(
+def list_media(
     page: int = Query(1, ge=1),
     per_page: int = Query(24, ge=1, le=100),
     search: Optional[str] = None,
@@ -113,7 +108,7 @@ async def list_media(
     order: str = Query("desc", pattern="^(asc|desc)$"),
     user: dict = Depends(require_admin),
 ):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         conds, params = ["1=1"], []
         if search:
@@ -173,8 +168,8 @@ async def list_media(
 
 
 @router.get("/media/stats")
-async def media_stats(user: dict = Depends(require_admin)):
-    conn, cur = db()
+def media_stats(user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("""SELECT COUNT(*) AS total,
                        COALESCE(SUM(size_bytes),0) AS total_size FROM media_files""")
@@ -205,9 +200,9 @@ async def media_stats(user: dict = Depends(require_admin)):
 
 
 @router.post("/media/scan")
-async def scan_storage(user: dict = Depends(require_admin)):
+def scan_storage(user: dict = Depends(require_admin)):
     """Storage audit: detect orphaned files and missing files. Nothing is deleted."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT storage_path FROM media_files")
         known = {r["storage_path"] for r in cur.fetchall()}
@@ -231,8 +226,8 @@ async def scan_storage(user: dict = Depends(require_admin)):
 
 
 @router.get("/media/{media_id}")
-async def get_media(media_id: int, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def get_media(media_id: int, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT * FROM media_files WHERE id=%s", (media_id,))
         m = cur.fetchone()
@@ -248,8 +243,8 @@ async def get_media(media_id: int, user: dict = Depends(require_admin)):
 
 
 @router.delete("/media/{media_id}")
-async def delete_media(media_id: int, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def delete_media(media_id: int, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT * FROM media_files WHERE id=%s", (media_id,))
         m = cur.fetchone()
@@ -278,7 +273,7 @@ async def delete_media(media_id: int, user: dict = Depends(require_admin)):
 
 
 @router.post("/media/cleanup-unused")
-async def cleanup_unused_media(user: dict = Depends(require_admin)):
+def cleanup_unused_media(user: dict = Depends(require_admin)):
     """Delete all media_files that have ZERO product_image references.
 
     Workflow:
@@ -288,7 +283,7 @@ async def cleanup_unused_media(user: dict = Depends(require_admin)):
 
     Returns stats about what was deleted.
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute(
             """SELECT mf.id, mf.storage_path, mf.url, mf.filename
@@ -331,11 +326,11 @@ class MediaBulkDelete(BaseModel):
 
 
 @router.post("/media/bulk-delete")
-async def bulk_delete_media(body: MediaBulkDelete, user: dict = Depends(require_admin)):
+def bulk_delete_media(body: MediaBulkDelete, user: dict = Depends(require_admin)):
     """Delete multiple media files. Refuses to delete any that are still referenced."""
     if not body.ids:
         raise HTTPException(status_code=400, detail="Список ID порожній")
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         deleted = 0
         skipped = 0

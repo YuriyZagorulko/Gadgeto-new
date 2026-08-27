@@ -1,23 +1,15 @@
 """Admin mappings API — category/attribute/value mappings between suppliers and the catalog."""
 from typing import Optional
 
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 from app.imports.registry import SUPPLIERS as SYSTEM_SUPPLIERS
 
 router = APIRouter()
-
-
-def db():
-    conn = psycopg2.connect(DB); conn.autocommit = True
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn, cur
 
 
 class MappingCreate(BaseModel):
@@ -107,13 +99,13 @@ def _paged(cur, base_sql: str, count_sql: str, params: list, page: int, per_page
 # ------------------------------------------------------------ pickers
 
 @router.get("/mappings/supplier-categories")
-async def lookup_supplier_categories(
+def lookup_supplier_categories(
     supplier_id: Optional[int] = None, q: Optional[str] = None,
     unmapped: bool = False, page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     user: dict = Depends(require_admin),
 ):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         conds, params = ["sc.is_removed=false"], []
         if supplier_id:
@@ -137,13 +129,13 @@ async def lookup_supplier_categories(
 
 
 @router.get("/mappings/supplier-attributes")
-async def lookup_supplier_attributes(
+def lookup_supplier_attributes(
     supplier_id: Optional[int] = None, q: Optional[str] = None,
     unmapped: bool = False, page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     user: dict = Depends(require_admin),
 ):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         conds, params = ["sa.is_removed=false"], []
         if supplier_id:
@@ -167,13 +159,13 @@ async def lookup_supplier_attributes(
 
 
 @router.get("/mappings/supplier-values")
-async def lookup_supplier_values(
+def lookup_supplier_values(
     attribute_id: Optional[int] = None, q: Optional[str] = None,
     unmapped: bool = False, page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     user: dict = Depends(require_admin),
 ):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         conds, params = ["sav.is_removed=false"], []
         if attribute_id:
@@ -201,14 +193,14 @@ async def lookup_supplier_values(
 
 
 @router.get("/mappings/category-attributes")
-async def lookup_category_attributes(
+def lookup_category_attributes(
     category_id: int,
     q: Optional[str] = None,
     user: dict = Depends(require_admin),
 ):
     """Get available internal Attributes for a specific category.
     Returns CategoryAttributes filtered by category, searchable by name."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         conds, params = ["ca.category_id = %s"], [category_id]
         if q:
@@ -232,7 +224,7 @@ async def lookup_category_attributes(
 
 
 @router.put("/mappings/{kind}/{mid}/category-context")
-async def set_mapping_category_context(
+def set_mapping_category_context(
     kind: str, mid: int,
     category_id: Optional[int] = None,
     user: dict = Depends(require_admin),
@@ -241,7 +233,7 @@ async def set_mapping_category_context(
     Only for 'attributes' kind.  NULL = global, category_id = scoped."""
     if kind != "attributes":
         raise HTTPException(status_code=400, detail="Тільки для маппінгу атрибутів")
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM attribute_mappings WHERE id=%s", (mid,))
         if not cur.fetchone():
@@ -262,9 +254,9 @@ async def set_mapping_category_context(
 # ── Review & Repair Endpoints ───────────────────────────────────────────────
 
 @router.get("/mappings/review/summary")
-async def review_summary(user: dict = Depends(require_admin)):
+def review_summary(user: dict = Depends(require_admin)):
     """Return summary counts for the review dashboard."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         # Unassigned attributes: active mappings whose internal attr has 0 CategoryAttributes
         cur.execute("""
@@ -331,7 +323,7 @@ async def review_summary(user: dict = Depends(require_admin)):
 
 
 @router.get("/mappings/review/attributes")
-async def list_review_attributes(
+def list_review_attributes(
     q: Optional[str] = None,
     status: Optional[str] = Query(None, pattern="^(unassigned|global|mapped|all)$"),
     supplier_id: Optional[int] = None,
@@ -346,7 +338,7 @@ async def list_review_attributes(
       mapped     — with internal target, any status
       all        — everything
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         conds, params = ["1=1"], []
 
@@ -405,7 +397,7 @@ async def list_review_attributes(
 
 
 @router.get("/mappings/review/values")
-async def list_review_values(
+def list_review_values(
     q: Optional[str] = None,
     status: Optional[str] = Query(None, pattern="^(orphan|inconsistent|all)$"),
     page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
@@ -418,7 +410,7 @@ async def list_review_values(
       inconsistent — parent attr != value attr
       all          — everything (for unfiltered browsing)
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         if status == "orphan":
             rows = _get_orphan_value_mappings(cur, conn, q, page, per_page)
@@ -571,11 +563,11 @@ def _get_all_value_mappings(cur, conn, q, page, per_page):
 
 
 @router.get("/mappings/review/attributes/{mid}")
-async def get_review_attribute_detail(
+def get_review_attribute_detail(
     mid: int, user: dict = Depends(require_admin),
 ):
     """Get detailed info for an attribute mapping review."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("""
             SELECT m.id, m.is_active, m.category_id,
@@ -614,11 +606,11 @@ async def get_review_attribute_detail(
 
 
 @router.get("/mappings/review/values/{mid}")
-async def get_review_value_detail(
+def get_review_value_detail(
     mid: int, user: dict = Depends(require_admin),
 ):
     """Get detailed info for a value mapping review."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("""
             SELECT m.id, m.is_active,
@@ -647,12 +639,12 @@ async def get_review_value_detail(
 
 
 @router.put("/mappings/review/attributes/{mid}/remap")
-async def remap_attribute(
+def remap_attribute(
     mid: int, attribute_id: int,
     user: dict = Depends(require_admin),
 ):
     """Remap a supplier attribute mapping to a different internal attribute."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id, attribute_id FROM attribute_mappings WHERE id=%s", (mid,))
         row = cur.fetchone()
@@ -673,12 +665,12 @@ async def remap_attribute(
 
 
 @router.put("/mappings/review/values/{mid}/reassign-value")
-async def reassign_value_mapping(
+def reassign_value_mapping(
     mid: int, attribute_value_id: int,
     user: dict = Depends(require_admin),
 ):
     """Reassign a value mapping to a different internal value."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("""
             SELECT m.id, m.attribute_value_id, am.attribute_id AS parent_attr_id
@@ -712,7 +704,7 @@ async def reassign_value_mapping(
 
 
 @router.post("/mappings/review/values/{mid}/link-parent")
-async def link_value_to_parent(
+def link_value_to_parent(
     mid: int, attribute_mapping_id: int,
     user: dict = Depends(require_admin),
 ):
@@ -721,7 +713,7 @@ async def link_value_to_parent(
     This recreates the parent relationship by updating the
     supplier_attribute_value to point to the correct supplier_attribute.
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         # Get current value mapping
         cur.execute(
@@ -800,7 +792,7 @@ async def link_value_to_parent(
 # ── Grouped Review Endpoints ───────────────────────────────────────────────
 
 @router.get("/mappings/review/groups")
-async def review_groups(user: dict = Depends(require_admin)):
+def review_groups(user: dict = Depends(require_admin)):
     """Return grouped review items for the admin workflow.
 
     Groups:
@@ -809,7 +801,7 @@ async def review_groups(user: dict = Depends(require_admin)):
       unassigned_attrs     — grouped by internal attribute
       ambiguous_global     — count only (individual items via /review/attributes)
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         # Inconsistent values by (parent_attr, value_attr) group
         cur.execute("""
@@ -919,13 +911,13 @@ async def review_groups(user: dict = Depends(require_admin)):
 
 
 @router.get("/mappings/review/inconsistent-group/{parent_attr_id}")
-async def list_inconsistent_group(
+def list_inconsistent_group(
     parent_attr_id: int,
     page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=200),
     user: dict = Depends(require_admin),
 ):
     """List all inconsistent value mappings for a specific parent attribute."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         offset = (page - 1) * per_page
         # Count first
@@ -974,7 +966,7 @@ class BulkReassignRequest(BaseModel):
 
 
 @router.put("/mappings/review/values/bulk-reassign")
-async def bulk_reassign_values(
+def bulk_reassign_values(
     body: BulkReassignRequest,
     user: dict = Depends(require_admin),
 ):
@@ -1040,7 +1032,7 @@ class CreateAndAssignRequest(BaseModel):
 
 
 @router.post("/mappings/review/values/create-and-assign")
-async def create_value_and_assign(
+def create_value_and_assign(
     body: CreateAndAssignRequest,
     user: dict = Depends(require_admin),
 ):
@@ -1120,13 +1112,13 @@ async def create_value_and_assign(
 # ── Improved Review Endpoints ─────────────────────────────────────────────
 
 @router.get("/mappings/review/inconsistent-detail/{parent_attr_id}")
-async def inconsistent_detail(
+def inconsistent_detail(
     parent_attr_id: int,
     page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=200),
     user: dict = Depends(require_admin),
 ):
     """Detailed list of inconsistent value mappings with product usage."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         offset = (page - 1) * per_page
         total = 0
@@ -1165,12 +1157,12 @@ async def inconsistent_detail(
 
 
 @router.get("/mappings/review/orphans")
-async def orphan_value_mappings(
+def orphan_value_mappings(
     page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=200),
     user: dict = Depends(require_admin),
 ):
     """List orphan value mappings with details."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         offset = (page - 1) * per_page
         cur.execute("""SELECT count(*) AS c FROM attribute_value_mappings m
@@ -1205,11 +1197,11 @@ async def orphan_value_mappings(
 
 
 @router.get("/mappings/review/unassigned")
-async def unassigned_attribute_mappings(
+def unassigned_attribute_mappings(
     user: dict = Depends(require_admin),
 ):
     """List all unassigned attribute mappings with context."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("""
             SELECT a.id AS attr_id, a.name AS attr_name,
@@ -1265,12 +1257,12 @@ async def unassigned_attribute_mappings(
 
 
 @router.get("/mappings/review/ambiguous")
-async def ambiguous_global_mappings(
+def ambiguous_global_mappings(
     page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=200),
     user: dict = Depends(require_admin),
 ):
     """List ambiguous global attribute mappings with usage context."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         offset = (page - 1) * per_page
         cur.execute("""SELECT count(*) AS c FROM attribute_mappings m
@@ -1312,7 +1304,7 @@ def _kind_or_404(kind: str):
 
 
 @router.get("/mappings/{kind}")
-async def list_mappings(
+def list_mappings(
     kind: str, q: Optional[str] = None, supplier_id: Optional[int] = None,
     active: Optional[bool] = None, mapped: Optional[bool] = None,
     scope: Optional[str] = Query(None, pattern="^(global|supplier)$"),
@@ -1325,7 +1317,7 @@ async def list_mappings(
     """Server-side search / filtering / sorting / pagination over mapping rows."""
     L = _list_sql_or_404(kind)
     scope_col = f"{L['scope_alias']}.supplier_id"
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         conds, params = ["TRUE"], []
         if q:
@@ -1435,10 +1427,10 @@ def _ensure_supplier_item(cur, kind: str, sid: int, name: str,
 
 
 @router.post("/mappings/{kind}", status_code=201)
-async def create_mapping(kind: str, body: MappingCreate, user: dict = Depends(require_admin)):
+def create_mapping(kind: str, body: MappingCreate, user: dict = Depends(require_admin)):
     K = _kind_or_404(kind)
     table, s_fk, c_fk, s_table, c_table = K[0], K[1], K[2], K[3], K[4]
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         # ── resolve the supplier-side item ────────────────────────────────
         if body.supplier_item_id:
@@ -1501,12 +1493,12 @@ async def create_mapping(kind: str, body: MappingCreate, user: dict = Depends(re
 
 
 @router.put("/mappings/{kind}/{mid}")
-async def update_mapping(kind: str, mid: int, body: MappingUpdate,
+def update_mapping(kind: str, mid: int, body: MappingUpdate,
                          clear_target: bool = False,
                          user: dict = Depends(require_admin)):
     K = _kind_or_404(kind)
     table, s_fk, c_fk, _, c_table = K[0], K[1], K[2], K[3], K[4]
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute(f"SELECT id FROM {table} WHERE id=%s", (mid,))
         if not cur.fetchone():
@@ -1554,9 +1546,9 @@ async def update_mapping(kind: str, mid: int, body: MappingUpdate,
 
 
 @router.delete("/mappings/{kind}/{mid}")
-async def delete_mapping(kind: str, mid: int, user: dict = Depends(require_admin)):
+def delete_mapping(kind: str, mid: int, user: dict = Depends(require_admin)):
     table, _, _, _, _, _, _ = _kind_or_404(kind)
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute(f"DELETE FROM {table} WHERE id=%s", (mid,))
         if cur.rowcount == 0:

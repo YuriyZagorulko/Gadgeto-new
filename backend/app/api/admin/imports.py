@@ -3,14 +3,12 @@ import json
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import Any, Optional
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 from app.imports.registry import SUPPLIERS as SYSTEM_SUPPLIERS
 from app.imports.tasks import run_import
 from app.imports.job_health import reconcile_stale_jobs, request_cancellation
@@ -44,14 +42,14 @@ def _parse_job(row: dict) -> dict:
 
 
 @router.get("/imports/jobs")
-async def list_jobs(
+def list_jobs(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     status: Optional[str] = None,
     supplier_id: Optional[int] = None,
     user: dict = Depends(require_admin),
 ):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         # Source of truth for staleness lives in the DB — reconcile stale
         # jobs every time the history is viewed.
@@ -110,8 +108,8 @@ def _progress_percent(item: dict) -> Optional[int]:
 
 
 @router.get("/imports/jobs/{jid}")
-async def get_job(jid: int, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def get_job(jid: int, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         try:
             reconcile_stale_jobs()
@@ -141,7 +139,7 @@ class ImportRun(BaseModel):
 
 
 @router.post("/imports/run")
-async def run_import_job(
+def run_import_job(
     data: ImportRun,
     background: BackgroundTasks,
     user: dict = Depends(require_admin),
@@ -151,7 +149,7 @@ async def run_import_job(
         raise HTTPException(status_code=400, detail="Невірний тип імпорту")
     if data.supplier_code not in SYSTEM_SUPPLIERS:
         raise HTTPException(status_code=404, detail="Постачальника з таким кодом не знайдено")
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         # Guard: no concurrent import for the same supplier
         cur.execute(
@@ -179,7 +177,7 @@ async def run_import_job(
 
 
 @router.post("/imports/start")
-async def start_import(
+def start_import(
     data: ImportRun,
     background: BackgroundTasks,
     user: dict = Depends(require_admin),
@@ -190,7 +188,7 @@ async def start_import(
     if data.supplier_code not in SYSTEM_SUPPLIERS:
         raise HTTPException(status_code=400, detail="Невірний постачальник")
 
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         # Guard: no concurrent import for the same supplier
         cur.execute(
@@ -235,9 +233,9 @@ async def start_import(
 
 
 @router.get("/imports/jobs/{jid}/progress")
-async def get_import_progress(jid: int, user: dict = Depends(require_admin)):
+def get_import_progress(jid: int, user: dict = Depends(require_admin)):
     """Return the current progress of an import job (for frontend polling)."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         try:
             reconcile_stale_jobs()
@@ -332,14 +330,14 @@ GLOBAL_ACTION_TYPES: dict[str, tuple[str, ...]] = {
 
 
 @router.post("/imports/jobs/{jid}/cancel")
-async def cancel_import_job(jid: int, user: dict = Depends(require_admin)):
+def cancel_import_job(jid: int, user: dict = Depends(require_admin)):
     """Request cancellation of a running/queued import job.
 
     Does NOT delete the record. If the worker has a live heartbeat it will
     stop cooperatively at the next safe point; otherwise the job is marked
     CANCELLED immediately.
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT status FROM import_jobs WHERE id=%s", (jid,))
         row = cur.fetchone()
@@ -381,7 +379,7 @@ def _run_tracked_import(job_id: int, supplier_code: str, import_type: str) -> No
     """Background wrapper around the FULL import pipeline that tracks
     execution status/statistics in import_jobs (QUEUED → RUNNING → SUCCEEDED/FAILED)."""
     # Get supplier_id from the job
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT supplier_id FROM import_jobs WHERE id=%s", (job_id,))
         row = cur.fetchone()
@@ -415,9 +413,9 @@ class BulkDeleteResponse(BaseModel):
 
 
 @router.delete("/imports/jobs/{jid}")
-async def delete_job(jid: int, user: dict = Depends(require_admin)):
+def delete_job(jid: int, user: dict = Depends(require_admin)):
     """Видалити окремий запис історії імпорту."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id, status FROM import_jobs WHERE id = %s", (jid,))
         job = cur.fetchone()
@@ -437,11 +435,11 @@ async def delete_job(jid: int, user: dict = Depends(require_admin)):
 
 
 @router.post("/imports/jobs/bulk-delete")
-async def bulk_delete_jobs(data: BulkDeleteRequest, user: dict = Depends(require_admin)):
+def bulk_delete_jobs(data: BulkDeleteRequest, user: dict = Depends(require_admin)):
     """Видалити декілька записів історії імпорту (транзакційно)."""
     if not data.ids:
         raise HTTPException(status_code=400, detail="Список ID для видалення порожній.")
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute(
             "SELECT id, status FROM import_jobs WHERE id = ANY(%s)",
@@ -475,7 +473,7 @@ class GlobalImportRun(BaseModel):
 
 
 @router.post("/imports/run-all")
-async def run_all_imports(
+def run_all_imports(
     data: GlobalImportRun,
     background: BackgroundTasks,
     user: dict = Depends(require_admin),
@@ -485,7 +483,7 @@ async def run_all_imports(
     if not types:
         raise HTTPException(status_code=400, detail="Невірна глобальна дія")
 
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT COUNT(*) AS c FROM import_jobs WHERE status IN ('QUEUED','RUNNING')")
         if cur.fetchone()["c"]:
@@ -502,7 +500,7 @@ async def run_all_imports(
     # Create QUEUED jobs up-front — real progress tracking, and the running-jobs
     # guard above stays effective for requests that arrive while tasks are pending.
     scheduled: list[tuple[int, str, str]] = []
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         for s in suppliers:
             for t in types:
@@ -540,9 +538,9 @@ async def run_all_imports(
 
 
 @router.get("/imports/jobs/{jid}/report")
-async def get_job_report(jid: int, user: dict = Depends(require_admin)):
+def get_job_report(jid: int, user: dict = Depends(require_admin)):
     """Detailed import report with structured unmapped data."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         try:
             reconcile_stale_jobs()

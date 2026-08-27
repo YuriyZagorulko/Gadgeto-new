@@ -2,13 +2,11 @@
 import hashlib
 import secrets
 
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB, get_cursor
+from app.core.db_connect import admin_cursor, get_cursor
 from app.core.security import verify_password
 
 router = APIRouter()
@@ -27,9 +25,9 @@ class LoginRequest(BaseModel):
 
 
 @router.post("/login")
-async def login(req: LoginRequest, request: Request):
+def login(req: LoginRequest, request: Request):
     """Authenticate an admin/staff user and issue a session token."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute(
             "SELECT id, email, password_hash, full_name, role, status FROM users WHERE lower(email) = %s",
@@ -80,13 +78,13 @@ async def login(req: LoginRequest, request: Request):
 
 
 @router.get("/me")
-async def me(user: dict = Depends(require_admin)):
+def me(user: dict = Depends(require_admin)):
     """Return the authenticated admin user."""
     return {k: user[k] for k in ("id", "email", "full_name", "phone", "role", "status")}
 
 
 @router.post("/logout")
-async def logout(request: Request, user: dict = Depends(require_admin)):
+def logout(request: Request, user: dict = Depends(require_admin)):
     """Invalidate the current session token."""
     auth = request.headers.get("authorization", "")
     token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""

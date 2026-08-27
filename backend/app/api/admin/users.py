@@ -1,12 +1,10 @@
 """Admin users API (customer & staff account administration)."""
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 
 from app.api.admin.deps import require_admin, require_admin_role
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 
 router = APIRouter()
 
@@ -41,7 +39,7 @@ class UserUpdate(BaseModel):
 
 
 @router.get("/users")
-async def list_users(
+def list_users(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     q: Optional[str] = None,
@@ -52,7 +50,7 @@ async def list_users(
     user: dict = Depends(require_admin),
 ):
     """Paginated user list with sorting, search and filtering. Never exposes password hashes."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         conds, params = ["1=1"], []
         if q:
@@ -103,8 +101,8 @@ async def list_users(
 
 
 @router.get("/users/{user_id}")
-async def get_user(user_id: int, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def get_user(user_id: int, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute(
             """
@@ -126,7 +124,7 @@ async def get_user(user_id: int, user: dict = Depends(require_admin)):
 
 
 @router.patch("/users/{user_id}")
-async def update_user(
+def update_user(
     user_id: int,
     data: UserUpdate,
     user: dict = Depends(require_admin),
@@ -143,7 +141,7 @@ async def update_user(
         if data.status and data.status != "ACTIVE":
             raise HTTPException(status_code=400, detail="Не можна деактивувати власний акаунт")
 
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM users WHERE id = %s", (user_id,))
         if not cur.fetchone():
@@ -168,7 +166,7 @@ async def update_user(
         conn.close()
 
 @router.delete("/users/{user_id}")
-async def delete_user(
+def delete_user(
     user_id: int,
     user: dict = Depends(require_admin_role),
 ):
@@ -181,7 +179,7 @@ async def delete_user(
     - Product reviews are preserved (ON DELETE SET NULL in DB).
     - Mapping audit records (created_by_user_id) are set to NULL.
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         # 1. Prevent self-deletion
         if user["id"] == user_id:

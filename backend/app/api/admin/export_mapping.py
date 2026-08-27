@@ -10,13 +10,11 @@ Direction: Internal Category/Attribute/Value → External Channel Entity
 from datetime import datetime
 from typing import Optional
 
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 
 router = APIRouter()
 
@@ -264,7 +262,7 @@ def _list_value_mappings(cur, cid: int, q, status_filter, ext_cat_id, attribute_
 
 
 @router.get("/export/channels/{code}/mappings/{kind}")
-async def list_mappings(
+def list_mappings(
         code: str, kind: str,
         page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
         q: Optional[str] = Query(None),
@@ -284,7 +282,7 @@ async def list_mappings(
       * scope           — attributes: 'global' | 'category'
       * status          — also accepts 'unmapped'
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cfg = _resolve_kind(kind)
         cur.execute("SELECT id FROM channels WHERE code = %s", (code,))
@@ -312,13 +310,13 @@ async def list_mappings(
 
 
 @router.post("/export/channels/{code}/mappings/{kind}")
-async def create_mapping(code: str, kind: str, body: MappingCreate, user=Depends(require_admin)):
+def create_mapping(code: str, kind: str, body: MappingCreate, user=Depends(require_admin)):
     """Create a mapping idempotently.
 
     Re-running with the same (internal entity, external category) updates the
     existing row instead of raising a duplicate-key error.
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cfg = _resolve_kind(kind)
         cur.execute("SELECT id FROM channels WHERE code = %s", (code,))
@@ -411,8 +409,8 @@ def _lookup_external_name(cur, kind: str, cid: int, external_id: str,
 
 
 @router.put("/export/channels/{code}/mappings/{kind}/{mid}")
-async def update_mapping(code: str, kind: str, mid: int, body: MappingUpdate, user=Depends(require_admin)):
-    conn, cur = db()
+def update_mapping(code: str, kind: str, mid: int, body: MappingUpdate, user=Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cfg = _resolve_kind(kind)
         sets, params = [], []
@@ -437,8 +435,8 @@ async def update_mapping(code: str, kind: str, mid: int, body: MappingUpdate, us
 
 
 @router.delete("/export/channels/{code}/mappings/{kind}/{mid}")
-async def delete_mapping(code: str, kind: str, mid: int, user=Depends(require_admin)):
-    conn, cur = db()
+def delete_mapping(code: str, kind: str, mid: int, user=Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cfg = _resolve_kind(kind)
         cur.execute(f"DELETE FROM {cfg['table']} WHERE id = %s", (mid,))
@@ -453,14 +451,14 @@ async def delete_mapping(code: str, kind: str, mid: int, user=Depends(require_ad
 
 
 @router.get("/export/channels/{code}/mappings/{kind}/{internal_id}/suggestions")
-async def get_suggestions(
+def get_suggestions(
         code: str, kind: str, internal_id: int,
         external_category_id: Optional[str] = Query(None),
         external_attribute_id: Optional[str] = Query(None),
         user=Depends(require_admin),
 ):
     from app.channels.rozetka.mapping_suggestions import suggest_mappings
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         _resolve_kind(kind)
         cur.execute("SELECT id FROM channels WHERE code = %s", (code,))
@@ -478,10 +476,10 @@ async def get_suggestions(
 
 
 @router.get("/export/channels/{code}/pickers/categories")
-async def pick_categories(code: str, q: Optional[str] = Query(None),
+def pick_categories(code: str, q: Optional[str] = Query(None),
                           page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
                           user=Depends(require_admin)):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         filters, params = [], []
         if q:
@@ -498,10 +496,10 @@ async def pick_categories(code: str, q: Optional[str] = Query(None),
 
 
 @router.get("/export/channels/{code}/pickers/attributes")
-async def pick_attributes(code: str, q: Optional[str] = Query(None),
+def pick_attributes(code: str, q: Optional[str] = Query(None),
                           page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
                           user=Depends(require_admin)):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         filters, params = [], []
         if q:
@@ -518,11 +516,11 @@ async def pick_attributes(code: str, q: Optional[str] = Query(None),
 
 
 @router.get("/export/channels/{code}/pickers/values")
-async def pick_values(code: str, attribute_id: Optional[int] = Query(None),
+def pick_values(code: str, attribute_id: Optional[int] = Query(None),
                       q: Optional[str] = Query(None),
                       page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
                       user=Depends(require_admin)):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         filters, params = [], []
         if attribute_id:
@@ -544,11 +542,11 @@ async def pick_values(code: str, attribute_id: Optional[int] = Query(None),
 
 
 @router.get("/export/channels/{code}/pickers/external-categories")
-async def pick_external_categories(code: str, q: Optional[str] = Query(None),
+def pick_external_categories(code: str, q: Optional[str] = Query(None),
                                    page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=200),
                                    user=Depends(require_admin)):
     """Rozetka categories from the LOCAL taxonomy (never an API call)."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM channels WHERE code = %s", (code,))
         ch = cur.fetchone()
@@ -570,13 +568,13 @@ async def pick_external_categories(code: str, q: Optional[str] = Query(None),
 
 
 @router.get("/export/channels/{code}/pickers/external-attributes")
-async def pick_external_attributes(code: str,
+def pick_external_attributes(code: str,
                                    category_external_id: Optional[str] = Query(None),
                                    q: Optional[str] = Query(None),
                                    page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
                                    user=Depends(require_admin)):
     """Rozetka attributes from local taxonomy, scoped to a Rozetka category."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM channels WHERE code = %s", (code,))
         ch = cur.fetchone()
@@ -600,14 +598,14 @@ async def pick_external_attributes(code: str,
 
 
 @router.get("/export/channels/{code}/pickers/external-values")
-async def pick_external_values(code: str,
+def pick_external_values(code: str,
                                category_external_id: Optional[str] = Query(None),
                                attribute_external_id: Optional[str] = Query(None),
                                q: Optional[str] = Query(None),
                                page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
                                user=Depends(require_admin)):
     """Rozetka values from local taxonomy, scoped to category + attribute."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM channels WHERE code = %s", (code,))
         ch = cur.fetchone()
@@ -699,8 +697,8 @@ def _coverage_block(cur, cid: int, kind: str) -> dict:
 
 
 @router.get("/export/channels/{code}/mapping-coverage")
-async def mapping_coverage(code: str, user=Depends(require_admin)):
-    conn, cur = db()
+def mapping_coverage(code: str, user=Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM channels WHERE code = %s", (code,))
         ch = cur.fetchone()

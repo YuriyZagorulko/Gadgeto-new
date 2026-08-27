@@ -9,13 +9,11 @@ Routes:
     DELETE /categories/{cid}/attributes/{caid} — remove attribute from category
 """
 from typing import Optional
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 
 router = APIRouter()
 
@@ -56,13 +54,13 @@ class CategoryAttributeBulkAssign(BaseModel):
     filter_type: Optional[str] = None
 
 @router.get("/categories/{cid}/attributes")
-async def list_category_attributes(
+def list_category_attributes(
     cid: int,
     filterable_only: bool = False,
     user: dict = Depends(require_admin),
 ):
     """List all CategoryAttributes for a category."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM categories WHERE id=%s", (cid,))
         if not cur.fetchone():
@@ -91,13 +89,13 @@ async def list_category_attributes(
 
 
 @router.post("/categories/{cid}/attributes")
-async def add_attribute_to_category(
+def add_attribute_to_category(
     cid: int,
     data: CategoryAttributeCreate,
     user: dict = Depends(require_admin),
 ):
     """Add an attribute to a category (create CategoryAttribute)."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM categories WHERE id=%s", (cid,))
         if not cur.fetchone():
@@ -137,13 +135,13 @@ async def add_attribute_to_category(
         conn.close()
 
 @router.post("/categories/{cid}/attributes/bulk")
-async def bulk_assign_attributes(
+def bulk_assign_attributes(
     cid: int,
     data: CategoryAttributeBulkAssign,
     user: dict = Depends(require_admin),
 ):
     """Assign multiple attributes to a category at once."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM categories WHERE id=%s", (cid,))
         if not cur.fetchone():
@@ -176,14 +174,14 @@ async def bulk_assign_attributes(
 
 
 @router.put("/categories/{cid}/attributes/{caid}")
-async def update_category_attribute(
+def update_category_attribute(
     cid: int,
     caid: int,
     data: CategoryAttributeUpdate,
     user: dict = Depends(require_admin),
 ):
     """Update CategoryAttribute configuration."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute(
             "SELECT id FROM category_attributes WHERE id=%s AND category_id=%s",
@@ -219,7 +217,7 @@ async def update_category_attribute(
 
 
 @router.delete("/categories/{cid}/attributes/{caid}")
-async def remove_attribute_from_category(
+def remove_attribute_from_category(
     cid: int,
     caid: int,
     user: dict = Depends(require_admin),
@@ -230,7 +228,7 @@ async def remove_attribute_from_category(
     Attribute or any product data.  CategoryAttributeValue children
     are cascade-deleted automatically.
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute(
             "SELECT id FROM category_attributes WHERE id=%s AND category_id=%s",
@@ -247,12 +245,12 @@ async def remove_attribute_from_category(
 # ── CategoryAttributeValue endpoints ────────────────────────────────────────
 
 @router.get("/categories/{cid}/attributes/{caid}/values")
-async def list_category_attribute_values(
+def list_category_attribute_values(
     cid: int, caid: int,
     user: dict = Depends(require_admin),
 ):
     """List all canonical AttributeValues assigned to this CategoryAttribute."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute(
             "SELECT id FROM category_attributes WHERE id=%s AND category_id=%s",
@@ -283,7 +281,7 @@ async def list_category_attribute_values(
 
 
 @router.post("/categories/{cid}/attributes/{caid}/values")
-async def add_value_to_category_attribute(
+def add_value_to_category_attribute(
     cid: int, caid: int,
     attribute_value_id: int,
     user: dict = Depends(require_admin),
@@ -295,7 +293,7 @@ async def add_value_to_category_attribute(
       - AttributeValue exists
       - AttributeValue.attribute_id == CategoryAttribute.attribute_id
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         # Get CategoryAttribute to verify ownership and get the attribute_id
         cur.execute(
@@ -337,13 +335,13 @@ async def add_value_to_category_attribute(
 
 
 @router.post("/categories/{cid}/attributes/{caid}/values/bulk")
-async def bulk_add_values_to_category_attribute(
+def bulk_add_values_to_category_attribute(
     cid: int, caid: int,
     attribute_value_ids: list[int],
     user: dict = Depends(require_admin),
 ):
     """Add multiple AttributeValues to a CategoryAttribute at once."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute(
             "SELECT id, attribute_id FROM category_attributes WHERE id=%s AND category_id=%s",
@@ -384,7 +382,7 @@ async def bulk_add_values_to_category_attribute(
 
 
 @router.delete("/categories/{cid}/attributes/{caid}/values/{cavid}")
-async def remove_value_from_category_attribute(
+def remove_value_from_category_attribute(
     cid: int, caid: int, cavid: int,
     user: dict = Depends(require_admin),
 ):
@@ -393,7 +391,7 @@ async def remove_value_from_category_attribute(
     This removes only the CategoryAttributeValue bridge.
     It does NOT delete the canonical AttributeValue.
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute(
             "DELETE FROM category_attribute_values WHERE id=%s AND category_attribute_id=%s",
@@ -407,7 +405,7 @@ async def remove_value_from_category_attribute(
 
 
 @router.get("/categories/{cid}/attributes/{caid}/available-values")
-async def list_available_values_for_category_attribute(
+def list_available_values_for_category_attribute(
     cid: int, caid: int,
     q: Optional[str] = None,
     user: dict = Depends(require_admin),
@@ -416,7 +414,7 @@ async def list_available_values_for_category_attribute(
 
     This allows the administrator to search and add missing values.
     """
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute(
             "SELECT attribute_id FROM category_attributes WHERE id=%s AND category_id=%s",

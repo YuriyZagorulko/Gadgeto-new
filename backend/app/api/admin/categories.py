@@ -1,21 +1,13 @@
 # Admin categories API
 import re
-import psycopg2
-import psycopg2.extras
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import Optional
 
 from app.api.admin.deps import require_admin
-from app.core.db_connect import DB
+from app.core.db_connect import admin_cursor
 
 router = APIRouter()
-
-
-def db():
-    conn = psycopg2.connect(DB); conn.autocommit = True
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn, cur
 
 
 def _slugify(name: str) -> str:
@@ -34,9 +26,9 @@ class CategoryIn(BaseModel):
 
 
 @router.get("/categories/tree")
-async def category_tree(user: dict = Depends(require_admin)):
+def category_tree(user: dict = Depends(require_admin)):
     """Full category hierarchy with product counts."""
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         cur.execute("""SELECT id, parent_id, name, slug, is_active, sort_order,
                        product_count FROM categories ORDER BY sort_order, name""")
@@ -54,9 +46,9 @@ async def category_tree(user: dict = Depends(require_admin)):
 
 
 @router.get("/categories")
-async def list_categories(user: dict = Depends(require_admin),
+def list_categories(user: dict = Depends(require_admin),
                           search: Optional[str] = None):
-    conn, cur = db()
+    conn, cur = admin_cursor()
     try:
         sql = """SELECT id, parent_id, name, slug, is_active, sort_order, product_count
                  FROM categories"""
@@ -72,8 +64,8 @@ async def list_categories(user: dict = Depends(require_admin),
 
 
 @router.post("/categories")
-async def create_category(data: CategoryIn, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def create_category(data: CategoryIn, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         slug = _slugify(data.name)
         base = slug
@@ -95,8 +87,8 @@ async def create_category(data: CategoryIn, user: dict = Depends(require_admin))
 
 
 @router.put("/categories/{cid}")
-async def update_category(cid: int, data: CategoryIn, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def update_category(cid: int, data: CategoryIn, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM categories WHERE id=%s", (cid,))
         if not cur.fetchone():
@@ -114,8 +106,8 @@ async def update_category(cid: int, data: CategoryIn, user: dict = Depends(requi
 
 
 @router.delete("/categories/{cid}")
-async def delete_category(cid: int, user: dict = Depends(require_admin)):
-    conn, cur = db()
+def delete_category(cid: int, user: dict = Depends(require_admin)):
+    conn, cur = admin_cursor()
     try:
         cur.execute("SELECT count(*) AS c FROM categories WHERE parent_id=%s", (cid,))
         if cur.fetchone()["c"]:

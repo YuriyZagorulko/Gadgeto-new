@@ -74,7 +74,7 @@ class LiqPayClient:
 
         data["signature"] = self._sign(data)
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             async with session.post(
                 "https://www.liqpay.ua/api/3/checkout",
                 json=data,
@@ -97,7 +97,7 @@ class LiqPayClient:
         }
         data["signature"] = self._sign(data)
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             async with session.post(
                 "https://www.liqpay.ua/api/3/request",
                 json=data,
