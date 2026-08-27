@@ -32,6 +32,8 @@ services:
       - ./data/media:/app/media
       # Supplier feeds (configurable via SUPPLIER_FEEDS_HOST_DIR env)
       - ${SUPPLIER_FEEDS_HOST_DIR:-./data/feeds}:/data/feeds
+      # Mounted entrypoint so we can override uvicorn args without rebuilding
+      - ./backend/entrypoint.sh:/entrypoint.sh
     ports:
       - "8000:8000"
     healthcheck:

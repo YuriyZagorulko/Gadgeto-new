@@ -60,12 +60,14 @@ async def get_category(slug: str):
     # Breadcrumbs
     breadcrumbs = []
     pid = cat["parent_id"]
-    while pid:
-        cur.execute("SELECT id, name, slug FROM categories WHERE id = %s", (pid,))
+    visited = set()
+    while pid and pid not in visited:
+        visited.add(pid)
+        cur.execute("SELECT id, name, slug, parent_id FROM categories WHERE id = %s", (pid,))
         p = cur.fetchone()
         if p:
             breadcrumbs.insert(0, {"id": p["id"], "name": p["name"], "slug": p["slug"]})
-            pid = p["id"] if p["id"] != pid else None
+            pid = p["parent_id"]
         else:
             break
     
@@ -322,12 +324,14 @@ async def get_product(slug: str):
         cur.execute("SELECT parent_id FROM categories WHERE id = %s", (c["id"],))
         r = cur.fetchone()
         if r: pid = r["parent_id"]
-        while pid:
-            cur.execute("SELECT id, name, slug FROM categories WHERE id = %s", (pid,))
+        visited = set()
+        while pid and pid not in visited:
+            visited.add(pid)
+            cur.execute("SELECT id, name, slug, parent_id FROM categories WHERE id = %s", (pid,))
             parent = cur.fetchone()
             if parent:
                 breadcrumbs.insert(0, {"id": parent["id"], "name": parent["name"], "slug": parent["slug"]})
-                pid = parent["id"]
+                pid = parent["parent_id"]
             else:
                 break
     

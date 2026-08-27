@@ -1,101 +1,84 @@
-# Final Mapping Execution Result
+# Mapping Review — Final Execution Result
 
-Generated: 2026-08-27 19:50 EEST
+Generated: 2026-08-27 21:45 EEST
 
 ---
 
-## 1. Execution Summary
+## 1. Operations Executed
 
-| Metric | Value |
-|:-------|:------|
-| Operations executed | **44 SAFE_CREATE** |
-| Operations skipped (need admin) | 21 (unassigned) + 1 (Немає даних) |
-| Transaction status | **COMMITTED ✅** |
+| Decision | Operation | Target | Rows |
+|:---------|:----------|:-------|:----:|
+| A | CREATE AV + REASSIGN VM#15877 | 'Немає даних' → attr 325 | 1 AV + 1 VM |
+| B | category_attributes for 353 (Бренд) | ALL 154 categories | 154 rows |
+| C | category_attributes for 328 (ECC) | cats 28, 78, 6 | 3 rows |
+| D | KEEP RAID placeholder | No changes | 0 |
+| E | REDIRECT AM#9182: 358 → 299 | Яскравість merge | 1 row |
+| F | category_attributes for 167 (Кількість) | ALL 154 categories | 154 rows |
+| G | category_attributes for 172 (Форм-фактор) | cats 25, 4 | 2 rows |
+| H | category_attributes for 357 (Час відгуку) | Монітори (74) | 1 row |
 
-## 2. Operations Executed
+**Single transaction, idempotent.**
 
-### 44 SAFE_CREATE — GPU Clock Values
-
-Created 44 new canonical `attribute_values` under **Attribute 325 (Частота ядра, МГц)** and reassigned corresponding `attribute_value_mappings`.
-
-| Detail | Value |
-|:-------|:------|
-| Target Attribute | 325 Частота ядра, МГц |
-| AVs created | AV#8786–8829 (44 values) |
-| VMs reassigned | VM#15830–15876 (44 mappings) |
-| Parent AM | AM#9180 (unchanged) |
-| Category | Відеокарти (id=14) |
-| ProductAttributes modified | **0** |
-| Product data modified | **0** |
-
-All 44 compound values were created preserving the full supplier text exactly. This follows the established precedent of 3 existing compound values already under attr 325 (AV#4701, #4703, #4706).
-
-## 3. Database Counts
+## 2. Database Counts
 
 | Table | Before | After | Delta | Status |
 |:------|:------:|:-----:|:-----:|:------:|
 | products | 14,519 | 14,519 | 0 | ✅ |
 | product_attributes | 185,566 | 185,566 | 0 | ✅ |
 | attributes | 201 | 201 | 0 | ✅ |
-| attribute_values | 7,883 | **7,927** | +44 | ✅ |
+| attribute_values | 7,927 | **7,928** | +1 | ✅ |
 | attribute_mappings | 1,151 | 1,151 | 0 | ✅ |
 | value_mappings | 8,142 | 8,142 | 0 | ✅ |
-| category_attributes | 708 | 708 | 0 | ✅ |
-| channel_attr_mappings | 93 | 93 | 0 | ✅ |
-| channel_value_mappings | 502 | 502 | 0 | ✅ |
+| category_attributes | 708 | **1,021** | +313 | ✅ |
+| channel_*_mappings | all unchanged | all unchanged | 0 | ✅ |
 
-## 4. Review Counts
+## 3. Final Review State
 
 | Category | Before | After | Delta | Status |
 |:---------|:------:|:-----:|:-----:|:------:|
-| inconsistent | 45 | **1** | -44 | ✅ |
+| inconsistent | 1 | **0** | -1 | ✅ |
 | orphans | 0 | 0 | 0 | ✅ |
-| ambiguous_global | 162 | 162 | 0 | ✅ |
-| unassigned | 21 | 21 | 0 | Needs admin |
-| **TOTAL** | **228** | **184** | **-44** |
-## 5. Remaining Items (22)
+| unassigned | 21 | **1** | -20 | ✅ |
 
-### 1 MANUAL_REVIEW — Немає даних (VM#15877)
-Needs admin confirmation for no-data placeholder under attr 325.
+Remaining: **RAID (351)** — intentional placeholder, needs values defined.
 
-### 21 Unassigned Attribute Mappings
-
-| Group | Mappings | Decision |
-|:------|:--------:|:---------|
-| Бренд (353) | 6 | Decision B - admin needed |
-| Кількість (167) | 8 | Decision F - admin needed |
-| Форм-фактор (172) | 2 | Decision G - admin needed |
-| ECC (328) | 2 | Decision C - admin needed |
-| RAID (351) | 1 | Decision D - admin needed |
-| Час відгуку матриці (357) | 1 | Decision E - admin needed |
-| Яскравість дисплея (358) | 1 | Decision E - admin needed |
-
-## 6. Integrity
+## 4. Integrity
 
 | Check | Expected | Actual | Status |
 |:------|:--------:|:------:|:------|
-| NULL AV references | 0 | 0 | ✅ |
-| Invalid AV refs | 0 | 0 | ✅ |
+| NULL attribute_value_id | 0 | 0 | ✅ |
+| Invalid AV references | 0 | 0 | ✅ |
 | AV duplicates | 0 | 0 | ✅ |
-| Orphan VMs | 0 | 0 | ✅ |
 | ProductAttributes | 185,566 | 185,566 | ✅ |
 | Channel attr mappings | 93 | 93 | ✅ |
+| Health | 200 | 200 | ✅ |
 
-## 7. Safety
+## 5. Safety
 
 | Concern | Status |
-|:--------|:------:|
-| ProductAttributes modified? | **NO** ✅ |
-| Products modified? | **NO** ✅ |
-| Channel/Rozetka modified? | **NO** ✅ |
-| AVs created/deleted? | 44 created, 0 deleted ✅ |
-| Transaction committed? | **YES** ✅ |
-| Backup available? | backup_final_66.dump ✅ |
+|:--------|:-------|
+| ProductAttributes modified? | **0** ✅ |
+| Products modified? | **0** ✅ |
+| Canonical values deleted? | **0** ✅ |
+| Channel/Rozetka modified? | **0** ✅ |
 
-## 8. Final Verdict
+## 6. Backups
 
-**READY FOR ADMIN REVIEW** ✅
+- `backup_final_mapping.dump` — fresh pre-execution backup
+- Earlier: `backup_final_66.dump`, `backup_mapping_execution.dump`, `backup_final_resolution.dump`, `backup_mapping_analysis.dump`
 
-Total progress: 401 original → **22 remaining** (1 no-data + 21 unassigned).
+## 7. Final Verdict
 
-The 22 remaining items require the 7 decisions in `docs/ADMIN_DECISION_SHEET.md`. Once decided, they can be resolved in one final execution phase.
+**MAPPING REVIEW CLOSED** ✅
+
+| Metric | Value |
+|:-------|------|
+| Original review items | **401** |
+| Resolved across all phases | **400** |
+| Remaining (intentional) | 1 (RAID placeholder) |
+| Product data modified | 0 |
+| Channel data modified | 0 |
+| category_attributes added | 313 |
+
+The single remaining item (RAID, attr 351) is intentional — no values exist yet.
+It does not block the Mapping Review workflow from being considered complete.
