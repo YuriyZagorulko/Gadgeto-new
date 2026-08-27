@@ -6,13 +6,12 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
-from app.core.db_connect import get_cursor, DB
+from app.core.db_connect import get_cursor_dep
 
 
 @router.get("/categories")
-async def list_categories():
+def list_categories(cur=Depends(get_cursor_dep)):
     """Return category tree."""
-    cur = get_cursor()
     cur.execute("""
         SELECT id, name, slug, parent_id, product_count, COALESCE(seo_title, '') as seo_title
         FROM categories WHERE is_active = true
@@ -37,9 +36,8 @@ async def list_categories():
 
 
 @router.get("/categories/{slug}")
-async def get_category(slug: str):
+def get_category(slug: str, cur=Depends(get_cursor_dep)):
     """Get category detail with breadcrumbs."""
-    cur = get_cursor()
     cur.execute("""
         SELECT id, name, slug, parent_id, description, product_count,
                seo_title, seo_description
@@ -88,9 +86,8 @@ async def get_category(slug: str):
 
 
 @router.get("/categories/{slug}/filters")
-async def get_category_filters(slug: str):
+def get_category_filters(slug: str, cur=Depends(get_cursor_dep)):
     """Get filter configuration for a category."""
-    cur = get_cursor()
     cur.execute("SELECT id, name FROM categories WHERE slug = %s", (slug,))
     cat = cur.fetchone()
     if not cat:
@@ -159,7 +156,7 @@ async def get_category_filters(slug: str):
 
 
 @router.get("/products")
-async def list_products(
+def list_products(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     category: Optional[str] = None,
@@ -168,10 +165,9 @@ async def list_products(
     price_max: Optional[int] = None,
     in_stock: Optional[bool] = None,
     sort: Optional[str] = None,
+    cur=Depends(get_cursor_dep),
 ):
     """List products with filtering."""
-    cur = get_cursor()
-    
     conditions = ["p.is_active = true", "p.is_visible = true", "p.stock_status = 'in_stock'"]
     params = []
     
@@ -271,9 +267,8 @@ async def list_products(
 
 
 @router.get("/products/{slug}")
-async def get_product(slug: str):
+def get_product(slug: str, cur=Depends(get_cursor_dep)):
     """Get product detail with attributes, images, breadcrumbs."""
-    cur = get_cursor()
     cur.execute("""
         SELECT p.*, b.name as brand_name
         FROM products p
@@ -362,13 +357,13 @@ async def get_product(slug: str):
 
 
 @router.get("/search")
-async def search_products(
+def search_products(
     q: str = Query(..., min_length=1),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    cur=Depends(get_cursor_dep),
 ):
     """Search products by full-text search."""
-    cur = get_cursor()
     offset = (page - 1) * page_size
     
     # Use full-text search
