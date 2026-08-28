@@ -56,6 +56,17 @@ function headers(): Record<string, string> {
   return h;
 }
 
+// Money boundary: the DB and APIs store prices as integer kopiykas (minor
+// units), while the editor inputs are labelled in hryvnyas (₴). Convert only
+// at these two explicit points — on load (kopiykas → ₴) and on save
+// (₴ → kopiykas) — mirroring components/ProductForm.tsx.
+const money = (kop: number | null | undefined): number | null =>
+  kop === null || kop === undefined ? null : kop / 100;
+const toKop = (uah: number | string | null | undefined): number | null => {
+  if (uah === null || uah === undefined || uah === '') return null;
+  return Math.round(Number(String(uah).replace(',', '.')) * 100);
+};
+
 const SECTIONS = ['general', 'pricing', 'inventory', 'categories', 'images', 'attributes', 'variations', 'seo', 'custom'] as const;
 
 export default function ProductEditorPage() {
@@ -107,7 +118,27 @@ export default function ProductEditorPage() {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.detail || `HTTP ${res.status}`);
       }
-      setData(await res.json());
+      const d = await res.json();
+      // Editor inputs are in ₴ — convert stored kopiykas to major units.
+      if (d?.product) {
+        d.product.price = money(d.product.price);
+        d.product.sale_price = money(d.product.sale_price);
+        d.product.purchase_cost = money(d.product.purchase_cost);
+      }
+      // Normalize raw product_attributes rows into the editor row shape so
+      // every row has a stable React key (product_attributes.id) and the
+      // camelCase fields AttributesEditor expects.
+      d.attributesEditor = ((d?.attributes ?? []) as Array<Record<string, unknown>>).map(
+        (a): AttrRow => ({
+          key: 'attr-' + a.id,
+          id: a.id as number | undefined,
+          attributeId: (a.attribute_id as number) ?? null,
+          attributeName: a.attribute_name as string | undefined,
+          valueText: ((a.value_text ?? a.attribute_value ?? '') as string),
+          valueId: (a.attribute_value_id as number | null) ?? null,
+        }),
+      );
+      setData(d);
       setDirtySections(new Set());
     } catch (e: any) {
       setLoadErr(e.message || 'Помилка завантаження');
@@ -136,7 +167,7 @@ export default function ProductEditorPage() {
           const { name, sku, slug, product_type, status, visibility, short_description, description, brand_id } = p;
           body = { name, sku, slug, product_type, status, visibility, short_description, description, brand_id: brand_id ?? null };
         } else if (section === 'pricing') {
-          body = { price: p.price, sale_price: p.sale_price, purchase_cost: p.purchase_cost, sale_start: p.sale_start_at, sale_end: p.sale_end_at };
+          body = { price: toKop(p.price), sale_price: toKop(p.sale_price), purchase_cost: toKop(p.purchase_cost), sale_start: p.sale_start_at, sale_end: p.sale_end_at };
         } else if (section === 'inventory') {
           body = { stock_qty: p.stock_qty, stock_status: p.stock_status, manage_stock: p.manage_stock, allow_backorders: p.allow_backorders, low_stock_threshold: p.low_stock_threshold, barcode: p.barcode, supplier_sku: p.supplier_sku, supplier_id: p.supplier_id, warehouse: p.warehouse };
         } else if (section === 'categories') {
@@ -144,7 +175,8 @@ export default function ProductEditorPage() {
         } else if (section === 'images') {
           body = { images: data.imagesEditor ?? data.images ?? [] };
         } else if (section === 'attributes') {
-          body = { attributes: data.attributesEditor ?? data.attributes ?? [] };
+          // Backend ed_attributes expects { rows: [...] } (DELETE + re-insert).
+          body = { rows: data.attributesEditor ?? data.attributes ?? [] };
         } else if (section === 'variations') {
           body = { variations: data.variationsEditor ?? data.variations ?? [] };
         } else if (section === 'seo') {
