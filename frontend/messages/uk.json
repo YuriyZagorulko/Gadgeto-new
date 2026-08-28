@@ -51,7 +51,24 @@
     "historyTitle": "Історія пошуку"
   },
   "filters": {
-    "title": "Фільтри"
+    "title": "Фільтри",
+    "category": "Категорія",
+    "price": "Ціна, ₴",
+    "from": "від",
+    "to": "до",
+    "apply": "Застосувати",
+    "priceInvalid": "Некоректна ціна",
+    "showMore": "Показати ще {count}",
+    "showLess": "Згорнути",
+    "reset": "Скинути фільтри",
+    "openMobile": "Фільтри",
+    "close": "Готово",
+    "sortDefault": "За замовчуванням",
+    "sortPriceAsc": "Спочатку дешевші",
+    "sortPriceDesc": "Спочатку дорожчі",
+    "sortName": "За назвою",
+    "sortNewest": "Спочатку нові",
+    "sort": "Сортування"
   },
   "product": {
     "sku": "Артикул: {sku}",

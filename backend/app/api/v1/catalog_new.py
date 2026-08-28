@@ -1,7 +1,7 @@
 """Production catalog API with PostgreSQL search and filters."""
 import json
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -130,6 +130,7 @@ def get_category_filters(slug: str, cur=Depends(get_cursor_dep)):
             LEFT JOIN attribute_values av ON av.id = pa.attribute_value_id
             JOIN product_categories pc ON pc.product_id = pa.product_id
             WHERE pa.attribute_id = %s AND pc.category_id = %s
+               AND COALESCE(av.value, pa.value_text, '') <> ''
             GROUP BY COALESCE(av.value, pa.value_text, '')
             ORDER BY cnt DESC
             LIMIT 50
@@ -157,32 +158,80 @@ def get_category_filters(slug: str, cur=Depends(get_cursor_dep)):
 
 @router.get("/products")
 def list_products(
+    request: Request,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     category: Optional[str] = None,
     brand: Optional[str] = None,
     price_min: Optional[int] = None,
     price_max: Optional[int] = None,
+    q: Optional[str] = Query(None, max_length=100),
     in_stock: Optional[bool] = None,
     sort: Optional[str] = None,
     cur=Depends(get_cursor_dep),
 ):
-    """List products with filtering."""
+    """List products with filtering.
+
+    Filter semantics:
+    - different attributes (``f<attribute_id>`` params) combine with AND;
+    - multiple values within one attribute combine with OR (ANY);
+    - ``q`` matches product name / SKU / brand name;
+    - ``price_min``/``price_max`` are integer kopiykas (minor units),
+      matching the canonical API price representation.
+    Attribute filters are read dynamically from the query string, so the
+    storefront never needs backend changes when admins configure new
+    category filters.
+    """
     conditions = ["p.is_active = true", "p.is_visible = true", "p.stock_status = 'in_stock'"]
     params = []
-    
+
+    # Keyword search: name / SKU / brand name (parameterized ILIKE).
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        conditions.append(
+            "(p.name ILIKE %s OR p.sku ILIKE %s OR EXISTS ("
+            "SELECT 1 FROM brands qb WHERE qb.id = p.brand_id AND qb.name ILIKE %s))"
+        )
+        params.extend([like, like, like])
+
+    # Category-specific attribute filters: f<attribute_id>=value[,value...]
+    # (repeated params are also accepted). Invalid keys are ignored; values
+    # are always parameterized.
+    attr_filters = []
+    for key in request.query_params.keys():
+        if not key.startswith("f") or len(key) < 2 or not key[1:].isdigit():
+            continue
+        raw_values = request.query_params.getlist(key)
+        values = [part.strip() for v in raw_values for part in v.split(",") if part.strip()]
+        if values and len(attr_filters) < 20:
+            attr_filters.append((int(key[1:]), values[:50]))
+    for attr_id, values in attr_filters:
+        conditions.append(
+            "EXISTS (SELECT 1 FROM product_attributes paf "
+            "WHERE paf.product_id = p.id AND paf.attribute_id = %s "
+            "AND COALESCE((SELECT av.value FROM attribute_values av "
+            "WHERE av.id = paf.attribute_value_id), paf.value_text) = ANY(%s))"
+        )
+        params.extend([attr_id, values])
+
     if category:
         cur.execute("SELECT id FROM categories WHERE slug = %s", (category,))
         c = cur.fetchone()
         if c:
-            # Include subcategories via closure
+            # Include the whole subtree: recursive walk over categories.parent_id.
+            # (category_closure exists but is not populated in this database,
+            # so the subtree is computed at query time instead.)
             conditions.append("""
                 (pc.category_id IN (
-                    SELECT descendant_id FROM category_closure WHERE ancestor_id = %s
-                    UNION SELECT %s
+                    WITH RECURSIVE cat_tree AS (
+                        SELECT id FROM categories WHERE id = %s
+                        UNION ALL
+                        SELECT k.id FROM categories k JOIN cat_tree ct ON k.parent_id = ct.id
+                    )
+                    SELECT id FROM cat_tree
                 ))
             """)
-            params.extend([c["id"], c["id"]])
+            params.append(c["id"])
         else:
             cur.connection.close()
             return {"items": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}

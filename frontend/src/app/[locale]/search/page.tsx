@@ -3,31 +3,47 @@ import { hasLocale } from 'next-intl';
 import { notFound } from 'next/navigation';
 import { routing } from '@/i18n/routing';
 import ProductCard from '@/components/ProductCard';
+import FiltersSidebar from '@/components/FiltersSidebar';
+import SortSelect from '@/components/SortSelect';
+import CatalogPagination from '@/components/CatalogPagination';
+import {
+  buildProductsApiUrl,
+  parseCatalogParams,
+  rawParamsRecord,
+  type CatalogQuery,
+  type RawParams,
+} from '@/lib/catalogParams';
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://backend:8000').replace(/\/+$/, '');
+const PAGE_SIZE = 24;
 
-type SearchParams = Record<string, string | string[] | undefined>;
-
-/** Extracts a trimmed `q` from the URL query (handles repeated params safely). */
-function extractQuery(searchParams: SearchParams): string {
-  const raw = searchParams?.q;
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  return typeof value === 'string' ? value.trim() : '';
+/** Admin-configured category filters for the selected category (may be null). */
+async function getFilters(slug: string) {
+  try {
+    const url = new URL(`/api/v1/categories/${encodeURIComponent(slug)}/filters`, API_BASE).toString();
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) return null;
+    return res.json();
+  } catch { return null; }
 }
 
-async function searchProducts(query: string) {
-  if (!query) return { items: [], total: 0, query: '' };
+async function getCategoriesTree() {
   try {
-    const url = new URL('/api/v1/search', API_BASE);
-    url.searchParams.set('q', query);
-    url.searchParams.set('page', '1');
-    url.searchParams.set('page_size', '24');
-    const res = await fetch(url.toString(), { next: { revalidate: 0 } });
-    if (!res.ok) return { items: [], total: 0, query };
+    const res = await fetch(new URL('/api/v1/categories', API_BASE).toString(), { cache: 'no-store' });
+    if (!res.ok) return [];
+    const d = await res.json();
+    return d.items ?? [];
+  } catch { return []; }
+}
+
+/** Products endpoint (not /search) so q, price and attribute filters combine server-side. */
+async function getProducts(query: CatalogQuery) {
+  try {
+    const url = buildProductsApiUrl(API_BASE, query, PAGE_SIZE);
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) return { items: [], total: 0, total_pages: 1 };
     return res.json();
-  } catch {
-    return { items: [], total: 0, query };
-  }
+  } catch { return { items: [], total: 0, total_pages: 1 }; }
 }
 
 export async function generateMetadata({
@@ -35,22 +51,21 @@ export async function generateMetadata({
   searchParams,
 }: {
   params: Promise<{ locale: string }>;
-  searchParams: Promise<SearchParams>;
+  searchParams: Promise<RawParams>;
 }) {
   const { locale } = await params;
   if (!hasLocale(routing.locales, locale)) return {};
 
   const t = await getTranslations({ locale, namespace: 'search' });
-  const q = extractQuery(await searchParams);
+  const query = parseCatalogParams(await searchParams);
+  const q = query.q;
+  const canonical = q ? `/search?q=${encodeURIComponent(q)}` : '/search';
 
   return {
     title: q ? t('resultsFor', { q }) : t('title'),
     alternates: {
-      canonical: q ? `/search?q=${encodeURIComponent(q)}` : '/search',
-      languages: {
-        uk: q ? `/search?q=${encodeURIComponent(q)}` : '/search',
-        'x-default': q ? `/search?q=${encodeURIComponent(q)}` : '/search',
-      },
+      canonical,
+      languages: { uk: canonical, 'x-default': canonical },
     },
   };
 }
@@ -60,40 +75,78 @@ export default async function SearchPage({
   searchParams,
 }: {
   params: Promise<{ locale: string }>;
-  searchParams: Promise<SearchParams>;
+  searchParams: Promise<RawParams>;
 }) {
   const { locale } = await params;
   if (!hasLocale(routing.locales, locale)) notFound();
   setRequestLocale(locale);
 
-  const q = extractQuery(await searchParams);
-  const data = await searchProducts(q);
+  const sp = await searchParams;
+  const query = parseCatalogParams(sp);
+  const [products, filters, categories] = await Promise.all([
+    getProducts(query),
+    query.category ? getFilters(query.category) : Promise.resolve(null),
+    getCategoriesTree(),
+  ]);
 
   const t = await getTranslations('search');
   const tProducts = await getTranslations('products');
+
+  const basePath = '/search';
+  const pageParams = rawParamsRecord(sp);
+  const total = products.total ?? products.items?.length ?? 0;
+  const totalPages = products.total_pages ?? Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const bare = !query.q && !query.category && query.attrs.length === 0 &&
+    query.priceMin === null && query.priceMax === null;
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6">
       <div className="flex justify-between items-center mb-4">
         <h1 className="text-2xl font-bold">
-          {q ? t('resultsFor', { q }) : t('title')}
+          {query.q ? t('resultsFor', { q: query.q }) : t('title')}
         </h1>
-        {q && (
+        {!bare && (
           <span className="text-sm text-gray-500">
-            {tProducts('productsCount', { count: data?.total ?? 0 })}
+            {tProducts('productsCount', { count: total })}
           </span>
         )}
       </div>
 
-      {!q ? (
-        <p className="text-gray-500 mt-4">{t('entryPrompt')}</p>
-      ) : (data?.items?.length ?? 0) > 0 ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {data.items.map((p: any) => <ProductCard key={p.id} product={p} />)}
+      <div className="flex gap-6 items-start">
+        <div className="w-full md:w-64 md:flex-shrink-0">
+          <FiltersSidebar
+            basePath={basePath}
+            params={pageParams}
+            filters={filters?.filters ?? []}
+            categories={categories}
+            activeCategorySlug={query.category || undefined}
+            categoryMode="param"
+          />
         </div>
-      ) : (
-        <p className="text-gray-500 mt-4">{t('noResults')}</p>
-      )}
+
+        <div className="flex-1 min-w-0">
+          {bare ? (
+            <p className="text-gray-500 mt-4">{t('entryPrompt')}</p>
+          ) : (products.items || []).length > 0 ? (
+            <>
+              <div className="flex justify-end mb-3">
+                <SortSelect basePath={basePath} params={pageParams} value={query.sort} />
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {products.items.map((p: any) => <ProductCard key={p.id} product={p} />)}
+              </div>
+              <CatalogPagination
+                basePath={basePath}
+                params={pageParams}
+                page={query.page}
+                totalPages={totalPages}
+              />
+            </>
+          ) : (
+            <p className="text-gray-500 mt-4">{t('noResults')}</p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

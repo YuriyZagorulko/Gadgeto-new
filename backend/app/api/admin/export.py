@@ -633,7 +633,7 @@ def channel_products(
         """
         cur.execute(
             data_sql,
-            base_params + [per_page, (page - 1) * per_page])
+            [cid, cid] + params + [per_page, (page - 1) * per_page])
         items = []
         for r in cur.fetchall():
             item = {
