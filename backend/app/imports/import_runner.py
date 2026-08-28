@@ -18,6 +18,12 @@ import psycopg2.extras
 
 from app.core.db_connect import DB
 
+# Safety threshold: if the current feed contains fewer products than this
+# fraction of the previously active product count, skip missing-product
+# reconciliation.  This prevents a truncated/incomplete feed from hiding
+# thousands of valid products.
+MINIMUM_FEED_RATIO = 0.5
+
 ProgressFn = Callable[[str, int, int, int, int, int, int, str], None]
 
 
@@ -91,6 +97,27 @@ class ImportRunner:
             skus = list(self.new_skus)
             if not skus:
                 return
+
+            # Safety check: detect suspiciously small feeds
+            cur.execute(
+                "SELECT count(*) FROM products "
+                "WHERE supplier_id=%s AND status='PUBLISHED' "
+                "AND supplier_sku IS NOT NULL AND supplier_sku!=''",
+                (self.supplier_id,),
+            )
+            previous_active = cur.fetchone()[0]
+            feed_count = len(skus)
+            if previous_active > 0 and feed_count < previous_active * MINIMUM_FEED_RATIO:
+                msg = (
+                    f"\u041f\u0440\u043e\u043f\u0443\u0449\u0435\u043d\u043e \u043f\u0440\u0438\u0445\u043e\u0432\u0443\u0432\u0430\u043d\u043d\u044f \u0442\u043e\u0432\u0430\u0440\u0456\u0432, \u0432\u0456\u0434\u0441\u0443\u0442\u043d\u0456\u0445 \u0443 \u0444\u0456\u0434\u0456: "
+                    f"\u043f\u043e\u0442\u043e\u0447\u043d\u0438\u0439 \u0444\u0456\u0434 \u043c\u0456\u0441\u0442\u0438\u0442\u044c {feed_count} \u0442\u043e\u0432\u0430\u0440\u0456\u0432, "
+                    f"\u043f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0456\u0439 \u0443\u0441\u043f\u0456\u0448\u043d\u0438\u0439 \u0456\u043c\u043f\u043e\u0440\u0442 \u043c\u0430\u0432 {previous_active}. "
+                    f"\u041f\u043e\u0440\u0456\u0433: {MINIMUM_FEED_RATIO*100:.0f}%. \u0422\u043e\u0432\u0430\u0440\u0438 \u043d\u0435 \u043f\u0440\u0438\u0445\u043e\u0432\u0430\u043d\u043e."
+                )
+                self.warnings.append(msg)
+                self._progress('finalizing', msg)
+                return
+
             self._progress('finalizing', '\u041f\u0440\u0438\u0445\u043e\u0432\u0443\u0432\u0430\u043d\u043d\u044f \u0442\u043e\u0432\u0430\u0440\u0456\u0432, \u0432\u0456\u0434\u0441\u0443\u0442\u043d\u0456\u0445 \u0443 \u0444\u0456\u0434\u0456')
             cur.execute(
                 """UPDATE products SET status='HIDDEN', is_visible=FALSE, is_active=FALSE,
