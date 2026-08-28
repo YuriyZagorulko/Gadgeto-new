@@ -268,9 +268,36 @@ def _process_product(ctx: dict, product_id: int) -> dict:
     if not validation.get("ready"):
         store_validation_issues(ctx["cur"], listing["id"], issues)
         reason = "; ".join(i.get("message", "") for i in error_issues)[:500]
-        finish_listing_error(
-            ctx["cur"], listing["id"], "validation",
-            "; ".join(i.get("message", "") for i in error_issues)[:2000])
+
+        # If the product failed validation because it is HIDDEN/not published
+        # AND it was previously exported to Rozetka, deactivate the remote
+        # offer by zeroing its stock via the adapter's unpublish() method.
+        if listing.get("external_id"):
+            has_hidden_issue = any(
+                i.get("code") == "PRODUCT_NOT_PUBLISHED" for i in error_issues
+            )
+            if has_hidden_issue:
+                try:
+                    ctx["adapter"].unpublish({
+                        "sku": listing.get("sku") or "",
+                        "external_ref": {
+                            "rz_item_id": int(listing["external_id"])
+                        } if listing["external_id"].isdigit() else {},
+                        "external_id": listing.get("external_id"),
+                        "price": 0,
+                        "stock_quantity": 0,
+                    })
+                    finish_listing_ok(ctx["cur"], listing,
+                                      listing.get("external_id"),
+                                      "", "", None)
+                except Exception as exc:
+                    etype, _retryable = ctx["classify"](exc)
+                    logger.warning(
+                        "Unpublish failed for hidden product %s: %s %s",
+                        product_id, etype, exc)
+                    finish_listing_error(
+                        ctx["cur"], listing["id"], etype, str(exc)[:2000])
+
         return {"product_id": product_id, "sku": "", "status": "skipped",
                 "reason": reason}
 

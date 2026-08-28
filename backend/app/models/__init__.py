@@ -48,7 +48,7 @@ from app.models.channel_mapping import (
     ChannelValueMapping,
 )
 
-from app.models.homepage import HomepageSlide, HomepageRecommendedProduct
+from app.models.rozetka_pricing import RozetkaPricingImport, RozetkaCategoryPricingRule
 
 __all__ = [
     "Base", "User", "UserRole", "UserStatus", "UserSession",

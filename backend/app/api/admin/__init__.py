@@ -2,7 +2,7 @@
 from fastapi import APIRouter
 from . import auth, products, categories, attributes, filters, brands
 from . import suppliers, mappings, imports, orders, users, dashboard, settings
-from . import media, pricing, export, export_mapping, category_attributes, content
+from . import media, pricing, export, export_mapping, category_attributes, content, rozetka_pricing
 
 router = APIRouter(prefix="/admin")
 from . import product_editor
@@ -26,3 +26,4 @@ router.include_router(pricing.router, prefix="", tags=["admin-pricing"])
 router.include_router(export.router, prefix="", tags=["admin-export"])
 router.include_router(export_mapping.router, prefix="", tags=["admin-export-mapping"])
 router.include_router(content.router, prefix="", tags=["admin-content"])
+router.include_router(rozetka_pricing.router, prefix="", tags=["admin-rozetka-pricing"])

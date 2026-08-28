@@ -554,6 +554,8 @@ def channel_products(
         sync_status: Optional[str] = Query(None),
         stock_status: Optional[str] = Query(None),
         has_mapping: Optional[bool] = Query(None),
+        supplier_id: Optional[int] = Query(None),
+        sort: Optional[str] = Query(None),
         user=Depends(require_admin),
 ):
     """Paginated list of products with Rozetka listing and mapping status.
@@ -598,6 +600,10 @@ def channel_products(
                 filters.append("NOT " + exists_sql)
             params.append(cid)
 
+        if supplier_id is not None:
+            filters.append("p.supplier_id = %s")
+            params.append(supplier_id)
+
         where = " AND ".join(filters)
         base_params = [cid] + params
 
@@ -611,7 +617,8 @@ def channel_products(
         data_sql = f"""
             SELECT p.id, p.sku, p.name,
                    p.price, p.currency, p.stock_qty, p.stock_status,
-                   p.status AS product_status,
+                   p.status AS product_status, p.supplier_id,
+                   COALESCE(s.name, '') AS supplier_name,
                    (SELECT c.name FROM product_categories pc
                     JOIN categories c ON c.id = pc.category_id
                     WHERE pc.product_id = p.id ORDER BY pc.id LIMIT 1) AS category_name,
@@ -627,10 +634,43 @@ def channel_products(
                            AND pc2.product_id = p.id) AS has_mapping
             FROM products p
             LEFT JOIN channel_listings cl ON cl.product_id = p.id AND cl.channel_id = %s
+            LEFT JOIN suppliers s ON s.id = p.supplier_id
             WHERE {where}
             ORDER BY p.id DESC
             LIMIT %s OFFSET %s
         """
+        if sort == "supplier":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY s.name ASC, p.id")
+        elif sort == "supplier_desc":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY s.name DESC, p.id")
+        elif sort == "price":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY p.price ASC, p.id")
+        elif sort == "price_desc":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY p.price DESC, p.id")
+        elif sort == "name":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY p.name ASC, p.id")
+        elif sort == "name_desc":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY p.name DESC, p.id")
+        elif sort == "price":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY p.price ASC, p.id")
+        elif sort == "price_desc":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY p.price DESC, p.id")
+        elif sort == "supplier":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY s.name ASC, p.id")
+        elif sort == "supplier_desc":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY s.name DESC, p.id")
+        elif sort == "sku":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY p.sku ASC, p.id")
+        elif sort == "sku_desc":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY p.sku DESC, p.id")
+        elif sort == "category":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY category_name ASC, p.id")
+        elif sort == "category_desc":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY category_name DESC, p.id")
+        elif sort == "stock":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY p.stock_status ASC, p.stock_qty DESC, p.id")
+        elif sort == "stock_desc":
+            data_sql = data_sql.replace("ORDER BY p.id DESC", "ORDER BY p.stock_status DESC, p.stock_qty ASC, p.id")
         cur.execute(
             data_sql,
             [cid, cid] + params + [per_page, (page - 1) * per_page])
@@ -642,6 +682,7 @@ def channel_products(
                 "name": r["name"] or "",
                 "category_name": r["category_name"],
                 "category_id": r["category_id"],
+                "supplier_name": r["supplier_name"],
                 "price": float(r["price"]) if r["price"] else 0.0,
                 "stock_qty": r["stock_qty"] or 0,
                 "stock_status": r["stock_status"] or "out_of_stock",
