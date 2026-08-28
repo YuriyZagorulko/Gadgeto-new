@@ -3,6 +3,7 @@ import { Link } from '@/i18n/navigation';
 import ProductCard from '@/components/ProductCard';
 import PriceDisplay from '@/components/PriceDisplay';
 import AddToCartButton from '@/components/AddToCartButton';
+import TrackViewedProduct from '@/components/TrackViewedProduct';
 import { routing, type Locale } from '@/i18n/routing';
 import { notFound } from 'next/navigation';
 import { getTranslations, setRequestLocale } from 'next-intl/server';
@@ -80,6 +81,7 @@ function ProductView({
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6">
+      <TrackViewedProduct productId={product.id} />
       <nav className="text-sm text-gray-500 mb-4">
         <Link href="/catalog" className="hover:text-blue-600">{catalogLabel}</Link>
         {product.breadcrumbs?.map((b: any, i: number) => (

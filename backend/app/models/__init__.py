@@ -48,6 +48,8 @@ from app.models.channel_mapping import (
     ChannelValueMapping,
 )
 
+from app.models.homepage import HomepageSlide, HomepageRecommendedProduct
+
 __all__ = [
     "Base", "User", "UserRole", "UserStatus", "UserSession",
     "Attribute", "AttributeValue",

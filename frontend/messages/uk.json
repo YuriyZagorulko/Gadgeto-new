@@ -22,7 +22,9 @@
     "heroSubtitle": "Якісна комп'ютерна техніка та електроніка. Швидка доставка по всій Україні.",
     "shopNow": "Перейти до каталогу",
     "categoriesTitle": "Категорії",
-    "latestProductsTitle": "Новинки"
+    "latestProductsTitle": "Новинки",
+    "recommendedTitle": "Рекомендовані товари",
+    "viewedTitle": "Ви переглядали"
   },
   "products": {
     "noImage": "Немає фото",
