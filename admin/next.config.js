@@ -20,6 +20,7 @@ const nextConfig = {
       { source: '/imports', destination: '/imports/history', permanent: false },
       { source: '/imports/global', destination: '/imports/settings?tab=global', permanent: false },
       { source: '/settings/global-actions', destination: '/imports/settings?tab=global', permanent: false },
+// Value-mappings consolidated into mapping page\n      { source: '/export/rozetka/value-mappings', destination: '/export/rozetka/mapping', permanent: false },
     ];
   },
   async rewrites() {

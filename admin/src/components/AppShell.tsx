@@ -57,7 +57,6 @@ const navItems: NavItem[] = [
           { href: '/export/rozetka', label: 'Огляд' },
           { href: '/export/rozetka/products', label: 'Товари Rozetka' },
           { href: '/export/rozetka/mapping', label: 'Мапінг' },
-          { href: '/export/rozetka/value-mappings', label: 'Маппінг значень' },
           { href: '/export/rozetka/taxonomy', label: 'Таксономія' },
           { href: '/export/rozetka/settings', label: 'Налаштування' },
           { href: '/export/rozetka/history', label: 'Історія експортів' },

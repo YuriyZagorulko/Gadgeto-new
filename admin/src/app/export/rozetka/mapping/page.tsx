@@ -92,7 +92,7 @@ function RozetkaPicker<T extends { external_id: string; name?: string; value?: s
             <div className="px-3 py-2 text-gray-400 text-xs">Завантаження...</div>
           )}
           {opts.map((item) => (
-            <button key={(item as any).id}
+            <button key={(item as any).id + '-' + (item as any).external_id}
               onMouseDown={(e) => { e.preventDefault(); onChange(item); setOpen(false); }}
               className="w-full text-left px-3 py-2 hover:bg-gray-100 border-b border-gray-50 last:border-0">
               <div className="font-medium text-sm">{displayName(item)}</div>
@@ -121,6 +121,16 @@ export default function RozetkaMappingPage() {
   const [extCatFilter, setExtCatFilter] = useState('');
   const [attrFilter, setAttrFilter] = useState('');
   const [scopeFilter, setScopeFilter] = useState('');
+
+  // Value mode: 'all' (existing mappings) or 'unmapped' (candidates)
+  const [valueMode, setValueMode] = useState<'all' | 'unmapped'>('all');
+  // Scope selector for value mapping modal
+  const [mappingScope, setMappingScope] = useState<'global' | 'category'>('global');
+  const [scopeCategoryId, setScopeCategoryId] = useState('');
+  const [scopeCategoryName, setScopeCategoryName] = useState('');
+  // Categories for scope selector
+  const [vmCategories, setVmCategories] = useState<ExtCatOpt[]>([]);
+  const [vmCatLoaded, setVmCatLoaded] = useState(false);
 
   const [coverage, setCoverage] = useState<Coverage | null>(null);
 
@@ -155,15 +165,24 @@ export default function RozetkaMappingPage() {
     if (tab === 'attributes' || tab === 'values') {
       if (extCatFilter) params.external_category_id = extCatFilter;
       if (tab === 'values' && attrFilter) params.attribute_id = Number(attrFilter);
+      if (tab === 'values' && valueMode === 'unmapped') params.status = 'unmapped';
       if (tab === 'attributes' && scopeFilter) params.scope = scopeFilter;
     }
     api.get<ListResp<any>>(`/export/channels/rozetka/mappings/${tab}` + qs(params))
       .then((d) => { setRows(d.items); setTotal(d.total); })
       .catch((e: any) => setError(e.message || 'Не вдалось завантажити'))
       .finally(() => setLoading(false));
-  }, [tab, page, perPage, appliedQ, statusFilter, extCatFilter, attrFilter, scopeFilter, toast]);
+  }, [tab, page, perPage, appliedQ, statusFilter, extCatFilter, attrFilter, scopeFilter, valueMode, toast]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Load categories for value mapping scope selector
+  useEffect(() => {
+    if (vmCatLoaded) return;
+    api.get<{ items: ExtCatOpt[] }>('/export/channels/rozetka/pickers/external-categories?per_page=200')
+      .then((d) => { setVmCategories(d.items || []); setVmCatLoaded(true); })
+      .catch(() => setVmCatLoaded(true));
+  }, [vmCatLoaded]);
 
   const handleDelete = async (id: number) => {
     if (!confirm('Видалити цей маппінг?')) return;
@@ -238,11 +257,11 @@ export default function RozetkaMappingPage() {
     } else if (tab === 'attributes') {
       body.external_id = fExtAttrId || undefined;
       body.external_name = fExtAttrName || undefined;
-      body.external_category_id = fExtCatId || undefined;
+      body.external_category_id = mappingScope === 'category' && scopeCategoryId ? scopeCategoryId : (fExtCatId || undefined);
     } else if (tab === 'values') {
       body.external_id = fExtValId || undefined;
       body.external_name = fExtValName || undefined;
-      body.external_category_id = fExtCatId || undefined;
+      body.external_category_id = mappingScope === 'category' && scopeCategoryId ? scopeCategoryId : (fExtCatId || undefined);
     }
 
     if (editing && editing.mapping_id) { body.internal_id = editing.internal_id; updateMapping(editing.mapping_id, body); }
@@ -292,6 +311,33 @@ export default function RozetkaMappingPage() {
                   placeholder="ID категорії" className="w-48" />
               </div>
             )}
+            {tab === 'values' && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Режим</label>
+                <div className="flex gap-0">
+                  <button
+                    onClick={() => { setValueMode('all'); setPage(1); }}
+                    className={`px-3 py-1.5 text-xs font-medium border rounded-l ${
+                      valueMode === 'all'
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    Усі маппінги
+                  </button>
+                  <button
+                    onClick={() => { setValueMode('unmapped'); setPage(1); }}
+                    className={`px-3 py-1.5 text-xs font-medium border rounded-r ${
+                      valueMode === 'unmapped'
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    Не зіставлені
+                  </button>
+                </div>
+              </div>
+            )}
             {tab === 'attributes' && (
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Scope</label>
@@ -309,7 +355,7 @@ export default function RozetkaMappingPage() {
             <>
               {tab === 'categories' && renderCategories(rows, openEdit)}
               {tab === 'attributes' && renderAttributes(rows, openEdit)}
-              {tab === 'values' && renderValues(rows, openEdit)}
+              {tab === 'values' && renderValues(rows, openEdit, valueMode === 'unmapped')}
               <Pagination page={page} pages={pages} total={total} onPage={setPage}
                 onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}
                 pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }} />
@@ -395,6 +441,12 @@ export default function RozetkaMappingPage() {
           onCancel={() => setModalOpen(false)}
           onSave={handleModalSave}
           saving={saving}
+          fScope={mappingScope}
+          fScopeCategoryId={scopeCategoryId}
+          fScopeCategoryName={scopeCategoryName}
+          setScope={setMappingScope}
+          setScopeCategory={(id, name) => { setScopeCategoryId(id); setScopeCategoryName(name); }}
+          categories={vmCategories}
         />
       )}
     </div>
@@ -451,11 +503,17 @@ function renderAttributes(rows: any[], openEdit: (r: any) => void) {
   );
 }
 
-function renderValues(rows: any[], openEdit: (r: any) => void) {
+function renderValues(rows: any[], openEdit: (r: any) => void, unmappedMode = false) {
+  const head = unmappedMode
+    ? <><Th>Внутрішнє значення</Th><Th>Атрибут</Th><Th>Rozetka атрибут</Th><Th className="text-right">Товарів</Th><Th>Статус</Th><Th className="w-24">Дії</Th></>
+    : <><Th>Внутрішнє значення</Th><Th>Атрибут</Th><Th>Rozetka атрибут</Th><Th>→ Rozetka значення</Th><Th>Статус</Th><Th className="w-24">Дії</Th></>;
+  const colSpan = unmappedMode ? 6 : 6;
   return (
-    <Table head={<><Th>Внутрішнє значення</Th><Th>Атрибут</Th><Th>Rozetka атрибут</Th><Th>→ Rozetka значення</Th><Th>Статус</Th><Th className="w-24">Дії</Th></>}>
+    <Table head={head}>
       {rows.length === 0 ? (
-        <tr><td colSpan={6} className="p-6 text-center text-gray-400">Немає відповідностей</td></tr>
+        <tr><td colSpan={colSpan} className="p-6 text-center text-gray-400">
+          {unmappedMode ? 'Немає незіставлених значень. Усі знайдені значення вже мають відповідності Rozetka.' : 'Немає відповідностей'}
+        </td></tr>
       ) : rows.map((r: any) => {
         const sb = statusBadge[r.status || 'unmapped'] || { tone: 'gray' as const, label: r.status || 'unmapped' };
         return (
@@ -463,7 +521,11 @@ function renderValues(rows: any[], openEdit: (r: any) => void) {
             <Td className="max-w-40 truncate font-medium"><span title={r.internal_name}>{r.internal_name}</span></Td>
             <Td className="text-xs">{r.attribute_name || '—'}</Td>
             <Td className="text-xs truncate">{r.external_attribute_name || '—'}</Td>
-            <Td className="max-w-40 truncate text-gray-600"><span title={r.external_name || ''}>{r.external_name || '—'}</span></Td>
+            {unmappedMode ? (
+              <Td className="text-right text-xs">{r.product_count != null ? r.product_count.toLocaleString('uk-UA') : '—'}</Td>
+            ) : (
+              <Td className="max-w-40 truncate text-gray-600"><span title={r.external_name || ''}>{r.external_name || '—'}</span></Td>
+            )}
             <Td><Badge tone={sb.tone}>{sb.label}</Badge></Td>
             <Td>
               <button onClick={() => openEdit(r)} className="text-xs text-blue-600 hover:underline">Ред.</button>
@@ -681,6 +743,10 @@ function ValueMappingModal({
   fExtValId: string; fExtValName: string;
   onChangeValue: (item: ExtValOpt | null) => void;
   onCancel: () => void; onSave: () => void; saving: boolean;
+  fScope?: 'global' | 'category'; fScopeCategoryId?: string; fScopeCategoryName?: string;
+  setScope?: (v: 'global' | 'category') => void;
+  setScopeCategory?: (id: string, name: string) => void;
+  categories?: ExtCatOpt[];
 }) {
   const extAttrExtra = fExtCatId ? { category_external_id: fExtCatId } : {};
   const extValExtra = {

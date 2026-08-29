@@ -7,7 +7,7 @@ import { api } from '@/lib/api';
 import { PageHeader, Button, LoadingState, ErrorState } from '@/components/ui';
 
 type LogEntry = { level: string; message: string; timestamp?: string };
-type ProductResult = { n: number; product_id: number; sku?: string; product_name?: string; status: string; error?: string; operation?: string };
+type ProductResult = { n: number; product_id: number; sku?: string; product_name?: string; status: string; error?: string; operation?: string; reason?: string };
 type ErrorDetails = { type?: string; message?: string; last_product_id?: number; last_sku?: string };
 type Progress = {
   total: number; processed: number; created: number; updated: number;
@@ -172,7 +172,11 @@ export default function ExportDetailPage() {
                       <td className="p-2 font-mono">{r.sku || '—'}</td>
                       <td className="p-2 max-w-xs truncate">{r.product_name || `#${r.product_id}`}</td>
                       <td className={`p-2 font-medium ${statusColor}`}><span className="flex items-center gap-1"><span>{statusIcon}</span><span>{r.status}</span></span></td>
-                      <td className={`p-2 ${r.status === 'failed' ? 'text-red-600' : 'text-gray-600'}`}>{r.error || r.operation || '—'}</td>
+                      <td className={`p-2 max-w-sm whitespace-normal break-words ${
+                        r.status === 'failed' ? 'text-red-600' : r.status === 'skipped' ? 'text-yellow-700' : 'text-gray-600'
+                      }`}>
+                        {r.status === 'failed' ? r.error || '—' : r.status === 'skipped' ? r.reason || '—' : r.operation || '—'}
+                      </td>
                     </tr>
                   );
                 })}

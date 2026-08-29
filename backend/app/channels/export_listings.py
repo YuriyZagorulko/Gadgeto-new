@@ -64,8 +64,8 @@ def store_validation_issues(cur, listing_id: int, issues: list[dict]) -> None:
         details = json.dumps(issue.get("details") or {}, ensure_ascii=False)
         cur.execute(
             """INSERT INTO channel_validation_issues
-               (listing_id, code, message, details_json)
-               VALUES (%s, %s, %s, %s)
+               (listing_id, code, message, details_json, created_at, updated_at)
+               VALUES (%s, %s, %s, %s, NOW(), NOW())
                ON CONFLICT (listing_id, code) DO NOTHING""",
             (listing_id, code, message, details),
         )
