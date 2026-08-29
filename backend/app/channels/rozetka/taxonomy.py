@@ -66,6 +66,7 @@ class RozetkaTaxonomyService:
         stats = {
             "categories_created": 0, "categories_updated": 0,
             "attributes_created": 0, "attributes_updated": 0,
+            "attributes_required": 0,
             "values_created": 0, "values_updated": 0,
             "errors": 0, "duration_seconds": 0.0,
         }
@@ -106,6 +107,7 @@ class RozetkaTaxonomyService:
                     conn.commit()
                     stats["attributes_created"] += attr_stats["attributes_created"]
                     stats["attributes_updated"] += attr_stats["attributes_updated"]
+                    stats["attributes_required"] += attr_stats["attributes_required"]
                     stats["values_created"] += attr_stats["values_created"]
                     stats["values_updated"] += attr_stats["values_updated"]
                     if progress_cb:
@@ -225,6 +227,7 @@ class RozetkaTaxonomyService:
         """
         stats = {
             "attributes_created": 0, "attributes_updated": 0,
+            "attributes_required": 0,
             "values_created": 0, "values_updated": 0,
         }
 
@@ -259,6 +262,13 @@ class RozetkaTaxonomyService:
             attr_name = attr.get("name") or ""
             attr_type = attr.get("attr_type") or ""
             unit = attr.get("unit") or ""
+            # Rozetka's only requiredness signal in the category-options payload
+            # is `filter_type`: "main" = "в основному наборі" (the mandatory prim
+            # ary set of characteristics).  Nothing else (our attributes, product
+            # data, mapping counts) may influence this — the channel taxonomy is
+            # the single source of truth for requiredness.
+            filter_type = (attr.get("filter_type") or "").strip().lower()
+            is_required = 1 if filter_type == "main" else 0
             raw_json = json.dumps(attr, ensure_ascii=False, default=str)
 
             cur.execute(
@@ -266,23 +276,26 @@ class RozetkaTaxonomyService:
                    (channel_id, category_external_id, external_id, name,
                     param_type, unit, is_required, raw_json, fetched_at,
                     created_at, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, 0, %s, %s, NOW(), NOW())
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
                    ON CONFLICT (channel_id, category_external_id, external_id)
                    DO UPDATE SET name = EXCLUDED.name,
                        param_type = EXCLUDED.param_type,
                        unit = EXCLUDED.unit,
+                       is_required = EXCLUDED.is_required,
                        raw_json = EXCLUDED.raw_json,
                        fetched_at = EXCLUDED.fetched_at,
                        updated_at = NOW()
                    RETURNING (xmax = 0) AS inserted""",
                 (channel_id, ext_cat_id, attr_id, attr_name,
-                 attr_type, unit, raw_json, now),
+                 attr_type, unit, is_required, raw_json, now),
             )
             row = cur.fetchone()
             if row and row.get("inserted"):
                 stats["attributes_created"] += 1
             else:
                 stats["attributes_updated"] += 1
+            if is_required:
+                stats["attributes_required"] += 1
 
         # Collect all value rows, deduplicate by (attr_id, value)
         value_rows: list[tuple] = []

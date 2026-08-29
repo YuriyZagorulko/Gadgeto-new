@@ -115,7 +115,7 @@ def run_taxonomy_refresh(channel_id: int, run_id: int) -> dict:
     progress = {
         "categories": {"processed": 0, "total": 0, "created": 0, "updated": 0},
         "attributes": {"categories_processed": 0, "categories_total": 0,
-                       "created": 0, "updated": 0},
+                       "created": 0, "updated": 0, "required": 0},
         "values": {"created": 0, "updated": 0, "total": 0},
         "errors": 0,
         "current_operation": "Initializing...",
@@ -193,6 +193,7 @@ def run_taxonomy_refresh(channel_id: int, run_id: int) -> dict:
         progress["categories"]["updated"] = stats.get("categories_updated", 0)
         progress["attributes"]["created"] = stats.get("attributes_created", 0)
         progress["attributes"]["updated"] = stats.get("attributes_updated", 0)
+        progress["attributes"]["required"] = stats.get("attributes_required", 0)
         progress["values"]["created"] = stats.get("values_created", 0)
         progress["values"]["updated"] = stats.get("values_updated", 0)
         progress["errors"] = stats.get("errors", 0)
@@ -316,6 +317,7 @@ def get_taxonomy_run_status(cur, channel_id: int):
             "total": int(attrs.get("created") or 0) + int(attrs.get("updated") or 0),
             "created": int(attrs.get("created") or 0),
             "updated": int(attrs.get("updated") or 0),
+            "required": int(attrs.get("required") or 0),
         },
         "values": {
             "total": int(vals.get("total") or 0),

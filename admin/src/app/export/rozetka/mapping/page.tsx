@@ -25,7 +25,10 @@ type CoverageBlock = {
 };
 type Coverage = { categories: CoverageBlock; attributes: CoverageBlock; values: CoverageBlock };
 
-type ExtCatOpt = { id: number; external_id: string; name: string; parent_external_id: string | null };
+type ExtCatOpt = {
+  id: number; external_id: string; name: string; parent_external_id: string | null;
+  children_count?: number; attribute_count?: number;
+};
 type ExtAttrOpt = { id: number; external_id: string; name: string; category_external_id: string; param_type: string | null; unit: string | null };
 type ExtValOpt = { id: number; external_id: string; value: string; attribute_external_id: string };
 
@@ -127,7 +130,18 @@ function RozetkaPicker<T extends { external_id: string; name?: string; value?: s
                   onMouseDown={(e) => { e.preventDefault(); onChange(item); setOpen(false); }}
                   className="w-full text-left px-3 py-2 hover:bg-gray-100 border-b border-gray-50 last:border-0">
                   <div className="font-medium text-sm">{displayName(item)}</div>
-                  <div className="text-[11px] text-gray-400">ID: {item.external_id}</div>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className="text-gray-400">ID: {(item as any).external_id}</span>
+                    {(item as any).children_count !== undefined && (
+                      (item as any).children_count === 0
+                        ? <span className={`${(item as any).attribute_count > 0 ? 'text-green-500' : 'text-yellow-500'}`}>
+                            {(item as any).attribute_count || 0} атр.
+                          </span>
+                        : <span className="text-orange-500">
+                            {(item as any).children_count} дочірніх
+                          </span>
+                    )}
+                  </div>
                 </button>
               ))}
             </>
@@ -198,6 +212,8 @@ function RozetkaMappingInner() {
   const [fExtCatId, setFExtCatId] = useState('');
   const [fExtCatName, setFExtCatName] = useState('');
   const [fExtAttrId, setFExtAttrId] = useState('');
+const [fExtCatChildren, setFExtCatChildren] = useState(0);
+  const [fExtCatAttrs, setFExtCatAttrs] = useState(0);
   const [fExtAttrName, setFExtAttrName] = useState('');
   const [fExtValId, setFExtValId] = useState('');
   const [fExtValName, setFExtValName] = useState('');
@@ -275,6 +291,8 @@ function RozetkaMappingInner() {
     setFStatus(r.status === 'unmapped' ? 'proposed' : (r.status || 'proposed'));
     setFExtCatId(r.external_category_id || '');
     setFExtCatName(r.external_category_name || '');
+    setFExtCatChildren(r.children_count ?? 0);
+    setFExtCatAttrs(r.attribute_count ?? 0);
     setFExtAttrId(r.external_attribute_id || '');
     setFExtAttrName(r.external_attribute_name || '');
     setFExtValId(r.external_id || '');
@@ -287,6 +305,8 @@ function RozetkaMappingInner() {
     setFStatus('proposed');
     setFExtCatId('');
     setFExtCatName('');
+    setFExtCatChildren(0);
+    setFExtCatAttrs(0);
     setFExtAttrId('');
     setFExtAttrName('');
     setFExtValId('');
@@ -428,9 +448,14 @@ function RozetkaMappingInner() {
           setFStatus={setFStatus}
           fExtCatId={fExtCatId}
           fExtCatName={fExtCatName}
+          fExtCatChildren={fExtCatChildren}
+          fExtCatAttrs={fExtCatAttrs}
           onChangeCategory={(item) => {
             setFExtCatId(item ? item.external_id : '');
             setFExtCatName(item ? item.name : '');
+            const meta = item as any;
+            setFExtCatChildren(meta?.children_count ?? 0);
+            setFExtCatAttrs(meta?.attribute_count ?? 0);
           }}
           onCancel={() => setModalOpen(false)}
           onSave={handleModalSave}
@@ -448,6 +473,9 @@ function RozetkaMappingInner() {
           onChangeCategory={(item) => {
             setFExtCatId(item ? item.external_id : '');
             setFExtCatName(item ? item.name : '');
+            const meta = item as any;
+            setFExtCatChildren(meta?.children_count ?? 0);
+            setFExtCatAttrs(meta?.attribute_count ?? 0);
             // Clear attr when category changes
             setFExtAttrId('');
             setFExtAttrName('');
@@ -474,6 +502,9 @@ function RozetkaMappingInner() {
           onChangeCategory={(item) => {
             setFExtCatId(item ? item.external_id : '');
             setFExtCatName(item ? item.name : '');
+            const meta = item as any;
+            setFExtCatChildren(meta?.children_count ?? 0);
+            setFExtCatAttrs(meta?.attribute_count ?? 0);
             setFExtAttrId('');
             setFExtAttrName('');
             setFExtValId('');
@@ -510,17 +541,38 @@ function RozetkaMappingInner() {
 
 /* ── Table renderers ───────────────────────────────────────── */
 
+function CategoryTypeBadge({ r }: { r: any }) {
+  if (!r.external_id || r.children_count === undefined) return null;
+  const isLeaf = r.children_count === 0;
+  if (isLeaf) {
+    const hasAttrs = (r.attribute_count || 0) > 0;
+    return (
+      <span className={`inline-flex items-center gap-1 text-xs ${hasAttrs ? 'text-green-600' : 'text-yellow-600'}`}>
+        <span className="w-1.5 h-1.5 rounded-full inline-block flex-shrink-0 ${hasAttrs ? 'bg-green-500' : 'bg-yellow-500'}"></span>
+        {hasAttrs ? `${r.attribute_count} атp.` : '0 атр.'}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-xs text-orange-500">
+      <span className="w-1.5 h-1.5 rounded-full inline-block flex-shrink-0 bg-orange-400"></span>
+      {r.children_count} дочірніх
+    </span>
+  );
+}
+
 function renderCategories(rows: any[], openEdit: (r: any) => void) {
   return (
-    <Table head={<><Th>Внутрішня категорія</Th><Th>→ Rozetka</Th><Th>Статус</Th><Th>Confidence</Th><Th>Джерело</Th><Th className="w-24">Дії</Th></>}>
+    <Table head={<><Th>Внутрішня категорія</Th><Th>→ Rozetka</Th><Th>Тип</Th><Th>Статус</Th><Th>Confidence</Th><Th>Джерело</Th><Th className="w-24">Дії</Th></>}>
       {rows.length === 0 ? (
-        <tr><td colSpan={6} className="p-6 text-center text-gray-400">Немає відповідностей</td></tr>
+        <tr><td colSpan={7} className="p-6 text-center text-gray-400">Немає відповідностей</td></tr>
       ) : rows.map((r: any) => {
         const sb = statusBadge[r.status] || { tone: 'gray' as const, label: r.status };
         return (
           <tr key={r.mapping_id || `cat-${r.internal_id}`} className="hover:bg-gray-50">
             <Td className="max-w-48 truncate font-medium"><span title={r.internal_name}>{r.internal_name}</span></Td>
             <Td className="max-w-48 truncate text-gray-600"><span title={r.external_name || ''}>{r.external_name || '—'}</span></Td>
+            <Td><CategoryTypeBadge r={r} /></Td>
             <Td><Badge tone={sb.tone}>{sb.label}</Badge></Td>
             <Td className="text-xs">{r.confidence != null ? `${Math.round(r.confidence * 100)}%` : '—'}</Td>
             <Td className="text-xs">{r.source === 'auto' ? 'Авто' : 'Вручну'}</Td>
@@ -534,11 +586,21 @@ function renderCategories(rows: any[], openEdit: (r: any) => void) {
   );
 }
 
+function RequiredBadge({ isRequired, showLabel }: { isRequired: boolean | null | undefined; showLabel?: boolean }) {
+  if (isRequired === null || isRequired === undefined) return <span className="text-xs text-gray-300">—</span>;
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs font-medium ${isRequired ? 'text-red-600' : 'text-green-600'}`}>
+      <span className="w-1.5 h-1.5 rounded-full inline-block flex-shrink-0 ${isRequired ? 'bg-red-500' : 'bg-green-500'}"></span>
+      {isRequired ? (showLabel ? 'Обов\'язковий' : 'Так') : (showLabel ? 'Необов\'язковий' : 'Ні')}
+    </span>
+  );
+}
+
 function renderAttributes(rows: any[], openEdit: (r: any) => void) {
   return (
-    <Table head={<><Th>Внутрішній атрибут</Th><Th>Rozetka категорія</Th><Th>→ Rozetka атрибут</Th><Th>Статус</Th><Th>Confidence</Th><Th className="w-24">Дії</Th></>}>
+    <Table head={<><Th>Внутрішній атрибут</Th><Th>Rozetka категорія</Th><Th>→ Rozetka атрибут</Th><Th>Обов'язковість</Th><Th>Статус</Th><Th>Confidence</Th><Th className="w-24">Дії</Th></>}>
       {rows.length === 0 ? (
-        <tr><td colSpan={6} className="p-6 text-center text-gray-400">Немає відповідностей</td></tr>
+        <tr><td colSpan={7} className="p-6 text-center text-gray-400">Немає відповідностей</td></tr>
       ) : rows.map((r: any) => {
         const sb = statusBadge[r.status || 'unmapped'] || { tone: 'gray' as const, label: r.status || 'unmapped' };
         return (
@@ -546,6 +608,7 @@ function renderAttributes(rows: any[], openEdit: (r: any) => void) {
             <Td className="max-w-48 truncate font-medium"><span title={r.internal_name}>{r.internal_name}</span></Td>
             <Td className="text-xs">{r.external_category_name || r.external_category_id || '—'}</Td>
             <Td className="max-w-40 truncate text-gray-600"><span title={r.external_name || ''}>{r.external_name || '—'}</span></Td>
+            <Td><RequiredBadge isRequired={r.is_required} /></Td>
             <Td><Badge tone={sb.tone}>{sb.label}</Badge></Td>
             <Td className="text-xs">{r.confidence != null ? `${Math.round(r.confidence * 100)}%` : '—'}</Td>
             <Td>
@@ -643,14 +706,18 @@ function CategoryMappingModal({
   open, editing,
   fStatus, setFStatus,
   fExtCatId, fExtCatName, onChangeCategory,
+  fExtCatChildren, fExtCatAttrs,
   onCancel, onSave, saving,
 }: {
   open: boolean; editing: any | null;
   fStatus: FStatus; setFStatus: (v: FStatus) => void;
   fExtCatId: string; fExtCatName: string;
   onChangeCategory: (item: ExtCatOpt | null) => void;
+  fExtCatChildren?: number; fExtCatAttrs?: number;
   onCancel: () => void; onSave: () => void; saving: boolean;
 }) {
+  const isParentWarning = fExtCatId && (fExtCatChildren ?? 0) > 0 && (fExtCatAttrs ?? 0) === 0;
+
   return (
     <Modal open={open} title={editing ? 'Редагування маппінгу категорії' : 'Створення маппінгу категорії'} onClose={onCancel} wide>
       <div className="space-y-4">
@@ -676,6 +743,13 @@ function CategoryMappingModal({
 
         {/* Selected entity card */}
         <SelectedCard label="ОБРАНА КАТЕГОРІЯ ROZETKA" name={fExtCatName} id={fExtCatId} />
+
+        {isParentWarning && (
+          <div className="bg-yellow-50 border border-yellow-300 rounded-md p-3 text-sm text-yellow-800">
+            <span className="font-medium">⚠ Увага:</span> Ця категорія Rozetka є батьківською ({fExtCatChildren} дочірніх) та не має власних характеристик ({fExtCatAttrs} атр.).
+            Для експорту товарів рекомендується вибрати дочірню категорію, в якій визначені атрибути.
+          </div>
+        )}
 
         {/* Status */}
         <div>
@@ -757,6 +831,11 @@ function AttributeMappingModal({
           id={fExtAttrId}
           subtitle={editing?.external_category_name ? `Категорія: ${editing.external_category_name}` : undefined}
         />
+        {editing?.is_required !== undefined && (
+          <div className="mt-1">
+            <RequiredBadge isRequired={editing.is_required} showLabel />
+          </div>
+        )}
 
         {/* Status */}
         <div>

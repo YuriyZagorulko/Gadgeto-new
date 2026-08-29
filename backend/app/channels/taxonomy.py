@@ -71,9 +71,19 @@ def get_taxonomy_stats(cur, channel_id: int) -> dict:
     attributes = cur.fetchone()["c"]
 
     cur.execute(
+        "SELECT count(*) AS c FROM channel_external_attributes"
+        " WHERE channel_id = %s AND is_required = 1",
+        (channel_id,),
+    )
+    required_attributes = cur.fetchone()["c"]
+
+    cur.execute(
         "SELECT count(*) AS c FROM channel_external_values WHERE channel_id = %s",
         (channel_id,),
     )
     values = cur.fetchone()["c"]
 
-    return {"categories": categories, "attributes": attributes, "values": values}
+    return {
+        "categories": categories, "attributes": attributes,
+        "required_attributes": required_attributes, "values": values,
+    }

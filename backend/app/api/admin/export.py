@@ -273,7 +273,7 @@ def taxonomy_run_status(code: str, user=Depends(require_admin)):
                 "started_at": None, "finished_at": None, "duration_seconds": None,
                 "categories": {"processed": 0, "total": 0, "created": 0, "updated": 0},
                 "attributes": {"categories_processed": 0, "categories_total": 0,
-                               "total": 0, "created": 0, "updated": 0},
+                               "total": 0, "created": 0, "updated": 0, "required": 0},
                 "values": {"total": 0, "created": 0, "updated": 0},
                 "errors": 0, "current_operation": None, "logs": [], "taxonomy": taxonomy,
             }

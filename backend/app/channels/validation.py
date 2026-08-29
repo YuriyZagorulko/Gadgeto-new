@@ -224,45 +224,77 @@ def _validate(cur, product_id: int, channel_code: str = "rozetka",
                             {"id": c["category_id"], "name": c["category_name"]}
                             for c in product.get("categories", [])]}})
         ready = False
+
+# Pre-load required external attributes and parent-category check
+    required_attr_ids: set[str] = set()
+    taxonomy_ok = True
+    if ext_cat_id:
+        cur.execute(
+            "SELECT count(*) AS children FROM channel_external_categories "
+            "WHERE channel_id=%s AND parent_external_id=%s",
+            (channel_id, ext_cat_id),
+        )
+        has_children = cur.fetchone()["children"] > 0
+        cur.execute(
+            "SELECT count(*) AS attrs FROM channel_external_attributes "
+            "WHERE channel_id=%s AND category_external_id=%s",
+            (channel_id, ext_cat_id),
+        )
+        has_attrs = cur.fetchone()["attrs"] > 0
+        if has_children and not has_attrs:
+            issues.append({
+                "code": ISSUE_NO_TAXONOMY,
+                "severity": SEVERITY_ERROR,
+                "message": f"Обрана категорія Rozetka ({ext_cat_id}) є батьківською ({has_children} дочірніх) та не має характеристик. Виберіть дочірню категорію.",
+                "details": {"external_category_id": ext_cat_id, "children_count": has_children, "attribute_count": 0},
+            })
+            ready = False
+            taxonomy_ok = False
+        else:
+            required_rows = _get_required_attributes(cur, channel_id, ext_cat_id)
+            required_attr_ids = {r["external_id"] for r in required_rows}
+
+    # Product attribute loop — required-aware
     for pa in product.get("attributes") or []:
         attr_id = pa["attribute_id"]
         attr_name = pa["attr_name"]
         attr_mapping = resolver.resolve_attribute(attr_id, ext_cat_id)
         if attr_mapping is None:
-            issues.append({"code": ISSUE_MISSING_ATTRIBUTE_MAPPING, "severity": SEVERITY_ERROR,
-                            "message": f"Не знайдено відповідності атрибута {attr_name}",
-                            "details": {"attribute_id": attr_id, "attribute_name": attr_name}})
-            ready = False
+            # Unmapped internal attribute — don't block.  Concern B (required
+            # Rozetka attrs with no internal mapping) catches required cases.
             continue
+        # Attribute is mapped.  Check value mapping.
         if pa["attribute_value_id"]:
             val_mapping = resolver.resolve_value(pa["attribute_value_id"], ext_cat_id)
             if val_mapping is None:
-                val_name = pa.get("attr_value_name") or f"id={pa['attribute_value_id']}"
-                issues.append({"code": ISSUE_MISSING_ATTRIBUTE_VALUE_MAPPING,
-                                "severity": SEVERITY_ERROR,
-                                "message": f"Не знайдено відповідності значення {attr_name}: {val_name}",
-                                "details": {"attribute_id": attr_id, "attribute_name": attr_name,
-                                            "attribute_value_id": pa["attribute_value_id"],
-                                            "value_name": val_name}})
-                ready = False
-    if ext_cat_id:
-        required_attrs = _get_required_attributes(cur, channel_id, ext_cat_id)
-        if required_attrs:
-            for req in required_attrs:
-                mapped_found = False
-                for pa in product.get("attributes") or []:
-                    attr_map = resolver.resolve_attribute(pa["attribute_id"], ext_cat_id)
-                    if attr_map and attr_map.get("external_attribute_id") == req["external_id"]:
-                        mapped_found = True
-                        break
-                if not mapped_found:
-                    issues.append({"code": ISSUE_MISSING_REQUIRED_ATTR_MAPPING,
-                                    "severity": SEVERITY_ERROR,
-                                    "message": f"Відсутній обов’язковий атрибут {req['name']}",
-                                    "details": {"external_attribute_id": req["external_id"],
-                                                "external_attribute_name": req["name"],
-                                                "external_category_id": ext_cat_id}})
+                ext_attr_id = attr_mapping.get("external_attribute_id")
+                if ext_attr_id and ext_attr_id in required_attr_ids:
+                    val_name = pa.get("attr_value_name") or f"id={pa['attribute_value_id']}"
+                    issues.append({"code": ISSUE_MISSING_ATTRIBUTE_VALUE_MAPPING,
+                                   "severity": SEVERITY_ERROR,
+                                   "message": f"Не знайдено відповідності значення {attr_name}: {val_name}",
+                                   "details": {"attribute_id": attr_id, "attribute_name": attr_name,
+                                               "attribute_value_id": pa["attribute_value_id"],
+                                               "value_name": val_name}})
                     ready = False
+                # Optional value mapping missing — IGNORE (no issue)
+
+    # Concern B: Required Rozetka attributes without any internal mapping
+    if ext_cat_id and taxonomy_ok and required_attr_ids:
+        for req_ext_id in required_attr_ids:
+            mapped_found = False
+            for pa in product.get("attributes") or []:
+                attr_map = resolver.resolve_attribute(pa["attribute_id"], ext_cat_id)
+                if attr_map and attr_map.get("external_attribute_id") == req_ext_id:
+                    mapped_found = True
+                    break
+            if not mapped_found:
+                issues.append({"code": ISSUE_MISSING_REQUIRED_ATTR_MAPPING,
+                                "severity": SEVERITY_ERROR,
+                                "message": f"Відсутній обов'язковий атрибут {req_ext_id}",
+                                "details": {"external_attribute_id": req_ext_id,
+                                            "external_category_id": ext_cat_id}})
+                ready = False
     return {"ready": ready, "issues": issues,
             "sku": product.get("sku") or product.get("supplier_sku") or "",
             "name": title,
@@ -323,7 +355,11 @@ def _build_transform_payload(product: dict, resolver: ChannelMappingResolver,
                 entry["external_value_id"] = val_mapping.get("external_value_id")
                 entry["value"] = val_mapping.get("external_value_name")
             else:
-                entry["value"] = pa.get("attr_value_name") or ""
+                # Value mapping missing — this attribute has been validated as
+                # optional (required-attr values are blocked before reaching
+                # transform).  Omit it entirely to avoid PayloadBuildError
+                # for select/list types (which require external_value_id).
+                continue
         elif pa["value_text"]:
             # Try to resolve via the value_text bridge (attribute_values -> mappings)
             val_mapping = resolver.resolve_value_by_text(

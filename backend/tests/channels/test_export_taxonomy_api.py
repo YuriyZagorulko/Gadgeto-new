@@ -137,7 +137,7 @@ def test_taxonomy_get_uses_aliased_count_columns(client):
     assert res.status_code == 200, res.text
     assert res.json()["items"]["categories"] == 4761
     count_queries = [q for q in conn.cursor_obj.queries if "count(" in q]
-    assert len(count_queries) == 3
+    assert len(count_queries) == 4
     for q in count_queries:
         assert " AS c" in q or " as c" in q, f"count query must alias column c: {q}"
 

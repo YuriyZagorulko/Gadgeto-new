@@ -79,7 +79,10 @@ def _resolve_kind(kind: str):
 
 
 def _list_category_mappings(cur, cid: int, q, status_filter, page: int, per_page: int):
-    """All internal categories with their (optional) channel mapping row."""
+    """All internal categories with their (optional) channel mapping row.
+
+    Includes Rozetka category metadata: children_count, attribute_count, is_leaf.
+    """
     join_params = [cid]
     where_conds, where_params = [], []
     if q:
@@ -96,6 +99,8 @@ def _list_category_mappings(cur, cid: int, q, status_filter, page: int, per_page
         FROM categories i
         LEFT JOIN channel_category_mappings m
                ON m.channel_id = %s AND m.internal_category_id = i.id
+        LEFT JOIN channel_external_categories ec
+               ON ec.channel_id = m.channel_id AND ec.external_id = m.external_category_id
         {where_sql}
     """
     cur.execute(f"SELECT count(*) AS c {base}", join_params + where_params)
@@ -107,7 +112,13 @@ def _list_category_mappings(cur, cid: int, q, status_filter, page: int, per_page
                    m.external_category_name AS external_name,
                    COALESCE(m.status, 'unmapped') AS status,
                    m.confidence, m.source,
-                   m.created_at AS created_at, m.updated_at AS updated_at
+                   m.created_at AS created_at, m.updated_at AS updated_at,
+                   (SELECT count(*) FROM channel_external_categories ch
+                    WHERE ch.channel_id = ec.channel_id
+                      AND ch.parent_external_id = ec.external_id) AS children_count,
+                   (SELECT count(*) FROM channel_external_attributes a
+                    WHERE a.channel_id = ec.channel_id
+                      AND a.category_external_id = ec.external_id) AS attribute_count
             {base}
             ORDER BY i.name LIMIT %s OFFSET %s""",
         join_params + where_params + [per_page, (page - 1) * per_page],
@@ -200,7 +211,8 @@ def _list_value_mappings(cur, cid: int, q, status_filter, ext_cat_id, attribute_
                    ea.external_id AS external_attribute_id,
                    COALESCE(m.status, 'accepted') AS status,
                    m.confidence, m.source,
-                   m.created_at AS created_at, m.updated_at AS updated_at
+                   m.created_at AS created_at, m.updated_at AS updated_at,
+                   COALESCE(ea.is_required, false) AS is_required
             FROM channel_value_mappings m
             JOIN attribute_values av ON av.id = m.internal_value_id
             JOIN attributes a ON a.id = av.attribute_id
@@ -208,7 +220,8 @@ def _list_value_mappings(cur, cid: int, q, status_filter, ext_cat_id, attribute_
                    ON ec.channel_id = m.channel_id
                   AND ec.external_id = m.external_category_id
             LEFT JOIN LATERAL (
-                SELECT ea2.name AS name, ea2.external_id AS external_id
+                SELECT ea2.name AS name, ea2.external_id AS external_id,
+                       ea2.is_required AS is_required
                 FROM channel_external_attributes ea2
                 JOIN channel_external_values ev2
                   ON ev2.channel_id = ea2.channel_id
@@ -222,7 +235,7 @@ def _list_value_mappings(cur, cid: int, q, status_filter, ext_cat_id, attribute_
             UNION ALL
             SELECT av.id, av.value, a.id, a.name,
                    NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-                   'unmapped', NULL, NULL, NULL, NULL
+                   'unmapped', NULL, NULL, NULL, NULL, NULL
             FROM attribute_values av
             JOIN attributes a ON a.id = av.attribute_id
             WHERE NOT EXISTS (
@@ -545,22 +558,35 @@ def pick_values(code: str, attribute_id: Optional[int] = Query(None),
 def pick_external_categories(code: str, q: Optional[str] = Query(None),
                                    page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=200),
                                    user=Depends(require_admin)):
-    """Rozetka categories from the LOCAL taxonomy (never an API call)."""
+    """Rozetka categories from the LOCAL taxonomy (never an API call).
+
+    Returns metadata: children_count (0 = leaf), attribute_count.
+    """
     conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM channels WHERE code = %s", (code,))
         ch = cur.fetchone()
         if not ch:
             raise HTTPException(status_code=404, detail="Канал не знайдено")
-        filters, params = ["channel_id = %s"], [ch["id"]]
+        filters, params = ["c.channel_id = %s"], [ch["id"]]
         if q:
-            filters.append("name ILIKE %s"); params.append(f"%{q}%")
+            filters.append("c.name ILIKE %s"); params.append(f"%{q}%")
         where = " AND ".join(filters)
-        cur.execute(f"SELECT count(*) AS c FROM channel_external_categories WHERE {where}", params)
+        cur.execute(
+            f"SELECT count(*) AS c FROM channel_external_categories c WHERE {where}",
+            params)
         total = cur.fetchone()["c"]
         cur.execute(
-            f"SELECT id, external_id, name, parent_external_id FROM channel_external_categories"
-            f" WHERE {where} ORDER BY name LIMIT %s OFFSET %s",
+            f"""SELECT c.id, c.external_id, c.name, c.parent_external_id,
+                       (SELECT count(*) FROM channel_external_categories ch
+                        WHERE ch.channel_id = c.channel_id
+                          AND ch.parent_external_id = c.external_id) AS children_count,
+                       (SELECT count(*) FROM channel_external_attributes a
+                        WHERE a.channel_id = c.channel_id
+                          AND a.category_external_id = c.external_id) AS attribute_count
+                FROM channel_external_categories c
+                WHERE {where}
+                ORDER BY c.name LIMIT %s OFFSET %s""",
             params + [per_page, (page - 1) * per_page])
         return {"items": cur.fetchall(), "total": total, "page": page, "per_page": per_page}
     finally:
