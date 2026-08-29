@@ -7,11 +7,25 @@ import { api } from '@/lib/api';
 import { PageHeader, Button, LoadingState, ErrorState } from '@/components/ui';
 
 type LogEntry = { level: string; message: string; timestamp?: string };
-type ProductResult = { n: number; product_id: number; sku?: string; product_name?: string; status: string; error?: string; operation?: string; reason?: string };
+type MissingAttr = { attribute_id?: number | string; attribute_name?: string };
+type MissingValue = MissingAttr & { attribute_value_id?: number | string; value_name?: string };
+type IssueSummary = {
+  total: number;
+  missing_attribute_mappings: MissingAttr[];
+  missing_value_mappings: MissingValue[];
+  other: { code?: string; message?: string }[];
+  external_category_id?: string | null;
+};
+type ProductResult = {
+  n: number; product_id: number; sku?: string; product_name?: string;
+  status: string; error?: string; operation?: string; reason?: string;
+  issues?: IssueSummary;
+};
 type ErrorDetails = { type?: string; message?: string; last_product_id?: number; last_sku?: string };
 type Progress = {
   total: number; processed: number; created: number; updated: number;
   skipped: number; failed: number; errors: number; current_operation?: string;
+  unchanged?: number; not_exported?: number;
   error_details?: ErrorDetails; results?: ProductResult[]; logs?: LogEntry[];
 };
 type ExportDetail = {
@@ -48,17 +62,184 @@ function fmtDuration(seconds?: number | null): string {
   return parts.join(' ');
 }
 
+const RESULT_LABELS: Record<string, { label: string; icon: string; color: string }> = {
+  created: { label: 'Створено', icon: '✅', color: 'text-green-600' },
+  updated: { label: 'Оновлено', icon: '🔄', color: 'text-blue-600' },
+  unchanged: { label: 'Без змін', icon: '➖', color: 'text-gray-500' },
+  skipped: { label: 'Не експортовано', icon: '⚠️', color: 'text-yellow-600' },
+  failed: { label: 'Помилка', icon: '❌', color: 'text-red-600' },
+};
+
+const MAPPING_PAGE = '/export/rozetka/mapping';
+
+function mappingAttrHref(extCatId?: string | null): string {
+  const sp = new URLSearchParams();
+  sp.set('tab', 'attributes');
+  if (extCatId) sp.set('category_external_id', String(extCatId));
+  return `${MAPPING_PAGE}?${sp.toString()}`;
+}
+
+function mappingValueHref(attrId?: number | string | null, extCatId?: string | null): string {
+  const sp = new URLSearchParams();
+  sp.set('tab', 'values');
+  if (attrId) sp.set('attribute_id', String(attrId));
+  if (extCatId) sp.set('category_external_id', String(extCatId));
+  return `${MAPPING_PAGE}?${sp.toString()}`;
+}
+
+/** Grouped, actionable view of a validation-skipped product's issues.
+ *  The raw `reason` stays available in a collapsible block — this summary
+ *  is additive and never replaces backend data. */
+function SkippedIssues({ r }: { r: ProductResult }) {
+  const iss = r.issues;
+  if (!iss) return <span className="text-yellow-700">{r.reason || '—'}</span>;
+  const attrs = iss.missing_attribute_mappings || [];
+  const values = iss.missing_value_mappings || [];
+  const other = iss.other || [];
+  const total = iss.total ?? (attrs.length + values.length + other.length);
+  const catId = iss.external_category_id || null;
+  const mappingCount = attrs.length + values.length;
+  const headline = mappingCount === total
+    ? `${total} проблем маппінгу`
+    : mappingCount > 0
+      ? `${mappingCount} проблем маппінгу, ${total - mappingCount} інших`
+      : `${total} проблем валідації`;
+  return (
+    <div className="space-y-2">
+      <div className="font-medium text-yellow-800">{headline}</div>
+      {catId && <div className="text-gray-400">Категорія Rozetka: <span className="font-mono">{catId}</span></div>}
+      {attrs.length > 0 && (
+        <div>
+          <div className="text-gray-500">Атрибути без маппінгу — {attrs.length}</div>
+          <ul className="list-disc list-inside">
+            {attrs.map((a, i) => (
+              <li key={i}>
+                {a.attribute_name || a.attribute_id || '—'}
+                {' '}
+                <Link className="text-blue-600 hover:text-blue-800 whitespace-nowrap" href={mappingAttrHref(catId)}>Замапити атрибут →</Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {values.length > 0 && (
+        <div>
+          <div className="text-gray-500">Значення без маппінгу — {values.length}</div>
+          <ul className="list-disc list-inside">
+            {values.map((v, i) => (
+              <li key={i}>
+                {v.attribute_name || v.attribute_id || '—'} → {v.value_name || '—'}
+                {' '}
+                <Link className="text-blue-600 hover:text-blue-800 whitespace-nowrap" href={mappingValueHref(v.attribute_id, catId)}>Замапити значення →</Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {other.length > 0 && (
+        <div>
+          <div className="text-gray-500">Інші проблеми — {other.length}</div>
+          <ul className="list-disc list-inside">
+            {other.map((o, i) => (<li key={i}>{o.message || o.code || '—'}</li>))}
+          </ul>
+        </div>
+      )}
+      {r.reason && (
+        <details className="text-gray-400">
+          <summary className="cursor-pointer select-none hover:text-gray-600">Повна причина</summary>
+          <div className="mt-1 whitespace-normal break-words text-gray-500">{r.reason}</div>
+        </details>
+      )}
+    </div>
+  );
+}
+
 function BadgeStatus({ status }: { status: string }) {
   const s = (status || '').toLowerCase();
   const m = STATUS_MAP[s] || { label: status, color: 'bg-gray-100 text-gray-800', icon: '' };
   return <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium ${m.color}`}><span>{m.icon}</span><span>{m.label}</span></span>;
 }
 
-function StatCard({ label, value, highlight }: { label: string; value: string | number; highlight?: boolean }) {
+function StatCard({ label, value, tone }: { label: string; value: string | number; tone?: 'neutral' | 'ok' | 'bad' }) {
+  const box = tone === 'bad' ? 'bg-red-50 border-red-200'
+    : tone === 'ok' ? 'bg-green-50 border-green-200'
+    : 'bg-white border-gray-200';
+  const text = tone === 'bad' ? 'text-red-700'
+    : tone === 'ok' ? 'text-green-700'
+    : 'text-gray-900';
   return (
-    <div className={`rounded-lg border px-4 py-3 ${highlight ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200'}`}>
+    <div className={`rounded-lg border px-4 py-3 ${box}`}>
       <div className="text-xs text-gray-500 mb-0.5">{label}</div>
-      <div className={`text-xl font-bold ${highlight ? 'text-red-700' : 'text-gray-900'}`}>{nf.format(Number(value))}</div>
+      <div className={`text-xl font-bold ${text}`}>{nf.format(Number(value))}</div>
+    </div>
+  );
+}
+
+const RESULT_STATUS_LABELS: Record<string, string> = {
+  created: 'Створено', updated: 'Оновлено', unchanged: 'Без змін',
+  skipped: 'Не експортовано', failed: 'Помилка',
+};
+
+/** Grouped validation issues for a skipped product (from the run's
+ *  per-product `issues` summary).  The raw `reason` stays available in the
+ *  row and is shown in a collapsible block below. */
+function MappingIssues({ issues }: { issues: IssueSummary }) {
+  const mAttrs = issues.missing_attribute_mappings || [];
+  const mVals = issues.missing_value_mappings || [];
+  const other = issues.other || [];
+  const q = (s?: string) => (s ? encodeURIComponent(s) : '');
+  return (
+    <div className="space-y-2">
+      <div className="font-medium text-yellow-800">
+        ⚠️ Не експортовано — {issues.total} проблем маппінгу/валідації
+      </div>
+      {mAttrs.length > 0 && (
+        <div>
+          <div className="font-medium text-gray-700">Атрибути без маппінгу — {mAttrs.length}</div>
+          <ul className="list-disc list-inside text-gray-600">
+            {mAttrs.map((a, i) => (
+              <li key={i} className="break-words">{a.attribute_name || `#${a.attribute_id}`}</li>
+            ))}
+          </ul>
+          <Link
+            className="inline-block mt-0.5 text-blue-600 hover:text-blue-800 underline"
+            href={`/export/rozetka/mapping?tab=attributes&q=${q(mAttrs[0]?.attribute_name)}`}
+          >
+            Замапити атрибут →
+          </Link>
+        </div>
+      )}
+      {mVals.length > 0 && (
+        <div>
+          <div className="font-medium text-gray-700">Значення без маппінгу — {mVals.length}</div>
+          <ul className="list-disc list-inside text-gray-600">
+            {mVals.map((v, i) => (
+              <li key={i} className="break-words">
+                {v.attribute_name || `#${v.attribute_id}`} → {v.value_name || '—'}
+              </li>
+            ))}
+          </ul>
+          <Link
+            className="inline-block mt-0.5 text-blue-600 hover:text-blue-800 underline"
+            href={`/export/rozetka/mapping?tab=values&q=${q(mVals[0]?.attribute_name)}`}
+          >
+            Замапити значення →
+          </Link>
+        </div>
+      )}
+      {other.length > 0 && (
+        <div>
+          <div className="font-medium text-gray-700">Інші проблеми — {other.length}</div>
+          <ul className="list-disc list-inside text-gray-600">
+            {other.map((o, i) => (
+              <li key={i} className="break-words">{o.message || o.code}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {issues.external_category_id && (
+        <div className="text-gray-400">Категорія Rozetka: {issues.external_category_id}</div>
+      )}
     </div>
   );
 }
@@ -87,12 +268,22 @@ export default function ExportDetailPage() {
   if (!report) return <ErrorState message="Експорт не знайдено" />;
 
   const prog = report.progress;
+  const resultsAll: ProductResult[] = report.results || prog?.results || [];
+  const filteredResults = resultFilter ? resultsAll.filter((r) => r.status === resultFilter) : resultsAll;
+  // New runs split skipped into unchanged/not_exported in progress_json.
+  // Pre-fix runs only have the combined counter — approximate the split from
+  // per-product results when they are complete (< 1000 rows are stored),
+  // otherwise count everything skipped as "not exported".
+  const exportedCount = (report.created_count || 0) + (report.updated_count || 0);
+  const resultsComplete = resultsAll.length > 0 && resultsAll.length < 1000;
+  const unchangedCount = prog?.unchanged
+    ?? (resultsComplete ? resultsAll.filter((r) => r.status === 'unchanged').length : 0);
+  const notExportedCount = prog?.not_exported
+    ?? Math.max(0, (report.skipped_count || 0) - unchangedCount);
   const status = (report.status || '').toLowerCase();
   const isActive = ['queued', 'running'].includes(status);
   const logsAll: LogEntry[] = report.logs || prog?.logs || [];
   const logsToShow = logsAll.slice(0, logLimit);
-  const resultsAll: ProductResult[] = report.results || prog?.results || [];
-  const filteredResults = resultFilter ? resultsAll.filter((r) => r.status === resultFilter) : resultsAll;
   const errDetails: ErrorDetails | null = report.error_details || prog?.error_details || null;
 
   return (
@@ -137,11 +328,13 @@ export default function ExportDetailPage() {
         <div className="bg-white rounded-lg border border-gray-200 p-5">
           <h2 className="text-lg font-semibold mb-3">Результат експорту</h2>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <StatCard label="📦 Всього товарів" value={report.total_count || 0} />
+            <StatCard label="🚀 Успішно експортовано" value={exportedCount} tone={exportedCount > 0 ? 'ok' : 'neutral'} />
             <StatCard label="✅ Створено" value={report.created_count || 0} />
             <StatCard label="🔄 Оновлено" value={report.updated_count || 0} />
-            <StatCard label="⚠️ Пропущено" value={report.skipped_count || 0} />
-            <StatCard label="❌ Помилок" value={report.failed_count || 0} highlight={(report.failed_count || 0) > 0} />
-            <StatCard label="📦 Всього товарів" value={report.total_count || 0} />
+            <StatCard label="➖ Без змін" value={unchangedCount} />
+            <StatCard label="⚠️ Не експортовано" value={notExportedCount} tone={notExportedCount > 0 ? 'bad' : 'neutral'} />
+            <StatCard label="❌ Помилки" value={report.failed_count || 0} tone={(report.failed_count || 0) > 0 ? 'bad' : 'neutral'} />
           </div>
         </div>
       )}
@@ -152,7 +345,7 @@ export default function ExportDetailPage() {
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold">Результати товарів ({resultsAll.length})</h2>
             <select value={resultFilter} onChange={(e) => setResultFilter(e.target.value)} className="text-xs border border-gray-200 rounded px-2 py-1">
-              <option value="">Усі</option><option value="created">Створені</option><option value="updated">Оновлені</option><option value="unchanged">Без змін</option><option value="skipped">Пропущені</option><option value="failed">Помилки</option>
+              <option value="">Усі</option><option value="created">Створені</option><option value="updated">Оновлені</option><option value="unchanged">Без змін</option><option value="skipped">Не експортовані</option><option value="failed">Помилки</option>
             </select>
           </div>
           <div className="overflow-x-auto max-h-96 overflow-y-auto border border-gray-100 rounded">
@@ -171,11 +364,23 @@ export default function ExportDetailPage() {
                       <td className="p-2 text-gray-400">{r.n}</td>
                       <td className="p-2 font-mono">{r.sku || '—'}</td>
                       <td className="p-2 max-w-xs truncate">{r.product_name || `#${r.product_id}`}</td>
-                      <td className={`p-2 font-medium ${statusColor}`}><span className="flex items-center gap-1"><span>{statusIcon}</span><span>{r.status}</span></span></td>
+                      <td className={`p-2 font-medium ${statusColor}`}><span className="flex items-center gap-1"><span>{statusIcon}</span><span>{RESULT_STATUS_LABELS[r.status] || r.status}</span></span></td>
                       <td className={`p-2 max-w-sm whitespace-normal break-words ${
                         r.status === 'failed' ? 'text-red-600' : r.status === 'skipped' ? 'text-yellow-700' : 'text-gray-600'
                       }`}>
-                        {r.status === 'failed' ? r.error || '—' : r.status === 'skipped' ? r.reason || '—' : r.operation || '—'}
+                        {r.status === 'failed'
+                          ? (r.error || '—')
+                          : r.status === 'skipped'
+                            ? (r.issues
+                                ? <MappingIssues issues={r.issues} />
+                                : <div className="font-medium text-yellow-800">⚠️ Не експортовано</div>)
+                            : (r.operation || '—')}
+                        {r.status === 'skipped' && r.reason && (
+                          <details className="mt-1">
+                            <summary className="cursor-pointer text-gray-400">Повна причина</summary>
+                            <div className="mt-1 text-gray-500 break-words">{r.reason}</div>
+                          </details>
+                        )}
                       </td>
                     </tr>
                   );

@@ -141,14 +141,14 @@ def _validate(cur, product_id: int, channel_code: str = "rozetka",
             "code": "PRODUCT_NOT_FOUND", "severity": SEVERITY_ERROR,
             "message": f"Товар з ID {product_id} не знайдено",
             "details": {},
-        }]}
+        }], "sku": "", "name": "", "external_category_id": None}
     channel_id = _get_channel_id(cur, channel_code)
     if channel_id is None:
         return {"ready": False, "issues": [{
             "code": "CHANNEL_NOT_FOUND", "severity": SEVERITY_ERROR,
             "message": f"Канал {channel_code} не знайдено",
             "details": {},
-        }]}
+        }], "sku": "", "name": "", "external_category_id": None}
     resolver = ChannelMappingResolver(channel_id=channel_id, channel_code=channel_code)
     ready = True
     if product["status"] != "PUBLISHED":
@@ -263,7 +263,10 @@ def _validate(cur, product_id: int, channel_code: str = "rozetka",
                                                 "external_attribute_name": req["name"],
                                                 "external_category_id": ext_cat_id}})
                     ready = False
-    return {"ready": ready, "issues": issues}
+    return {"ready": ready, "issues": issues,
+            "sku": product.get("sku") or product.get("supplier_sku") or "",
+            "name": title,
+            "external_category_id": ext_cat_id}
 
 
 def compute_content_hash(product: dict, resolver: ChannelMappingResolver,

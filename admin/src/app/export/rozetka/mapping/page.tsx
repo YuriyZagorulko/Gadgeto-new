@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { api, qs } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import {
@@ -137,9 +138,29 @@ function RozetkaPicker<T extends { external_id: string; name?: string; value?: s
   );
 }
 export default function RozetkaMappingPage() {
+  return (
+    <Suspense fallback={<LoadingState />}>
+      <RozetkaMappingInner />
+    </Suspense>
+  );
+}
+
+function RozetkaMappingInner() {
   const toast = useToast();
 
-  const [tab, setTab] = useState('categories');
+  // Deep-link support (?tab=...&q=...&category_external_id=...&attribute_id=...)
+  // from the export history "Замапити атрибут/значення" actions.  Read the URL
+  // parameters during initial render so the very first data fetch already uses
+  // them (searchParams comes from next/navigation, SSR-safe inside Suspense).
+  const sp = useSearchParams();
+  const tabParam = sp.get('tab');
+  const qParam = sp.get('q') || '';
+  const catParam = sp.get('category_external_id') || '';
+  const attrParam = sp.get('attribute_id') || '';
+
+  const [tab, setTab] = useState(
+    () => (tabParam && TABS.some((x) => x.key === tabParam) ? tabParam : 'categories'),
+  );
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -147,11 +168,13 @@ export default function RozetkaMappingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const [q, setQ] = useState('');
-  const [appliedQ, setAppliedQ] = useState('');
+  const [q, setQ] = useState(qParam);
+  const [appliedQ, setAppliedQ] = useState(qParam);
   const [statusFilter, setStatusFilter] = useState('');
-  const [extCatFilter, setExtCatFilter] = useState('');
-  const [attrFilter, setAttrFilter] = useState('');
+  const [extCatFilter, setExtCatFilter] = useState(catParam);
+  const [attrFilter, setAttrFilter] = useState(
+    tabParam === 'values' ? attrParam : '',
+  );
   const [scopeFilter, setScopeFilter] = useState('');
 
   // Value mode: 'all' (existing mappings) or 'unmapped' (candidates)

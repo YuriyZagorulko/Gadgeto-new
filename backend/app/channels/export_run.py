@@ -64,6 +64,58 @@ class ExportSelectionEmpty(Exception):
     """The selection resolved to zero products."""
 
 
+def apply_product_result(progress: dict, status: str) -> str:
+    """Accumulate one product outcome into the run progress; returns the
+    log word (uk).
+
+    Counters: created / updated / unchanged / not_exported (validation
+    skips) / failed.  `skipped` is kept as the legacy COMBINED counter
+    (unchanged + not_exported) for the existing sync_runs.skipped_count
+    column and list statistics.
+    """
+    if status == "created":
+        progress["created"] += 1
+        return "створено"
+    if status == "updated":
+        progress["updated"] += 1
+        return "оновлено"
+    if status == "unchanged":
+        progress["unchanged"] += 1
+        progress["skipped"] += 1
+        return "без змін"
+    if status == "skipped":
+        progress["not_exported"] += 1
+        progress["skipped"] += 1
+        return "пропущено"
+    progress["failed"] += 1
+    progress["errors"] += 1
+    return "ПОМИЛКА"
+
+
+def final_run_status(cancelled: bool, failed: int, skipped: int) -> str:
+    """Run-level status once the worker finished (or was interrupted).
+
+    SUCCESS   — every selected product was exported (no validation skips,
+                no failures); hash-identical 'unchanged' re-exports count
+                as success;
+    PARTIAL   — the worker completed normally but >=1 product was NOT
+                exported (validation skip or per-product push failure);
+    FAILED    — the worker itself crashed (set in run_export's except block;
+                never returned here);
+    CANCELLED — user requested cancellation (preserved existing semantics).
+    """
+    if cancelled:
+        return "CANCELLED"
+    return "SUCCEEDED" if failed == 0 and skipped == 0 else "PARTIAL"
+
+
+def final_export_status(failed: int, not_exported: int) -> str:
+    """Normal-completion variant used by the worker loop (never CANCELLED —
+    cancellation is handled by the caller)."""
+    return final_run_status(cancelled=False, failed=failed,
+                            skipped=not_exported)
+
+
 def compute_listing_hashes(resolver, product: dict, transformed: dict,
                            public_base_url) -> tuple[str, str]:
     """(content_hash, commercial_hash) for what WILL be sent.
@@ -199,16 +251,65 @@ def get_export_run_status(cur, channel_id: int, run_id: int) -> Optional[dict]:
             "updated": int(run.get("updated_count") or 0),
             "failed": int(run.get("failed_count") or 0),
             "skipped": int(run.get("skipped_count") or 0),
+            # hash-identical re-exports (subset of skipped_count, kept
+            # separate since the status fix; 0 on pre-fix runs)
+            "unchanged": int(progress.get("unchanged") or 0),
+            # validation-skip count (subset of skipped_count, kept
+            # separate since the status fix; 0 on pre-fix runs)
+            "not_exported": int(progress.get("not_exported") or 0),
         },
         "current_operation": progress.get("current_operation")
                              or run.get("current_stage"),
         "errors": [r.get("error") or "" for r in failed_results][:20],
         "skipped_sample": skipped_results[:5],
         "logs": (progress.get("logs") or [])[-50:],
-}
+    }
 
 
 # ── per-product pipeline ─────────────────────────────────────────────────────
+
+def _summarize_validation_issues(error_issues: list,
+                                 external_category_id) -> dict:
+    """Structured view of blocking validation issues for the history UI.
+
+    Groups MISSING_ATTRIBUTE_MAPPING / MISSING_ATTRIBUTE_VALUE_MAPPING into
+    actionable lists (attribute/value mapping navigation); everything else
+    goes to `other`.  The raw `reason` string is kept alongside unchanged —
+    this summary is additive, never a replacement.
+    """
+    from app.channels.validation import (
+        ISSUE_MISSING_ATTRIBUTE_MAPPING,
+        ISSUE_MISSING_ATTRIBUTE_VALUE_MAPPING,
+    )
+    missing_attrs: list[dict] = []
+    missing_values: list[dict] = []
+    other: list[dict] = []
+    for issue in error_issues:
+        code = issue.get("code")
+        details = issue.get("details") or {}
+        if code == ISSUE_MISSING_ATTRIBUTE_MAPPING:
+            missing_attrs.append({
+                "attribute_id": details.get("attribute_id"),
+                "attribute_name": details.get("attribute_name"),
+            })
+        elif code == ISSUE_MISSING_ATTRIBUTE_VALUE_MAPPING:
+            missing_values.append({
+                "attribute_id": details.get("attribute_id"),
+                "attribute_name": details.get("attribute_name"),
+                "attribute_value_id": details.get("attribute_value_id"),
+                "value_name": details.get("value_name"),
+            })
+        else:
+            other.append({"code": code, "message": issue.get("message", "")})
+    return {
+        "total": len(error_issues),
+        "missing_attribute_mappings": missing_attrs,
+        "missing_value_mappings": missing_values,
+        "other": other,
+        "external_category_id": (str(external_category_id)
+                                 if external_category_id else None),
+    }
+
 
 def _load_attr_specs(cur, channel_id: int, ext_cat_id,
                      external_attr_ids: list) -> dict:
@@ -269,6 +370,11 @@ def _process_product(ctx: dict, product_id: int) -> dict:
     if not validation.get("ready"):
         store_validation_issues(ctx["cur"], listing["id"], issues)
         reason = "; ".join(i.get("message", "") for i in error_issues)[:500]
+        # SKU/name/category come from the product data validation already
+        # loaded — no second DB query for the same product.
+        v_sku = validation.get("sku") or ""
+        v_name = validation.get("name") or ""
+        v_cat = validation.get("external_category_id")
 
         # If the product failed validation because it is HIDDEN/not published
         # AND it was previously exported to Rozetka, deactivate the remote
@@ -299,8 +405,9 @@ def _process_product(ctx: dict, product_id: int) -> dict:
                     finish_listing_error(
                         ctx["cur"], listing["id"], etype, str(exc)[:2000])
 
-        return {"product_id": product_id, "sku": "", "status": "skipped",
-                "reason": reason}
+        return {"product_id": product_id, "sku": v_sku, "name": v_name,
+                "status": "skipped", "reason": reason,
+                "issues": _summarize_validation_issues(error_issues, v_cat)}
 
     product = ctx["load_product"](ctx["cur"], product_id)
     if product is None:
@@ -481,6 +588,7 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
     progress: dict = {
         "total": len(product_ids), "processed": 0,
         "created": 0, "updated": 0, "failed": 0, "skipped": 0,
+        "unchanged": 0, "not_exported": 0,
         "errors": 0, "current_operation": "Initializing...",
         "results": [], "logs": [],
     }
@@ -514,7 +622,8 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
                  progress["current_operation"],
                  progress["total"], progress["processed"],
                  progress["created"], progress["updated"],
-                 progress["failed"], progress["skipped"], run_id),
+                 progress["failed"],
+                 progress["skipped"], run_id),
             )
         except Exception:
             pass
@@ -565,22 +674,7 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
             result_row = _process_product(ctx, product_id)
             progress["processed"] += 1
             status = result_row.get("status")
-            if status == "created":
-                progress["created"] += 1
-                op_word = "створено"
-            elif status == "updated":
-                progress["updated"] += 1
-                op_word = "оновлено"
-            elif status == "unchanged":
-                progress["skipped"] += 1
-                op_word = "без змін"
-            elif status == "skipped":
-                progress["skipped"] += 1
-                op_word = "пропущено"
-            else:
-                progress["failed"] += 1
-                progress["errors"] += 1
-                op_word = "ПОМИЛКА"
+            op_word = apply_product_result(progress, status)
             progress["current_operation"] = (
                 f"{idx}/{progress['total']}: {op_word} "
                 f"{result_row.get('sku') or '#' + str(product_id)}")
@@ -596,8 +690,9 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
             _flush()
 
         if final_status != "CANCELLED":
-            final_status = ("SUCCEEDED" if progress["failed"] == 0
-                            else "PARTIAL")
+            final_status = final_export_status(
+                failed=progress["failed"],
+                not_exported=progress["not_exported"])
             progress["current_operation"] = (
                 "Completed" if final_status == "SUCCEEDED"
                 else "Completed with errors")
@@ -605,7 +700,8 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
              else "WARNING",
              f"Завершено: створено={progress['created']} "
              f"оновлено={progress['updated']} "
-             f"без змін/пропущено={progress['skipped']} "
+             f"без змін={progress['unchanged']} "
+             f"не експортовано={progress['not_exported']} "
              f"помилок={progress['failed']}")
 
         cur.execute(
@@ -617,7 +713,8 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
                WHERE id=%s""",
             (final_status,
              progress["created"], progress["updated"], progress["failed"],
-             progress["skipped"], progress["total"], progress["processed"],
+             progress["skipped"],
+             progress["total"], progress["processed"],
              json.dumps(progress, ensure_ascii=False),
              progress["current_operation"], run_id),
         )
