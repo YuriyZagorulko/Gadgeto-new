@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import time
+import traceback
 from datetime import datetime
 from typing import Optional
 
@@ -622,23 +623,45 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
         )
         return {"success": True, "run_id": run_id, "status": final_status}
     except Exception as exc:
+        tb_str = traceback.format_exception(type(exc), exc, exc.__traceback__)
+        exc_type = type(exc).__name__
+        exc_msg = str(exc)
+        # Get the last product being processed, if available
+        last_product_id = None
+        last_sku = None
+        if progress.get("results"):
+            last = progress["results"][-1]
+            last_product_id = last.get("product_id")
+            last_sku = last.get("sku")
+
         progress["errors"] = int(progress.get("errors") or 0) + 1
         progress["current_operation"] = "Failed"
-        _log("ERROR", f"Експорт завершився аварійно: {exc}")
+        progress["error_details"] = {
+            "type": exc_type,
+            "message": exc_msg,
+            "last_product_id": last_product_id,
+            "last_sku": last_sku,
+        }
+        _log("ERROR", f"Експорт завершився аварійно: {exc_type}: {exc_msg}")
         _flush(force=True)
         try:
             cur.execute(
-                """UPDATE sync_runs SET status='FAILED', finished_at=NOW(),
+                f"""UPDATE sync_runs SET status='FAILED', finished_at=NOW(),
                        heartbeat_at=NOW(), updated_at=NOW(),
                        failed_count=%s, progress_json=%s,
-                       current_stage='Failed' WHERE id=%s""",
+                       current_stage='Failed', processed_count=%s, skipped_count=%s
+                   WHERE id=%s""",
                 (progress["failed"],
-                 json.dumps(progress, ensure_ascii=False), run_id),
+                 json.dumps(progress, ensure_ascii=False),
+                 progress.get("processed", 0),
+                 progress.get("skipped", 0),
+                 run_id),
             )
         except Exception:
             pass
         logger.exception("Export run %s failed fatally", run_id)
-        return {"success": False, "status": "FAILED", "error": str(exc)}
+        return {"success": False, "status": "FAILED", "error": exc_msg,
+                "error_type": exc_type, "error_details": progress["error_details"]}
     finally:
         try:
             cur.close()

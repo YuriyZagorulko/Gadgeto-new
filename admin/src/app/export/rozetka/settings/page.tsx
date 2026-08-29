@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+import Link from 'next/link';
 import { api, qs } from '@/lib/api';
 import {
   PageHeader, Button, Select, Input, LoadingState, ErrorState, useToast, Badge,
@@ -119,6 +120,7 @@ export default function RozetkaSettingsPage() {
   const [exportRunId, setExportRunId] = useState<number | null>(null);
   const [exportStatus, setExportStatus] = useState<any>(null);
   const [exportErr, setExportErr] = useState('');
+  const [finalExportRunId, setFinalExportRunId] = useState<number | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   // Product table state
@@ -241,6 +243,7 @@ export default function RozetkaSettingsPage() {
         if (['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(d.ui_status)) {
           clearInterval(pollRef.current!);
           pollRef.current = undefined;
+          setFinalExportRunId(exportRunId);
           setExportRunId(null);
           setExporting(false);
           toast.push(d.ui_status === 'completed' ? 'success' : 'error',
@@ -369,6 +372,16 @@ export default function RozetkaSettingsPage() {
             {exportStatus?.current_operation && (
               <div className="text-xs text-blue-600 mt-1 truncate">{exportStatus.current_operation}</div>
             )}
+            <div className="mt-2 flex gap-3">
+              <Link href="/export/rozetka/history" className="text-xs text-blue-700 hover:text-blue-900 underline">
+                Переглянути історію експортів →
+              </Link>
+              {finalExportRunId && (
+                <Link href={`/export/rozetka/history/${finalExportRunId}`} className="text-xs text-blue-700 hover:text-blue-900 underline">
+                  Відкрити поточний експорт →
+                </Link>
+              )}
+            </div>
           </div>
         )}
       </div>

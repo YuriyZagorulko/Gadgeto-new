@@ -51,9 +51,18 @@ export default function RozetkaValueMappingsPage() {
   const [extValLoading, setExtValLoading] = useState(false);
   const [selectedExtValId, setSelectedExtValId] = useState<string | null>(null);
   const [selectedExtValName, setSelectedExtValName] = useState<string | null>(null);
+  const [mappingScope, setMappingScope] = useState<'category' | 'global'>('global');
+  const [scopeCategoryId, setScopeCategoryId] = useState('');
+  const [scopeCategoryName, setScopeCategoryName] = useState('');
   const [saving, setSaving] = useState(false);
 
   const pages = useMemo(() => Math.max(1, Math.ceil(total / perPage)), [total, perPage]);
+
+  // Find the selected category name
+  const selectedCatName = useMemo(() => {
+    const c = categories.find((c) => c.external_id === catFilter);
+    return c ? c.name : '';
+  }, [categories, catFilter]);
 
   // Load categories
   useEffect(() => {
@@ -88,6 +97,16 @@ export default function RozetkaValueMappingsPage() {
     setSelectedExtValId(null);
     setSelectedExtValName(null);
     setExtValues([]);
+    // Reset scope from previous review
+    setMappingScope('global');
+    setScopeCategoryId('');
+    setScopeCategoryName('');
+    // Pre-fill scope from category filter if active
+    if (catFilter) {
+      setMappingScope('category');
+      setScopeCategoryId(catFilter);
+      setScopeCategoryName(selectedCatName);
+    }
     if (item.external_attribute_id) {
       setExtValLoading(true);
       try {
@@ -118,14 +137,16 @@ export default function RozetkaValueMappingsPage() {
     if (!reviewItem || !selectedExtValId) return;
     setSaving(true);
     try {
-      const result = await api.post<MappingResult>('/export/channels/rozetka/mappings/values', {
+      const extCatId = mappingScope === 'category' ? scopeCategoryId : null;
+      await api.post<MappingResult>('/export/channels/rozetka/mappings/values', {
         internal_id: reviewItem.internal_value_id,
         external_id: selectedExtValId,
         external_name: selectedExtValName,
-        external_category_id: null,
+        external_category_id: extCatId,
         status: 'accepted',
       });
-      toast.push('success', 'Mappping created!');
+      const scopeLabel = extCatId ? ` (категорія: ${scopeCategoryName || extCatId})` : ' (глобально)';
+      toast.push('success', `Маппінг створено${scopeLabel}`);
       setReviewItem(null);
       load();
     } catch (e: any) {
@@ -151,7 +172,7 @@ export default function RozetkaValueMappingsPage() {
             placeholder="Атрибут / Значення" className="w-48" />
         </div>
         <div>
-          <label className="block text-xs text-gray-500 mb-1">KaTeropia Rozetka</label>
+          <label className="block text-xs text-gray-500 mb-1">Категорія Rozetka</label>
           <Select value={catFilter} onChange={(e) => { setCatFilter(e.target.value); setPage(1); }}>
             <option value="">Всі категорії</option>
             {categories.map((c) => (
@@ -168,54 +189,54 @@ export default function RozetkaValueMappingsPage() {
           </Select>
         </div>
         <div className="text-sm text-gray-600 pt-4">
-          <strong>{total}</strong> кандидатів
-        </div>
-        <div className="pt-4">
-          <Button variant="primary" onClick={load}>Оновити</Button>
+          {total > 0 ? `Знайдено ${total.toLocaleString('uk-UA')} значень` : ''}
         </div>
       </div>
 
-      {loading ? <LoadingState label="Завантаження..." /> :
-       error ? <ErrorState message={error} onRetry={load} /> : (
-        <div className="overflow-x-auto">
-          <Table head={<>
-            <Th>Атрибут</Th>
-            <Th>Значення</Th>
-            <Th className="text-right">Товарів</Th>
-            <Th>Категорія Rozetka</Th>
-            <Th>Атрибут Rozetka</Th>
-            <Th>Значення Rozetka</Th>
-            <Th>Статус</Th>
-            <Th></Th>
-          </>}>
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="text-xs text-gray-500 uppercase bg-gray-50">
+            <tr>
+              <Th>Атрибут</Th>
+              <Th>Значення</Th>
+              <Th className="text-right">Товарів</Th>
+              <Th>Атрибут Rozetka</Th>
+              <Th>Статус</Th>
+              <Th></Th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
             {rows.length === 0 ? (
-              <tr><td colSpan={8} className="p-6 text-center text-gray-400">Немає кандидатів</td></tr>
-            ) : rows.map((r) => (
-              <tr key={r.internal_value_id} className="hover:bg-gray-50">
-                <Td className="font-medium">{r.attribute_name}</Td>
-                <Td className="max-w-xs truncate font-mono text-xs" title={r.internal_value}>{r.internal_value}</Td>
-                <Td className="text-right font-mono">{r.product_count.toLocaleString('uk-UA')}</Td>
-                <Td className="text-xs">{r.external_category_name || <span className="text-gray-400">—</span>}</Td>
-                <Td className="text-xs">{r.external_attribute_name || <span className="text-gray-400">—</span>}</Td>
-                <Td className="text-xs">{r.external_value_name || <span className="text-gray-400">—</span>}</Td>
-                <Td><Badge tone={r.mapped ? 'green' : 'red'}>{r.mapped ? 'Зіставлено' : 'Не зіставлено'}</Badge></Td>
+              <tr><td colSpan={6} className="p-4 text-center text-gray-400">Немає значень</td></tr>
+            ) : rows.map((r, i) => (
+              <tr key={r.internal_value_id + '-' + i} className="hover:bg-gray-50">
+                <Td>{r.attribute_name}</Td>
+                <Td><span className="font-mono">{r.internal_value}</span></Td>
+                <Td className="text-right">{r.product_count.toLocaleString('uk-UA')}</Td>
+                <Td className="text-xs">{r.external_attribute_name || '—'}</Td>
                 <Td>
-                  {!r.mapped && r.external_attribute_id ? (
-                    <Button size="sm" variant="secondary" onClick={() => openReview(r)}>Зіставити</Button>
-                  ) : (
-                    <span className="text-xs text-gray-400">{r.mapped ? '—' : 'Немає атрибута'}</span>
+                  {r.mapped ? <Badge tone="green">Зіставлено</Badge> : <Badge tone="gray">Не зіставлено</Badge>}
+                </Td>
+                <Td>
+                  {!r.mapped && r.external_attribute_id && (
+                    <Button variant="ghost" size="sm" onClick={() => openReview(r)}>Зіставити</Button>
                   )}
                 </Td>
               </tr>
             ))}
-          </Table>
+          </tbody>
+        </table>
+
+        <div className="p-4 border-t border-gray-100">
+          <Pagination
+            page={page} pages={pages} total={total}
+            onPage={setPage}
+            onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}
+            pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }} />
         </div>
-      )}
+      </div>
 
-      <Pagination page={page} pages={pages} total={total} onPage={setPage}
-        onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}
-        pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }} />
-
+      {/* ── Review / Create Modal ── */}
       <Modal open={reviewItem !== null} onClose={() => setReviewItem(null)} title="Огляд зіставлення значення">
         {reviewItem && (
           <div className="space-y-4">
@@ -231,6 +252,45 @@ export default function RozetkaValueMappingsPage() {
               {reviewItem.external_attribute_id && (
                 <div className="text-xs text-gray-400">ID: {reviewItem.external_attribute_id}</div>
               )}
+            </div>
+
+            {/* Scope selector */}
+            <div className="bg-gray-50 rounded p-3">
+              <div className="text-sm font-medium mb-2">Область застосування</div>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="radio" name="scope" value="global"
+                    checked={mappingScope === 'global'}
+                    onChange={() => setMappingScope('global')}
+                    className="accent-blue-600" />
+                  <span>Глобальне значення (для всіх категорій Rozetka)</span>
+                </label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="radio" name="scope" value="category"
+                    checked={mappingScope === 'category'}
+                    onChange={() => setMappingScope('category')}
+                    className="accent-blue-600" />
+                  <span>Лише для категорії Rozetka:</span>
+                </label>
+                {mappingScope === 'category' && (
+                  <div className="ml-6">
+                    <Select
+                      value={scopeCategoryId}
+                      onChange={(e) => {
+                        setScopeCategoryId(e.target.value);
+                        const c = categories.find((c) => c.external_id === e.target.value);
+                        setScopeCategoryName(c ? c.name : '');
+                      }}
+                      className="w-64"
+                    >
+                      <option value="">Виберіть категорію...</option>
+                      {categories.map((c) => (
+                        <option key={c.external_id} value={c.external_id}>{c.name}</option>
+                      ))}
+                    </Select>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div>
@@ -264,13 +324,23 @@ export default function RozetkaValueMappingsPage() {
                 <div className="font-medium text-blue-800">Вибрано значення Rozetka</div>
                 <div className="text-blue-600">{selectedExtValName}</div>
                 <div className="text-xs text-blue-400">ID: {selectedExtValId}</div>
+                {mappingScope === 'category' && scopeCategoryName && (
+                  <div className="text-xs text-blue-400 mt-1">
+                    Область: категорія «{scopeCategoryName}»
+                  </div>
+                )}
+                {mappingScope === 'global' && (
+                  <div className="text-xs text-blue-400 mt-1">
+                    Область: глобально (всі категорії)
+                  </div>
+                )}
               </div>
             )}
 
             <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
               <Button variant="ghost" onClick={() => setReviewItem(null)}>Закрити</Button>
               <Button variant="primary" onClick={saveMapping}
-                disabled={!selectedExtValId || saving}>
+                disabled={!selectedExtValId || saving || (mappingScope === 'category' && !scopeCategoryId)}>
                 {saving ? 'Збереження...' : 'Зберегти Маппінг'}
               </Button>
             </div>
