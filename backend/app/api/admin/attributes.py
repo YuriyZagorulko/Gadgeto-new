@@ -55,8 +55,8 @@ def create_attribute(data: AttributeIn, user: dict = Depends(require_admin)):
     conn, cur = admin_cursor()
     try:
         slug = re.sub(r"[^a-z0-9]+", "-", data.name.lower()).strip("-") or "attr"
-        cur.execute("""INSERT INTO attributes (name, slug, type, is_filterable)
-                       VALUES (%s,%s,%s,%s) RETURNING id""",
+        cur.execute("""INSERT INTO attributes (name, slug, type, is_filterable, is_global, created_at, updated_at)
+                       VALUES (%s,%s,%s,%s,false,NOW(),NOW()) RETURNING id""",
                     (data.name.strip(), slug, data.type, data.is_filterable))
         return {"ok": True, "id": cur.fetchone()["id"]}
     finally:

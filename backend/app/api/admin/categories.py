@@ -77,7 +77,7 @@ def create_category(data: CategoryIn, user: dict = Depends(require_admin)):
             slug = f"{base}-{i}"; i += 1
         cur.execute(
             """INSERT INTO categories (name, slug, parent_id, description,
-               is_active, sort_order) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+               is_active, sort_order, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,NOW(),NOW()) RETURNING id""",
             (data.name.strip(), slug, data.parent_id, data.description,
              data.is_active, data.sort_order))
         new_id = cur.fetchone()["id"]
