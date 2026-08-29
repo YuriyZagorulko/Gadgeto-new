@@ -1,12 +1,12 @@
 'use client';
 
-import { use, useEffect, useState, useCallback } from 'react';
+import { use, useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { formatDateTime, IMPORT_STATUS_LABELS, importStatusTone } from '@/lib/format';
 import {
-  PageHeader, Button, Badge, LoadingState, ErrorState,
+  PageHeader, Button, Badge, LoadingState, ErrorState, Modal, Input, Select,
 } from '@/components/ui';
 
 interface UnmappedItem {
@@ -39,6 +39,7 @@ interface Report {
   finished_at: string | null;
   created_at: string;
   duration: number | null;
+supplier_code: string | null;
   percent: number | null;
   current_stage: string | null;
   total_count: number;
@@ -92,6 +93,7 @@ function BadgeStatus({ status }: { status: string }) {
     COMPLETED_WITH_WARNINGS: 'З попередженнями',
     FAILED: 'Помилка',
     RUNNING: 'Виконується',
+
     QUEUED: 'У черзі',
     CANCELLED: 'Скасовано',
     ABORTED: 'Перервано',
@@ -120,8 +122,37 @@ export default function ImportReportPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAllSkus, setShowAllSkus] = useState<Record<string, boolean>>({});
+  const [mappingModal, setMappingModal] = useState<{
+    kind: 'categories' | 'attributes' | 'values';
+    itemName: string;
+    open: boolean;
+  } | null>(null);
+  const [mappingTarget, setMappingTarget] = useState<{ id: number; name: string } | null>(null);
+  const [mappingSearch, setMappingSearch] = useState('');
+  const [mappingSearchResults, setMappingSearchResults] = useState<{ id: number; name: string }[]>([]);
+  const [mappingSearchLoading, setMappingSearchLoading] = useState(false);
+  const [mappingSaving, setMappingSaving] = useState(false);
+  const [mappingAttrId, setMappingAttrId] = useState<number | null>(null);
+const [mappingValueMode, setMappingValueMode] = useState<'existing' | 'create'>('existing');
+  const [mappingNewValue, setMappingNewValue] = useState('');
+  const [mappingAttrName, setMappingAttrName] = useState<string | null>(null);
+  // Create entity state
+  const [createModal, setCreateModal] = useState<{
+    kind: 'categories' | 'attributes' | 'values';
+    itemName: string;
+    open: boolean;
+    attrId?: number;
+    attrName?: string;
+  } | null>(null);
+  const [createName, setCreateName] = useState('');
+  const [createParentSearch, setCreateParentSearch] = useState('');
+  const [createParentResults, setCreateParentResults] = useState<{ id: number; name: string }[]>([]);
+  const [createParentId, setCreateParentId] = useState<number | null>(null);
+  const [createParentName, setCreateParentName] = useState('');
+  const [createSaving, setCreateSaving] = useState(false);
   const [logLimit, setLogLimit] = useState(100);
 
+const attrResolved = useRef(false);
   useEffect(() => {
     if (!jobId) return;
     setLoading(true);
@@ -131,6 +162,180 @@ export default function ImportReportPage() {
       .finally(() => setLoading(false));
   }, [jobId]);
 
+const handleMappingSave = async () => {
+    if (!mappingModal || !report) return;
+    let supCode = (report.supplier_code || report.supplier_name || '').toLowerCase();
+    if (!supCode) { alert('Не вказано код постачальника'); return; }
+    // For values in 'create' mode: require new value text instead of mappingTarget
+    if (mappingModal.kind === 'values' && mappingValueMode === 'create') {
+      if (!mappingNewValue.trim() || !mappingAttrId) return;
+    } else if (!mappingTarget) return;
+    setMappingSaving(true);
+    try {
+      let targetId = mappingTarget?.id;
+      if (mappingModal.kind === 'values' && mappingValueMode === 'create' && mappingAttrId) {
+        // 1. Create the new internal value
+        const createRes = await api.post<{ ok: boolean; id: number }>(`/attributes/${mappingAttrId}/values`, {
+          value: mappingNewValue.trim(),
+          is_active: true,
+        });
+        targetId = createRes.id;
+      }
+      // For value mappings: extract supplier attribute name and value from itemName
+      // itemName format: "attrName = val"
+      const isValue = mappingModal.kind === 'values';
+      let supplierItemName = mappingModal.itemName;
+      let supplierParentName: string | undefined = undefined;
+      if (isValue) {
+        const eqIdx = mappingModal.itemName.indexOf(' = ');
+        if (eqIdx !== -1) {
+          supplierParentName = mappingModal.itemName.slice(0, eqIdx);
+          supplierItemName = mappingModal.itemName.slice(eqIdx + 3);
+        }
+      }
+      // 2. Create the mapping (either existing or freshly created value)
+      const body: Record<string, any> = {
+        supplier_code: supCode,
+        supplier_item_name: supplierItemName,
+        catalog_item_id: targetId,
+      };
+      if (isValue && supplierParentName) {
+        body.supplier_parent_name = supplierParentName;
+      }
+      await api.post(`/mappings/${mappingModal.kind}`, body);
+      setMappingModal(null);
+      setMappingTarget(null);
+      setMappingSearch('');
+      setMappingSearchResults([]);
+      setMappingAttrId(null);
+      setMappingAttrName(null);
+      setMappingSaving(false);
+      setMappingValueMode('existing');
+      setMappingNewValue('');
+      // Refresh report
+      api.get<Report>(`/imports/jobs/${jobId}/report`)
+        .then(setReport)
+        .catch(() => {});
+    } catch (e: any) {
+      alert(e.message || 'Помилка створення маппінгу');
+      setMappingSaving(false);
+    }
+  };
+
+  // Search internal entities when modal opens or search text changes
+  useEffect(() => {
+    if (!mappingModal) {
+      attrResolved.current = false;
+      return;
+    }
+    const kind = mappingModal.kind;
+
+    // For values: first resolve the internal attribute ID (once per modal open)
+    if (kind === 'values' && !mappingAttrId && !attrResolved.current) {
+      if (!mappingModal.itemName) return;
+      attrResolved.current = true;
+      // Look up the supplier attribute mapping to find the internal attribute
+      api.get<any>(`/mappings/supplier-attributes?q=${encodeURIComponent(mappingModal.itemName.split(' = ')[0] || mappingModal.itemName)}&unmapped=false&_=${Date.now()}`)
+        .then((res: any) => {
+          const items = res.items || [];
+          const matched = items.find((i: any) => i.catalog_name);
+          if (matched) {
+            setMappingAttrId(matched.catalog_item_id || Number(matched.id));
+            setMappingAttrName(matched.catalog_name || matched.catalog_item_name);
+          }
+        })
+        .catch(() => {});
+      return;
+    }
+
+    if (!mappingSearch.trim() && kind !== 'values') {
+      setMappingSearchResults([]);
+      return;
+    }
+    setMappingSearchLoading(true);
+    const t = setTimeout(() => {
+      let url = '';
+      if (kind === 'categories') {
+        url = `/categories?search=${encodeURIComponent(mappingSearch)}`;
+      } else if (kind === 'attributes') {
+        url = `/attributes?search=${encodeURIComponent(mappingSearch)}&per_page=15`;
+      } else if (kind === 'values' && mappingAttrId) {
+        url = `/attributes/${mappingAttrId}/values`;
+      }
+      if (!url) { setMappingSearchLoading(false); return; }
+      api.get<any>(url)
+        .then((res: any) => {
+          const items = res.items || [];
+          if (kind === 'values') {
+            // Filter by search term client-side since values API doesn't support search
+            const q = mappingSearch.toLowerCase();
+            const filtered = items.filter((v: any) => v.value?.toLowerCase().includes(q));
+            setMappingSearchResults(filtered.map((v: any) => ({ id: v.id, name: v.value || String(v.value) })));
+          } else {
+            setMappingSearchResults(items.map((i: any) => ({ id: i.id, name: i.name })));
+          }
+        })
+        .catch(() => setMappingSearchResults([]))
+        .finally(() => setMappingSearchLoading(false));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [mappingModal, mappingSearch, mappingAttrId, report, jobId]);
+// Create entity handler
+  const handleCreate = async () => {
+    if (!createModal || !createName.trim()) return;
+    setCreateSaving(true);
+    try {
+      if (createModal.kind === 'categories') {
+        await api.post('/categories', {
+          name: createName.trim(),
+          parent_id: createParentId || undefined,
+          is_active: true,
+        });
+      } else if (createModal.kind === 'attributes') {
+        await api.post('/attributes', {
+          name: createName.trim(),
+          type: 'select',
+          is_filterable: true,
+        });
+      } else if (createModal.kind === 'values' && createModal.attrId) {
+        await api.post(`/attributes/${createModal.attrId}/values`, {
+          value: createName.trim(),
+          is_active: true,
+        });
+      }
+      setCreateModal(null);
+      setCreateName('');
+      setCreateParentId(null);
+      setCreateParentName('');
+      setCreateParentSearch('');
+      setCreateParentResults([]);
+      setCreateSaving(false);
+      // Refresh report
+      api.get<Report>(`/imports/jobs/${jobId}/report`)
+        .then(setReport)
+        .catch(() => {});
+    } catch (e: any) {
+      alert(e.message || 'Помилка створення');
+      setCreateSaving(false);
+    }
+  };
+
+  // Parent category search effect
+  useEffect(() => {
+    if (!createModal || createModal.kind !== 'categories' || !createParentSearch.trim()) {
+      setCreateParentResults([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      api.get<any>(`/categories?search=${encodeURIComponent(createParentSearch)}`)
+        .then((res: any) => {
+          const items = res.items || [];
+          setCreateParentResults(items.slice(0, 10).map((i: any) => ({ id: i.id, name: i.name })));
+        })
+        .catch(() => setCreateParentResults([]));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [createModal, createParentSearch]);
   const downloadReport = useCallback(() => {
     if (!report) return;
     const lines: string[] = [];
@@ -350,6 +555,7 @@ export default function ImportReportPage() {
                   <th className="pb-2 pr-4 text-right">Кількість</th>
                   <th className="pb-2 pr-4">ID</th>
                   <th className="pb-2">Приклади SKU</th>
+                  <th className="pb-2">Дії</th>
                 </tr>
               </thead>
               <tbody>
@@ -371,6 +577,25 @@ export default function ImportReportPage() {
                       {item.skus.length > 5 && showAllSkus['cat-' + name] && (
                         <div className="mt-1 text-xs text-gray-500">{item.skus.join(', ')}</div>
                       )}
+                    </td>
+                    <td className="py-2">
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setMappingModal({ kind: 'categories', itemName: name, open: true })}
+                          className="text-xs text-blue-600 hover:text-blue-800"
+                        >
+                          Замапити
+                        </button>
+                        <button
+                          onClick={() => {
+                            setCreateModal({ kind: 'categories', itemName: name, open: true });
+                            setCreateName(name);
+                          }}
+                          className="text-xs text-green-600 hover:text-green-800"
+                        >
+                          Створити категорію
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -394,6 +619,7 @@ export default function ImportReportPage() {
                   <th className="pb-2 pr-4 text-right">Кількість</th>
                   <th className="pb-2 pr-4">ID</th>
                   <th className="pb-2">Приклади SKU</th>
+                  <th className="pb-2">Дії</th>
                 </tr>
               </thead>
               <tbody>
@@ -415,6 +641,25 @@ export default function ImportReportPage() {
                       {item.skus.length > 5 && showAllSkus['attr-' + name] && (
                         <div className="mt-1 text-xs text-gray-500">{item.skus.join(', ')}</div>
                       )}
+                    </td>
+                    <td className="py-2">
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setMappingModal({ kind: 'attributes', itemName: name, open: true })}
+                          className="text-xs text-blue-600 hover:text-blue-800"
+                        >
+                          Замапити
+                        </button>
+                        <button
+                          onClick={() => {
+                            setCreateModal({ kind: 'attributes', itemName: name, open: true });
+                            setCreateName(name);
+                          }}
+                          className="text-xs text-green-600 hover:text-green-800"
+                        >
+                          Створити атрибут
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -444,6 +689,12 @@ export default function ImportReportPage() {
                           ({info.skus.slice(0, 3).join(', ')}{info.skus.length > 3 ? '...' : ''})
                         </span>
                       )}
+                      <button
+                        onClick={() => { setMappingModal({ kind: 'values', itemName: attrName + ' = ' + val, open: true }); setMappingNewValue(val); setMappingValueMode('existing'); }}
+                        className="text-xs text-blue-600 hover:text-blue-800 ml-2"
+                      >
+                        Замапити
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -534,6 +785,294 @@ export default function ImportReportPage() {
         )}
       </section>
 
- </div>
-  );
+{/* Mapping modal */}
+      {mappingModal && report && (
+        <Modal
+          open={true}
+          title={`Створення маппінгу ${
+            mappingModal.kind === 'categories' ? 'категорії' :
+            mappingModal.kind === 'attributes' ? 'атрибуту' : 'значення'
+          }`}
+          onClose={() => setMappingModal(null)}
+        >
+          <div className="space-y-4">
+            {/* Supplier context */}
+            <div className="bg-gray-50 border border-gray-200 rounded-md p-3">
+              <div className="text-xs text-gray-500 mb-1">Постачальник</div>
+              <div className="text-sm font-medium">{report.supplier_code || report.supplier_name || '—'}</div>
+            </div>
+
+            {/* Source item */}
+            <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
+              <div className="text-[11px] uppercase tracking-wide text-blue-600 mb-1">
+                {mappingModal.kind === 'categories' ? 'КАТЕГОРІЯ ПОСТАЧАЛЬНИКА' :
+                 mappingModal.kind === 'attributes' ? 'АТРИБУТ ПОСТАЧАЛЬНИКА' :
+                 'ЗНАЧЕННЯ ПОСТАЧАЛЬНИКА'}
+              </div>
+              <div className="font-semibold text-sm">{mappingModal.itemName}</div>
+            </div>
+
+            {/* Values: show resolved internal attribute */}
+            {mappingModal.kind === 'values' && (
+              mappingAttrId && mappingAttrName ? (
+                <div className="bg-green-50 border border-green-200 rounded-md p-3">
+                  <div className="text-[11px] uppercase tracking-wide text-green-600 mb-1">ВНУТРІШНІЙ АТРИБУТ</div>
+                  <div className="font-semibold text-sm">{mappingAttrName}</div>
+                  <div className="text-xs text-green-500">ID: {mappingAttrId}</div>
+                </div>
+              ) : (
+                <div className="bg-yellow-50 border border-yellow-300 rounded-md p-3 text-sm text-yellow-800">
+                  <span className="font-medium">⚠ Увага:</span> Спочатку створіть маппінг атрибуту в розділі «Невідображені атрибути».
+                </div>
+              )
+            )}
+
+            {/* Value mode toggle */}
+            {mappingModal.kind === 'values' && mappingAttrId && (
+              <div>
+                <div className="flex gap-4 mb-3">
+                  <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input
+                      type="radio"
+                      name="valueMode"
+                      checked={mappingValueMode === 'existing'}
+                      onChange={() => setMappingValueMode('existing')}
+                      className="accent-blue-600"
+                    />
+                    <span>Вибрати існуюче значення</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input
+                      type="radio"
+                      name="valueMode"
+                      checked={mappingValueMode === 'create'}
+                      onChange={() => { setMappingValueMode('create'); setMappingTarget(null); }}
+                      className="accent-green-600"
+                    />
+                    <span>Створити нове значення</span>
+                  </label>
+                </div>
+
+                {mappingValueMode === 'existing' && (
+                  <>
+                    <Input
+                      value={mappingSearch}
+                      onChange={(e) => { setMappingSearch(e.target.value); setMappingTarget(null); }}
+                      placeholder="Пошук значення..."
+                    />
+                    {mappingSearch && (
+                      <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-md divide-y divide-gray-50 mt-1">
+                        {mappingSearchLoading && (
+                          <div className="px-3 py-2 text-xs text-gray-400">Завантаження...</div>
+                        )}
+                        {!mappingSearchLoading && mappingSearchResults.length === 0 && (
+                          <div className="px-3 py-2 text-xs text-gray-400">Нічого не знайдено</div>
+                        )}
+                        {!mappingSearchLoading && mappingSearchResults.map((item) => (
+                          <button
+                            key={item.id}
+                            onMouseDown={() => setMappingTarget(item)}
+                            className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${
+                              mappingTarget?.id === item.id ? 'bg-blue-50 font-medium' : ''
+                            }`}
+                          >
+                            <div>{item.name}</div>
+                            <div className="text-[11px] text-gray-400">ID: {item.id}</div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {mappingTarget && (
+                      <div className="mt-2 bg-green-50 border border-green-200 rounded-md p-3">
+                        <div className="text-[11px] uppercase tracking-wide text-green-600 mb-1">ОБРАНО</div>
+                        <div className="font-semibold text-sm">{mappingTarget.name}</div>
+                        <div className="text-xs text-green-500">ID: {mappingTarget.id}</div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {mappingValueMode === 'create' && (
+                  <div>
+                    <Input
+                      value={mappingNewValue}
+                      onChange={(e) => setMappingNewValue(e.target.value)}
+                      placeholder="Введіть нове значення"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">Після збереження значення буде створено та одразу замаплено.</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Search for categories / attributes */}
+            {mappingModal.kind !== 'values' && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">
+                  {mappingModal.kind === 'categories' ? 'Внутрішня категорія' : 'Внутрішній атрибут'}
+                </label>
+                <Input
+                  value={mappingSearch}
+                  onChange={(e) => { setMappingSearch(e.target.value); setMappingTarget(null); }}
+                  placeholder="Пошук..."
+                />
+                {mappingSearch && (
+                  <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-md divide-y divide-gray-50 mt-1">
+                    {mappingSearchLoading && (
+                      <div className="px-3 py-2 text-xs text-gray-400">Завантаження...</div>
+                    )}
+                    {!mappingSearchLoading && mappingSearchResults.length === 0 && (
+                      <div className="px-3 py-2 text-xs text-gray-400">Нічого не знайдено</div>
+                    )}
+                    {!mappingSearchLoading && mappingSearchResults.map((item) => (
+                      <button
+                        key={item.id}
+                        onMouseDown={() => setMappingTarget(item)}
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${
+                          mappingTarget?.id === item.id ? 'bg-blue-50 font-medium' : ''
+                        }`}
+                      >
+                        <div>{item.name}</div>
+                        <div className="text-[11px] text-gray-400">ID: {item.id}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {mappingTarget && (
+                  <div className="mt-2 bg-green-50 border border-green-200 rounded-md p-3">
+                    <div className="text-[11px] uppercase tracking-wide text-green-600 mb-1">ОБРАНО</div>
+                    <div className="font-semibold text-sm">{mappingTarget.name}</div>
+                    <div className="text-xs text-green-500">ID: {mappingTarget.id}</div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" onClick={() => setMappingModal(null)}>Скасувати</Button>
+              <Button
+                loading={mappingSaving}
+                disabled={
+                  mappingModal.kind === 'values' && mappingAttrId
+                    ? mappingValueMode === 'create'
+                      ? !mappingNewValue.trim()
+                      : !mappingTarget
+                    : !mappingTarget
+                }
+                onClick={handleMappingSave}
+              >
+                {mappingModal.kind === 'values' && mappingValueMode === 'create' ? 'Створити та замапити' : 'Зберегти маппінг'}
+              </Button>
+</div>
+          </div>
+        </Modal>
+      )}
+{/* Create modal */}
+      {createModal && (
+        <Modal
+          open={true}
+          title={`Створення ${
+            createModal.kind === 'categories' ? 'категорії' :
+            createModal.kind === 'attributes' ? 'атрибуту' : 'значення'
+          }`}
+          onClose={() => setCreateModal(null)}
+        >
+          <div className="space-y-4">
+            {/* Supplier context */}
+            <div className="bg-gray-50 border border-gray-200 rounded-md p-3">
+              <div className="text-xs text-gray-500 mb-1">Постачальник</div>
+              <div className="text-sm font-medium">{report?.supplier_code || '—'}</div>
+            </div>
+
+            {/* Source item */}
+            <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
+              <div className="text-[11px] uppercase tracking-wide text-blue-600 mb-1">
+                {createModal.kind === 'categories' ? 'КАТЕГОРІЯ ПОСТАЧАЛЬНИКА' :
+                 createModal.kind === 'attributes' ? 'АТРИБУТ ПОСТАЧАЛЬНИКА' :
+                 'ЗНАЧЕННЯ ПОСТАЧАЛЬНИКА'}
+              </div>
+              <div className="font-semibold text-sm">{createModal.itemName}</div>
+            </div>
+
+            {/* For values: show resolved internal attribute */}
+            {createModal.kind === 'values' && createModal.attrId && createModal.attrName && (
+              <div className="bg-green-50 border border-green-200 rounded-md p-3">
+                <div className="text-[11px] uppercase tracking-wide text-green-600 mb-1">ВНУТРІШНІЙ АТРИБУТ</div>
+                <div className="font-semibold text-sm">{createModal.attrName}</div>
+                <div className="text-xs text-green-500">ID: {createModal.attrId}</div>
+              </div>
+            )}
+
+            {/* For values without resolved attribute */}
+            {createModal.kind === 'values' && !createModal.attrId && (
+              <div className="bg-yellow-50 border border-yellow-300 rounded-md p-3 text-sm text-yellow-800">
+                <span className="font-medium">⚠ Увага:</span> Спочатку створіть маппінг атрибуту в розділі «Невідображені атрибути».
+              </div>
+            )}
+
+            {/* Name input */}
+            {(!(createModal.kind === 'values') || createModal.attrId) && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">
+                  {createModal.kind === 'categories' ? 'Назва нової категорії' :
+                   createModal.kind === 'attributes' ? 'Назва нового атрибуту' :
+                   'Нове значення'}
+                </label>
+                <Input
+                  value={createName}
+                  onChange={(e) => setCreateName(e.target.value)}
+                  placeholder="Введіть назву"
+                />
+              </div>
+            )}
+
+            {/* Parent category selector */}
+            {createModal.kind === 'categories' && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Батьківська категорія (необов'язково)</label>
+                <Input
+                  value={createParentSearch}
+                  onChange={(e) => { setCreateParentSearch(e.target.value); setCreateParentId(null); setCreateParentName(''); }}
+                  placeholder="Пошук батьківської категорії..."
+                />
+                {createParentSearch && createParentResults.length > 0 && (
+                  <div className="max-h-36 overflow-y-auto border border-gray-200 rounded-md divide-y divide-gray-50 mt-1">
+                    {createParentResults.map((item) => (
+                      <button
+                        key={item.id}
+                        onMouseDown={() => { setCreateParentId(item.id); setCreateParentName(item.name); setCreateParentSearch(item.name); }}
+                        className={`w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 ${
+                          createParentId === item.id ? 'bg-blue-50 font-medium' : ''
+                        }`}
+                      >
+                        {item.name}
+                        <span className="text-[11px] text-gray-400 ml-2">ID: {item.id}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {createParentId && (
+                  <div className="mt-1 text-xs text-green-600">Обрано: {createParentName}</div>
+                )}
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" onClick={() => setCreateModal(null)}>Скасувати</Button>
+              <Button
+                loading={createSaving}
+                disabled={!createName.trim() || (createModal.kind === 'values' && !createModal.attrId)}
+                onClick={handleCreate}
+              >
+                Створити
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+    </div>
+);
 }

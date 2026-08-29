@@ -146,7 +146,8 @@ def lookup_supplier_attributes(
                          "WHERE am.supplier_attribute_id=sa.id)") if unmapped else "true"
         where = " AND ".join(conds)
         sql = f"""SELECT sa.id, sa.supplier_id, sa.supplier_name,
-                         am.id AS mapping_id, a.name AS catalog_name
+                         am.id AS mapping_id, a.name AS catalog_name,
+                         am.attribute_id AS catalog_item_id
                   FROM supplier_attributes sa
                   LEFT JOIN attribute_mappings am ON am.supplier_attribute_id=sa.id
                   LEFT JOIN attributes a ON a.id=am.attribute_id
@@ -1471,17 +1472,27 @@ def create_mapping(kind: str, body: MappingCreate, user: dict = Depends(require_
                 detail="Оберіть внутрішній об'єкт або статус «Не імпортувати»")
 
         # ── upsert — one mapping per supplier item (migration 013) ─────────
+        table_has_category = kind in ("categories", "attributes")
+        iv_cols = f"{s_fk}, {c_fk}, is_active, created_by_user_id"
+        iv_vals = "%s, %s, %s, %s"
+        if table_has_category:
+            iv_cols += ", category_id"
+            iv_vals += ", %s"
+        iv_cols += ", created_at, updated_at"
+        iv_vals += ", NOW(), NOW()"
+        up_sets = f"{c_fk} = EXCLUDED.{c_fk}, is_active = EXCLUDED.is_active, updated_at = NOW()"
+        if table_has_category:
+            up_sets += ", category_id = EXCLUDED.category_id"
+        iv_params = [s_item_id, target, body.is_active, user.get("id")]
+        if table_has_category:
+            iv_params.append(body.category_id)
         cur.execute(
-            f"""INSERT INTO {table} ({s_fk}, {c_fk}, is_active, created_by_user_id,
-                                      category_id, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+            f"""INSERT INTO {table} ({iv_cols})
+                VALUES ({iv_vals})
                 ON CONFLICT ({s_fk}) DO UPDATE
-                    SET {c_fk}     = EXCLUDED.{c_fk},
-                        category_id = EXCLUDED.category_id,
-                        is_active  = EXCLUDED.is_active,
-                        updated_at = NOW()
+                    SET {up_sets}
                 RETURNING id, (xmax = 0) AS inserted""",
-            (s_item_id, target, body.is_active, user.get("id"), body.category_id),
+            iv_params,
         )
         row = cur.fetchone()
         return JSONResponse(

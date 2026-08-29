@@ -109,7 +109,7 @@ def get_job(jid: int, user: dict = Depends(require_admin)):
         except Exception:
             pass
         cur.execute("""
-            SELECT j.*, s.name AS supplier_name FROM import_jobs j
+            SELECT j.*, s.name AS supplier_name, s.code AS supplier_code FROM import_jobs j
             LEFT JOIN suppliers s ON s.id = j.supplier_id WHERE j.id = %s
         """, (jid,))
         job = cur.fetchone()
@@ -540,7 +540,7 @@ def get_job_report(jid: int, user: dict = Depends(require_admin)):
         except Exception:
             pass
         cur.execute("""
-            SELECT j.*, s.name AS supplier_name FROM import_jobs j
+            SELECT j.*, s.name AS supplier_name, s.code AS supplier_code FROM import_jobs j
             LEFT JOIN suppliers s ON s.id = j.supplier_id WHERE j.id = %s
         """, (jid,))
         job = cur.fetchone()
@@ -574,6 +574,7 @@ def _build_import_report(job: dict, stats: dict) -> dict:
         "id": job["id"],
         "supplier_id": job.get("supplier_id"),
         "supplier_name": job.get("supplier_name"),
+        "supplier_code": job.get("supplier_code"),
         "import_type": job.get("import_type"),
         "status": job.get("status"),
         "started_at": job.get("started_at"),

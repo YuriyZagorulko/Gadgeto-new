@@ -1,5 +1,6 @@
 # Admin attributes API
 import re
+import psycopg2
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import Optional
@@ -109,9 +110,19 @@ def create_value(aid: int, data: AttributeValueIn, user: dict = Depends(require_
     conn, cur = admin_cursor()
     try:
         slug = re.sub(r"[^a-z0-9]+", "-", data.value.lower()).strip("-") or "value"
-        cur.execute("""INSERT INTO attribute_values (attribute_id, value, slug, is_active)
-                       VALUES (%s,%s,%s,%s) RETURNING id""", (aid, data.value.strip(), slug, data.is_active))
-        return {"ok": True, "id": cur.fetchone()["id"]}
+        try:
+            cur.execute("""INSERT INTO attribute_values (attribute_id, value, slug, is_active)
+                           VALUES (%s,%s,%s,%s) RETURNING id""", (aid, data.value.strip(), slug, data.is_active))
+            return {"ok": True, "id": cur.fetchone()["id"]}
+        except psycopg2.errors.UniqueViolation:
+            conn.rollback()
+            # Value already exists — return its ID
+            cur.execute("SELECT id FROM attribute_values WHERE attribute_id=%s AND value=%s",
+                        (aid, data.value.strip()))
+            existing = cur.fetchone()
+            if existing:
+                return {"ok": True, "id": existing["id"], "already_existed": True}
+            raise
     finally:
         conn.close()
 
