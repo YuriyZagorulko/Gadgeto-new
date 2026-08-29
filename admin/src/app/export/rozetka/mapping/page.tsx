@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { api, qs } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import {
@@ -46,6 +46,9 @@ function RozetkaPicker<T extends { external_id: string; name?: string; value?: s
   displayName = (item) => (item as any).name || (item as any).value || '',
   value,
   onChange,
+  requireSearch = false,
+  requireSearchHint = 'Введіть запит для пошуку',
+  emptyHint = 'Немає даних',
 }: {
   endpoint: string;
   label: string;
@@ -53,21 +56,42 @@ function RozetkaPicker<T extends { external_id: string; name?: string; value?: s
   displayName?: (item: T) => string;
   value: string;
   onChange: (item: T | null) => void;
+  /** Don't dump the unscoped list on empty query — wait for user input. */
+  requireSearch?: boolean;
+  requireSearchHint?: string;
+  /** Shown when a scoped (empty-query) fetch returns no items, e.g. an
+      attribute without a value dictionary in the channel taxonomy. */
+  emptyHint?: string;
 }) {
   const [query, setQuery] = useState('');
   const [opts, setOpts] = useState<T[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  // Monotonic request id: only the latest response is applied, older ones
+  // (out-of-order arrivals while typing) are discarded.
+  const reqSeq = useRef(0);
 
   const fetch = useCallback((q: string) => {
+    const seq = ++reqSeq.current;
     setLoading(true);
     api.get<ListResp<T>>(endpoint + qs({ ...extraParams, q: q || undefined, per_page: 50 }))
-      .then((d) => setOpts(d.items))
-      .catch(() => setOpts([]))
-      .finally(() => setLoading(false));
+      .then((d) => { if (seq === reqSeq.current) setOpts(d.items); })
+      .catch(() => { if (seq === reqSeq.current) setOpts([]); })
+      .finally(() => { if (seq === reqSeq.current) setLoading(false); });
   }, [endpoint, JSON.stringify(extraParams)]);
 
-  useEffect(() => { fetch(query); }, [query, fetch]);
+  // Debounced fetch (the external-values table has 700k+ rows; avoid a
+  // request per keystroke). Empty unscoped queries are not fetched when
+  // requireSearch is set — the alphabetical head is taxonomy noise.
+  useEffect(() => {
+    if (requireSearch && !query.trim()) {
+      reqSeq.current++; setOpts([]); setLoading(false); return;
+    }
+    const t = setTimeout(() => fetch(query), 300);
+    return () => clearTimeout(t);
+  }, [query, fetch, requireSearch]);
+
+  const needsSearch = requireSearch && !query.trim();
 
   return (
     <div className="relative">
@@ -78,27 +102,35 @@ function RozetkaPicker<T extends { external_id: string; name?: string; value?: s
         return found ? displayName(found) : (value || '');
       })()}
         onChange={(e) => { const v = e.target.value; setQuery(v); if (!open) setOpen(true); }}
-        onFocus={() => { setOpen(true); fetch(query); }}
+        onFocus={() => { setOpen(true); if (!needsSearch) fetch(query); }}
         onBlur={() => setTimeout(() => setOpen(false), 200)}
         placeholder={value ? '' : `Пошук ${label.toLowerCase()}...`}
         className="w-full"
       />
       {open && (
         <div className="absolute z-10 mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg overflow-y-auto text-sm max-h-60">
-          {query && opts.length === 0 && !loading && (
-            <div className="px-3 py-2 text-gray-400 text-xs">Нічого не знайдено</div>
+          {needsSearch ? (
+            <div className="px-3 py-2 text-gray-400 text-xs">{requireSearchHint}</div>
+          ) : (
+            <>
+              {opts.length === 0 && !loading && (
+                <div className="px-3 py-2 text-gray-400 text-xs">
+                  {query ? 'Нічого не знайдено' : emptyHint}
+                </div>
+              )}
+              {loading && (
+                <div className="px-3 py-2 text-gray-400 text-xs">Завантаження...</div>
+              )}
+              {opts.map((item, index) => (
+                <button key={`${(item as any).id}-${(item as any).external_id}-${index}`}
+                  onMouseDown={(e) => { e.preventDefault(); onChange(item); setOpen(false); }}
+                  className="w-full text-left px-3 py-2 hover:bg-gray-100 border-b border-gray-50 last:border-0">
+                  <div className="font-medium text-sm">{displayName(item)}</div>
+                  <div className="text-[11px] text-gray-400">ID: {item.external_id}</div>
+                </button>
+              ))}
+            </>
           )}
-          {loading && (
-            <div className="px-3 py-2 text-gray-400 text-xs">Завантаження...</div>
-          )}
-          {opts.map((item) => (
-            <button key={(item as any).id + '-' + (item as any).external_id}
-              onMouseDown={(e) => { e.preventDefault(); onChange(item); setOpen(false); }}
-              className="w-full text-left px-3 py-2 hover:bg-gray-100 border-b border-gray-50 last:border-0">
-              <div className="font-medium text-sm">{displayName(item)}</div>
-              <div className="text-[11px] text-gray-400">ID: {item.external_id}</div>
-            </button>
-          ))}
         </div>
       )}
     </div>
@@ -781,7 +813,7 @@ function ValueMappingModal({
         />
         <SelectedCard label="КАТЕГОРІЯ ROZETKA" name={fExtCatName} id={fExtCatId} />
 
-        {/* Rozetka attribute — filtered by category */}
+        {/* Rozetka attribute — filtered by category when chosen */}
         <RozetkaPicker<ExtAttrOpt>
           endpoint="/export/channels/rozetka/pickers/external-attributes"
           label="Атрибут Rozetka"
@@ -795,12 +827,20 @@ function ValueMappingModal({
         />
         <SelectedCard label="АТРИБУТ ROZETKA" name={fExtAttrName} id={fExtAttrId} />
 
-        {/* Rozetka value — filtered by category + attribute */}
+        {/* Rozetka value — scoped when category + attribute are chosen;
+            unscoped list is 700k+ rows, so it is search-driven */}
         <RozetkaPicker<ExtValOpt>
           endpoint="/export/channels/rozetka/pickers/external-values"
           label="Значення Rozetka"
           extraParams={extValExtra}
           value={fExtValId}
+          requireSearch={!fExtCatId || !fExtAttrId}
+          requireSearchHint="Введіть запит для пошуку — або оберіть категорію та атрибут вище, щоб побачити повний перелік"
+          emptyHint={
+            fExtCatId && fExtAttrId
+              ? `У атрибута «${fExtAttrName}» немає словника значень Rozetka — це поле вільного введення (наприклад, EAN)`
+              : 'Немає значень у словнику Rozetka для обраного фільтра'
+          }
           onChange={(item) => onChangeValue(item as ExtValOpt | null)}
           displayName={(item) => item.value}
         />

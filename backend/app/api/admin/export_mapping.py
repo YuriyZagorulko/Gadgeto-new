@@ -611,22 +611,29 @@ def pick_external_values(code: str,
         ch = cur.fetchone()
         if not ch:
             raise HTTPException(status_code=404, detail="Канал не знайдено")
-        filters, params = ["v.channel_id = %s"], [ch["id"]]
-        if category_external_id:
-            filters.append("a.category_external_id = %s"); params.append(category_external_id)
+        # Single-table filters only — no JOIN. The same external attribute id
+        # exists once per Rozetka category (unique on channel_id,
+        # category_external_id, external_id), so a JOIN here fans every value
+        # row out ~N times (~15M rows before filtering). Category scope is
+        # expressed as an IN-subquery over the indexed attribute list instead.
+        # Attribute scope wins when both are given (it is the narrower one).
+        filters, params = ["channel_id = %s"], [ch["id"]]
         if attribute_external_id:
-            filters.append("v.attribute_external_id = %s"); params.append(attribute_external_id)
+            filters.append("attribute_external_id = %s"); params.append(attribute_external_id)
+        elif category_external_id:
+            filters.append(
+                "attribute_external_id IN (SELECT external_id FROM channel_external_attributes"
+                " WHERE channel_id = %s AND category_external_id = %s)")
+            params.extend([ch["id"], category_external_id])
         if q:
-            filters.append("v.value ILIKE %s"); params.append(f"%{q}%")
+            filters.append("value ILIKE %s"); params.append(f"%{q}%")
         where = " AND ".join(filters)
-        join = ("FROM channel_external_values v "
-                "JOIN channel_external_attributes a "
-                "  ON a.channel_id = v.channel_id AND a.external_id = v.attribute_external_id")
-        cur.execute(f"SELECT count(*) AS c {join} WHERE {where}", params)
+        cur.execute(f"SELECT count(*) AS c FROM channel_external_values WHERE {where}", params)
         total = cur.fetchone()["c"]
         cur.execute(
-            f"SELECT v.id, v.external_id, v.value, v.attribute_external_id"
-            f" {join} WHERE {where} ORDER BY v.value LIMIT %s OFFSET %s",
+            f"SELECT id, external_id, value, attribute_external_id"
+            f" FROM channel_external_values WHERE {where}"
+            f" ORDER BY value LIMIT %s OFFSET %s",
             params + [per_page, (page - 1) * per_page])
         return {"items": cur.fetchall(), "total": total, "page": page, "per_page": per_page}
     finally:
