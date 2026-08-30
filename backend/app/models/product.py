@@ -67,7 +67,7 @@ class ProductAttribute(Base):
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     attribute_id = Column(Integer, ForeignKey("attributes.id"), nullable=False)
     attribute_value_id = Column(Integer, ForeignKey("attribute_values.id"), nullable=True)
-    value_text = Column(String(255), nullable=True)
+    value_text = Column(String(500), nullable=True)
     product = relationship("Product", back_populates="attributes")
     attribute = relationship("Attribute", back_populates="product_attributes")
     attribute_value = relationship("AttributeValue", back_populates="product_attributes")

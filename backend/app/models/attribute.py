@@ -19,7 +19,7 @@ class Attribute(Base):
 class AttributeValue(Base):
     __tablename__ = "attribute_values"
     attribute_id = Column(Integer, ForeignKey("attributes.id"), nullable=False)
-    value = Column(String(255), nullable=False)
+    value = Column(String(500), nullable=False)
     slug = Column(String(255), nullable=False)
     sort = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
