@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { api, qs } from '@/lib/api';
+import { formatPrice } from '@/lib/format';
 import {
   PageHeader, Table, Th, Td, Badge, Button, Input, Select,
   LoadingState, ErrorState, Pagination, ConfirmDialog, useToast,
@@ -258,7 +259,7 @@ export default function RozetkaExportPage() {
                     <Td className="text-xs font-mono max-w-28 truncate" title={r.sku}>{r.sku || '—'}</Td>
                     <Td className="max-w-xs truncate" title={r.name}>{r.name || '—'}</Td>
                     <Td className="text-xs max-w-36 truncate">{r.category_name || '—'}</Td>
-                    <Td className="text-right text-xs font-mono">{r.price ? r.price.toLocaleString('uk-UA') : '—'}</Td>
+                    <Td className="text-right text-xs font-mono">{formatPrice(r.price)}</Td>
                     <Td className="text-right text-xs">{r.stock_qty}</Td>
                     <Td><Badge tone={mb.tone}>{mb.label}</Badge></Td>
                     <Td><Badge tone={pb.tone}>{pb.label}</Badge></Td>

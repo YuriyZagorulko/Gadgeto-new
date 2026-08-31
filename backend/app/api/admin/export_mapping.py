@@ -212,7 +212,7 @@ def _list_value_mappings(cur, cid: int, q, status_filter, ext_cat_id, attribute_
                    COALESCE(m.status, 'accepted') AS status,
                    m.confidence, m.source,
                    m.created_at AS created_at, m.updated_at AS updated_at,
-                   COALESCE(ea.is_required, false) AS is_required
+                   COALESCE(ea.is_required::boolean, false) AS is_required
             FROM channel_value_mappings m
             JOIN attribute_values av ON av.id = m.internal_value_id
             JOIN attributes a ON a.id = av.attribute_id

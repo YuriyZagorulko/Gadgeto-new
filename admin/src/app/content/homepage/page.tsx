@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { api, qs } from '@/lib/api';
+import { formatPrice } from '@/lib/format';
 import {
   PageHeader, Button, Input, LoadingState, ErrorState, useToast, Badge,
 } from '@/components/ui';
@@ -96,7 +97,7 @@ function RecSelectionModal({ selectedRecs, recResults, recLoading, recPage, savi
                         <td className="p-2 text-center"><input type="checkbox" checked={isSel} readOnly className="rounded border-gray-300" /></td>
                         <td className="p-2 text-xs font-mono">{r.sku || '—'}</td>
                         <td className="p-2 max-w-xs truncate">{r.name}</td>
-                        <td className="p-2 text-right text-xs">{r.price?.toLocaleString('uk-UA')}</td>
+                        <td className="p-2 text-right text-xs">{formatPrice(r.price)}</td>
                       </tr>
                     );
                   })}
@@ -307,7 +308,7 @@ export default function HomepageContentPage() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium truncate">{r.name}</div>
-                  <div className="text-xs text-gray-500">{r.price?.toLocaleString('uk-UA')} ₴</div>
+                  <div className="text-xs text-gray-500">{formatPrice(r.price)}</div>
                 </div>
               </div>
             ))}

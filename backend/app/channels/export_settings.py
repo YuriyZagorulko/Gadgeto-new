@@ -101,13 +101,17 @@ def load_export_settings(cur, channel_id: int) -> dict:
 def calculate_export_price(base_price, settings: dict) -> float:
     """Compute the final export price from the internal base price.
 
+    IMPORTANT: `base_price` is stored in minor units (kopiykas) — e.g.
+    175_408 means 1_754.08 UAH.  This function converts to major units
+    *before* applying markup so the Rozetka API receives a correct UAH price.
+
     Rules (server-side authority):
       percentage: base * (1 + value / 100)
       fixed:      base + value
     followed by optional rounding to the nearest multiple of `price_rounding`
     (ROUND_HALF_UP; 0 disables rounding).  Never negative.
     """
-    base = Decimal(str(parse_float(base_price)))
+    base = Decimal(str(parse_float(base_price))) / Decimal('100')
     markup_value = Decimal(str(settings.get("price_markup_value", 0.0)))
 
     if settings.get("price_markup_type") == MARKUP_TYPE_FIXED:
