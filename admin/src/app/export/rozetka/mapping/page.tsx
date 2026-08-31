@@ -562,7 +562,7 @@ function CategoriesMappingTab({ openEdit, openDelete }: {
   openEdit: (r: any) => void; openDelete: (id: number) => void;
 }) {
   const [appliedFilters, setAppliedFilters] = useState<RozetkaCategoryMappingFilterValues>({
-    internalParentCategoryIds: '', externalCategoryIds: '', statusFilter: '',
+    internalCategoryName: '', internalParentCategoryIds: '', externalCategoryIds: '', statusFilter: '',
   });
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -573,6 +573,7 @@ function CategoriesMappingTab({ openEdit, openDelete }: {
   const load = useCallback(() => {
     setLoading(true); setError('');
     const params: Record<string, string | number | undefined> = { page, per_page: perPage };
+    if (appliedFilters.internalCategoryName) params.internal_q = appliedFilters.internalCategoryName;
     if (appliedFilters.internalParentCategoryIds) params.internal_parent_category_ids = appliedFilters.internalParentCategoryIds;
     if (appliedFilters.externalCategoryIds) params.external_category_ids = appliedFilters.externalCategoryIds;
     if (appliedFilters.statusFilter) params.status = appliedFilters.statusFilter;

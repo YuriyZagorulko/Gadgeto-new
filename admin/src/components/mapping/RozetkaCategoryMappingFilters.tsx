@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Select, Button } from '@/components/ui';
+import { Input, Select, Button } from '@/components/ui';
 import EntityMultiSelect, {
   useInternalCategories,
   InternalParentCategorySelect,
@@ -9,6 +9,7 @@ import EntityMultiSelect, {
 } from '@/components/mapping/EntityMultiSelect';
 
 export interface RozetkaCategoryMappingFilters {
+  internalCategoryName: string;       // free-text filter by internal category name
   internalParentCategoryIds: string; // comma-separated parent category IDs
   externalCategoryIds: string;       // comma-separated external (Rozetka) category IDs
   statusFilter: string;
@@ -19,15 +20,17 @@ interface Props {
 }
 
 export default function RozetkaCategoryMappingFilterPanel({ onApply }: Props) {
+  const [internalCategoryName, setInternalCategoryName] = useState('');
   const [internalParentCategoryIds, setInternalParentCategoryIds] = useState<(string | number)[]>([]);
   const [externalCategoryIds, setExternalCategoryIds] = useState<(string | number)[]>([]);
   const [statusFilter, setStatusFilter] = useState('');
   const { cats, loading } = useInternalCategories();
 
-  const hasFilters = !!(internalParentCategoryIds.length || externalCategoryIds.length || statusFilter);
+  const hasFilters = !!(internalCategoryName || internalParentCategoryIds.length || externalCategoryIds.length || statusFilter);
 
   const apply = () => {
     onApply({
+      internalCategoryName,
       internalParentCategoryIds: internalParentCategoryIds.join(','),
       externalCategoryIds: externalCategoryIds.join(','),
       statusFilter,
@@ -35,10 +38,12 @@ export default function RozetkaCategoryMappingFilterPanel({ onApply }: Props) {
   };
 
   const reset = () => {
+    setInternalCategoryName('');
     setInternalParentCategoryIds([]);
     setExternalCategoryIds([]);
     setStatusFilter('');
     onApply({
+      internalCategoryName: '',
       internalParentCategoryIds: '',
       externalCategoryIds: '',
       statusFilter: '',
@@ -47,6 +52,12 @@ export default function RozetkaCategoryMappingFilterPanel({ onApply }: Props) {
 
   return (
     <div className="flex flex-wrap items-end gap-3 mb-4">
+      <div>
+        <label className="block text-xs text-gray-500 mb-1">Назва категорії</label>
+        <Input value={internalCategoryName} onChange={(e) => setInternalCategoryName(e.target.value)}
+          placeholder="Пошук за назвою категорії..." className="w-48"
+          onKeyDown={(e) => { if (e.key === 'Enter') apply(); }} />
+      </div>
       <div className="w-64">
         <InternalParentCategorySelect
           label="Батьківська внутрішня категорія"
