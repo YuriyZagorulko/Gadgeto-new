@@ -409,6 +409,12 @@ def _process_product(ctx: dict, product_id: int) -> dict:
                 "status": "skipped", "reason": reason,
                 "issues": _summarize_validation_issues(error_issues, v_cat)}
 
+    # Validation passed (ready=True). Clear any stale validation issues from
+    # a previous failed export attempt so the UI/history does not show old
+    # MISSING_REQUIRED_ATTR_MAPPING / other blocking errors that are no longer
+    # relevant after Phase 37/39.
+    store_validation_issues(ctx["cur"], listing["id"], [])
+
     product = ctx["load_product"](ctx["cur"], product_id)
     if product is None:
         finish_listing_error(ctx["cur"], listing["id"], "validation",

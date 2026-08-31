@@ -262,13 +262,14 @@ class RozetkaTaxonomyService:
             attr_name = attr.get("name") or ""
             attr_type = attr.get("attr_type") or ""
             unit = attr.get("unit") or ""
-            # Rozetka's only requiredness signal in the category-options payload
-            # is `filter_type`: "main" = "в основному наборі" (the mandatory prim
-            # ary set of characteristics).  Nothing else (our attributes, product
-            # data, mapping counts) may influence this — the channel taxonomy is
-            # the single source of truth for requiredness.
-            filter_type = (attr.get("filter_type") or "").strip().lower()
-            is_required = 1 if filter_type == "main" else 0
+            # Rozetka's `filter_type` field indicates UI grouping:
+            #   "main"      → primary filter characteristic on the category page
+            #   "additional" → secondary/advanced filter
+            # There is NO `required`/`mandatory` field in the Rozetka API response.
+            # `filter_type: "main"` does NOT mean "required for product creation".
+            # Therefore all attributes are treated as optional (is_required = 0).
+            # The raw_json retains the original filter_type for reference.
+            is_required = 0
             raw_json = json.dumps(attr, ensure_ascii=False, default=str)
 
             cur.execute(

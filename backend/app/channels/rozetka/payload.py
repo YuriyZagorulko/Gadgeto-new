@@ -69,8 +69,20 @@ def _build_params(transformed, attr_specs, warnings):
             warnings.append("Attr %s missing from local taxonomy - skipped" % ext_attr_id)
             continue
         ptype = spec.get("type")
+        external_value_id = entry.get("external_value_id")
+        value_name = entry.get("value")
+        # If a select/list attribute has no external_value_id, it means the
+        # value mapping is missing — skip the attribute entirely rather than
+        # raising a PayloadBuildError that would block the entire export.
+        t = normalize_param_type(ptype)
+        if t in SELECT_TYPES and external_value_id is None:
+            warnings.append(
+                "Attr '%s' has no external value ID — omitted from payload"
+                % (entry.get("external_attribute_name") or ext_attr_id)
+            )
+            continue
         try:
-            formatted = format_param_value(ptype, external_value_id=entry.get("external_value_id"), value_name=entry.get("value"), warnings=warnings)
+            formatted = format_param_value(ptype, external_value_id=external_value_id, value_name=value_name, warnings=warnings)
         except PayloadBuildError as exc:
             raise PayloadBuildError("Attr '%s': %s" % (entry.get("external_attribute_name") or ext_attr_id, exc)) from exc
         params.append({

@@ -103,13 +103,11 @@ def _get_external_category_id(resolver: ChannelMappingResolver, product: dict) -
 
 
 def _get_required_attributes(cur, channel_id: int, external_category_id: str) -> list[dict]:
-    cur.execute(
-        """SELECT external_id, name, param_type, is_required, unit
-           FROM channel_external_attributes
-           WHERE channel_id = %s AND category_external_id = %s AND is_required = 1""",
-        (channel_id, external_category_id),
-    )
-    return cur.fetchall()
+    # Rozetka API does not provide a `required`/`mandatory` flag for attributes.
+    # The `filter_type: "main"` field indicates primary filter characteristics,
+    # NOT "required for product creation". Therefore no attributes are treated
+    # as required for export validation.
+    return []
 
 
 def validate_product(product_id: int, channel_code: str = "rozetka",
@@ -268,8 +266,8 @@ def _validate(cur, product_id: int, channel_code: str = "rozetka",
             val_mapping = resolver.resolve_value(pa["attribute_value_id"], ext_cat_id)
             if val_mapping is None:
                 ext_attr_id = attr_mapping.get("external_attribute_id")
+                val_name = pa.get("attr_value_name") or f"id={pa['attribute_value_id']}"
                 if ext_attr_id and ext_attr_id in required_attr_ids:
-                    val_name = pa.get("attr_value_name") or f"id={pa['attribute_value_id']}"
                     issues.append({"code": ISSUE_MISSING_ATTRIBUTE_VALUE_MAPPING,
                                    "severity": SEVERITY_ERROR,
                                    "message": f"Не знайдено відповідності значення {attr_name}: {val_name}",
@@ -277,7 +275,15 @@ def _validate(cur, product_id: int, channel_code: str = "rozetka",
                                                "attribute_value_id": pa["attribute_value_id"],
                                                "value_name": val_name}})
                     ready = False
-                # Optional value mapping missing — IGNORE (no issue)
+                else:
+                    # Optional attribute — missing CVM does not block export.
+                    # The attribute is simply omitted from the Rozetka payload.
+                    issues.append({"code": ISSUE_MISSING_ATTRIBUTE_VALUE_MAPPING,
+                                   "severity": SEVERITY_WARNING,
+                                   "message": f"Не знайдено відповідності значення {attr_name}: {val_name}",
+                                   "details": {"attribute_id": attr_id, "attribute_name": attr_name,
+                                               "attribute_value_id": pa["attribute_value_id"],
+                                               "value_name": val_name}})
 
     # Concern B: Required Rozetka attributes without any internal mapping
     if ext_cat_id and taxonomy_ok and required_attr_ids:
@@ -290,11 +296,10 @@ def _validate(cur, product_id: int, channel_code: str = "rozetka",
                     break
             if not mapped_found:
                 issues.append({"code": ISSUE_MISSING_REQUIRED_ATTR_MAPPING,
-                                "severity": SEVERITY_ERROR,
+                                "severity": SEVERITY_WARNING,
                                 "message": f"Відсутній обов'язковий атрибут {req_ext_id}",
                                 "details": {"external_attribute_id": req_ext_id,
                                             "external_category_id": ext_cat_id}})
-                ready = False
     return {"ready": ready, "issues": issues,
             "sku": product.get("sku") or product.get("supplier_sku") or "",
             "name": title,
@@ -359,7 +364,12 @@ def _build_transform_payload(product: dict, resolver: ChannelMappingResolver,
                 # optional (required-attr values are blocked before reaching
                 # transform).  Omit it entirely to avoid PayloadBuildError
                 # for select/list types (which require external_value_id).
-                continue
+                # However, for TextInput/Decimal/Integer attributes the raw
+                # value_text is valid and should be exported directly.
+                if pa.get("value_text"):
+                    entry["value"] = pa["value_text"]
+                else:
+                    continue
         elif pa["value_text"]:
             # Try to resolve via the value_text bridge (attribute_values -> mappings)
             val_mapping = resolver.resolve_value_by_text(
