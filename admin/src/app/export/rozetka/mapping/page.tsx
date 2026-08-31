@@ -4,10 +4,12 @@ import { useEffect, useState, useCallback, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api, qs } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
-import {
-  PageHeader, Button, Input, Select, Table, Th, Td,
-  Badge, LoadingState, ErrorState, Pagination, Modal, useToast,
-} from '@/components/ui';
+import RozetkaCategoryMappingFilterPanel from '@/components/mapping/RozetkaCategoryMappingFilters';
+import type { RozetkaCategoryMappingFilters as RozetkaCategoryMappingFilterValues } from '@/components/mapping/RozetkaCategoryMappingFilters';
+import RozetkaAttributeMappingFilterPanel from '@/components/mapping/RozetkaAttributeMappingFilters';
+import type { RozetkaAttributeMappingFilters as RozetkaAttributeMappingFilterValues } from '@/components/mapping/RozetkaAttributeMappingFilters';
+import RozetkaValueMappingFilterPanel from '@/components/mapping/RozetkaValueMappingFilters';
+import type { RozetkaValueMappingFilters as RozetkaValueMappingFilterValues } from '@/components/mapping/RozetkaValueMappingFilters';
 
 type Kind = 'categories' | 'attributes' | 'values';
 const TABS: { key: string; label: string }[] = [
@@ -16,6 +18,11 @@ const TABS: { key: string; label: string }[] = [
   { key: 'values', label: 'Значення атрибутів' },
   { key: 'coverage', label: 'Покриття' },
 ];
+
+import {
+  PageHeader, Button, Input, Select, Table, Th, Td,
+  Badge, LoadingState, ErrorState, Pagination, Modal, useToast,
+} from '@/components/ui';
 
 type ListResp<T> = { items: T[]; total: number; page: number; per_page: number };
 type CoverageBlock = {
@@ -175,24 +182,7 @@ function RozetkaMappingInner() {
   const [tab, setTab] = useState(
     () => (tabParam && TABS.some((x) => x.key === tabParam) ? tabParam : 'categories'),
   );
-  const [rows, setRows] = useState<any[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState(20);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
 
-  const [q, setQ] = useState(qParam);
-  const [appliedQ, setAppliedQ] = useState(qParam);
-  const [statusFilter, setStatusFilter] = useState('');
-  const [extCatFilter, setExtCatFilter] = useState(catParam);
-  const [attrFilter, setAttrFilter] = useState(
-    tabParam === 'values' ? attrParam : '',
-  );
-  const [scopeFilter, setScopeFilter] = useState('');
-
-  // Value mode: 'all' (existing mappings) or 'unmapped' (candidates)
-  const [valueMode, setValueMode] = useState<'all' | 'unmapped'>('all');
   // Scope selector for value mapping modal
   const [mappingScope, setMappingScope] = useState<'global' | 'category'>('global');
   const [scopeCategoryId, setScopeCategoryId] = useState('');
@@ -219,33 +209,11 @@ const [fExtCatChildren, setFExtCatChildren] = useState(0);
   const [fExtValName, setFExtValName] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const pages = Math.max(1, Math.ceil(total / perPage));
-
-  const load = useCallback(() => {
-    if (tab === 'coverage') {
-      api.get<Coverage>('/export/channels/rozetka/mapping-coverage')
-        .then((d) => setCoverage(d))
-        .catch((e: any) => toast.push('error', e.message || 'Помилка'));
-      return;
-    }
-    setLoading(true);
-    setError('');
-    const params: Record<string, string | number | undefined> = { page, per_page: perPage };
-    if (appliedQ) params.q = appliedQ;
-    if (statusFilter) params.status = statusFilter;
-    if (tab === 'attributes' || tab === 'values') {
-      if (extCatFilter) params.external_category_id = extCatFilter;
-      if (tab === 'values' && attrFilter) params.attribute_id = Number(attrFilter);
-      if (tab === 'values' && valueMode === 'unmapped') params.status = 'unmapped';
-      if (tab === 'attributes' && scopeFilter) params.scope = scopeFilter;
-    }
-    api.get<ListResp<any>>(`/export/channels/rozetka/mappings/${tab}` + qs(params))
-      .then((d) => { setRows(d.items); setTotal(d.total); })
-      .catch((e: any) => setError(e.message || 'Не вдалось завантажити'))
-      .finally(() => setLoading(false));
-  }, [tab, page, perPage, appliedQ, statusFilter, extCatFilter, attrFilter, scopeFilter, valueMode, toast]);
-
-  useEffect(() => { load(); }, [load]);
+  const loadCoverage = useCallback(() => {
+    api.get<Coverage>('/export/channels/rozetka/mapping-coverage')
+      .then((d) => setCoverage(d))
+      .catch((e: any) => toast.push('error', e.message || 'Помилка'));
+  }, [toast]);
 
   // Load categories for value mapping scope selector
   useEffect(() => {
@@ -255,11 +223,15 @@ const [fExtCatChildren, setFExtCatChildren] = useState(0);
       .catch(() => setVmCatLoaded(true));
   }, [vmCatLoaded]);
 
+  // Load coverage data when coverage tab is active
+  useEffect(() => {
+    if (tab === 'coverage') loadCoverage();
+  }, [tab, loadCoverage]);
+
   const handleDelete = async (id: number) => {
     if (!confirm('Видалити цей маппінг?')) return;
     try {
       await api.delete(`/export/channels/rozetka/mappings/${tab}/${id}`);
-      load();
       toast.push('success', 'Маппінг видалено');
     } catch (e: any) { toast.push('error', e.message || 'Помилка'); }
   };
@@ -270,7 +242,6 @@ const [fExtCatChildren, setFExtCatChildren] = useState(0);
       await api.post(`/export/channels/rozetka/mappings/${tab}`, body);
       toast.push('success', 'Збережено');
       setModalOpen(false);
-      load();
     } catch (e: any) { toast.push('error', e.message || 'Помилка'); }
     finally { setSaving(false); }
   };
@@ -281,7 +252,6 @@ const [fExtCatChildren, setFExtCatChildren] = useState(0);
       await api.put(`/export/channels/rozetka/mappings/${tab}/${id}`, body);
       toast.push('success', 'Оновлено');
       setModalOpen(false);
-      load();
     } catch (e: any) { toast.push('error', e.message || 'Помилка'); }
     finally { setSaving(false); }
   };
@@ -351,7 +321,7 @@ const [fExtCatChildren, setFExtCatChildren] = useState(0);
 
       <div className="flex gap-1 mb-4 border-b border-gray-200">
         {TABS.map((t) => (
-          <button key={t.key} onClick={() => { setTab(t.key); setPage(1); }}
+          <button key={t.key} onClick={() => setTab(t.key)}
             className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
               tab === t.key ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
             {t.label}
@@ -361,82 +331,12 @@ const [fExtCatChildren, setFExtCatChildren] = useState(0);
 
       {tab === 'coverage' ? (
         <CoverageView coverage={coverage} />
+      ) : tab === 'categories' ? (
+        <CategoriesMappingTab key="categories" openEdit={openEdit} openDelete={handleDelete} />
+      ) : tab === 'attributes' ? (
+        <AttributesMappingTab key="attributes" openEdit={openEdit} openDelete={handleDelete} />
       ) : (
-        <>
-          <div className="flex flex-wrap items-end gap-3 mb-4">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Пошук</label>
-              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Назва" className="w-48"
-                onKeyDown={(e) => { if (e.key === 'Enter') { setAppliedQ(q); setPage(1); } }} />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Статус</label>
-              <Select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}>
-                <option value="">Усі</option>
-                <option value="accepted">Прийнято</option>
-                <option value="proposed">Запропоновано</option>
-                <option value="excluded">Виключено</option>
-                <option value="unmapped">Не зіставлено</option>
-              </Select>
-            </div>
-            {(tab === 'attributes' || tab === 'values') && (
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Rozetka категорія</label>
-                <Input value={extCatFilter} onChange={(e) => { setExtCatFilter(e.target.value); setPage(1); }}
-                  placeholder="ID категорії" className="w-48" />
-              </div>
-            )}
-            {tab === 'values' && (
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Режим</label>
-                <div className="flex gap-0">
-                  <button
-                    onClick={() => { setValueMode('all'); setPage(1); }}
-                    className={`px-3 py-1.5 text-xs font-medium border rounded-l ${
-                      valueMode === 'all'
-                        ? 'bg-blue-600 text-white border-blue-600'
-                        : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-                    }`}
-                  >
-                    Усі маппінги
-                  </button>
-                  <button
-                    onClick={() => { setValueMode('unmapped'); setPage(1); }}
-                    className={`px-3 py-1.5 text-xs font-medium border rounded-r ${
-                      valueMode === 'unmapped'
-                        ? 'bg-blue-600 text-white border-blue-600'
-                        : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-                    }`}
-                  >
-                    Не зіставлені
-                  </button>
-                </div>
-              </div>
-            )}
-            {tab === 'attributes' && (
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Scope</label>
-                <Select value={scopeFilter} onChange={(e) => { setScopeFilter(e.target.value); setPage(1); }}>
-                  <option value="">Усі</option>
-                  <option value="global">Глобальні</option>
-                  <option value="category">Категорійні</option>
-                </Select>
-              </div>
-            )}
-            <Button onClick={() => { setAppliedQ(q); setPage(1); }}>Застосувати</Button>
-          </div>
-
-          {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={load} /> : (
-            <>
-              {tab === 'categories' && renderCategories(rows, openEdit)}
-              {tab === 'attributes' && renderAttributes(rows, openEdit)}
-              {tab === 'values' && renderValues(rows, openEdit, valueMode === 'unmapped')}
-              <Pagination page={page} pages={pages} total={total} onPage={setPage}
-                onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}
-                pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }} />
-            </>
-          )}
-        </>
+        <ValuesMappingTab key="values" openEdit={openEdit} openDelete={handleDelete} />
       )}
 
       {/* Kind-specific modals */}
@@ -538,7 +438,6 @@ const [fExtCatChildren, setFExtCatChildren] = useState(0);
     </div>
   );
 }
-
 /* ── Table renderers ───────────────────────────────────────── */
 
 function CategoryTypeBadge({ r }: { r: any }) {
@@ -657,6 +556,140 @@ function renderValues(rows: any[], openEdit: (r: any) => void, unmappedMode = fa
 
 /* ── Coverage view ─────────────────────────────────────────── */
 
+/* ── Self-contained tab components (isolated filter state) ──────────── */
+
+function CategoriesMappingTab({ openEdit, openDelete }: {
+  openEdit: (r: any) => void; openDelete: (id: number) => void;
+}) {
+  const [appliedFilters, setAppliedFilters] = useState<RozetkaCategoryMappingFilterValues>({
+    internalParentCategoryIds: '', externalCategoryIds: '', statusFilter: '',
+  });
+  const [rows, setRows] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(20);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const load = useCallback(() => {
+    setLoading(true); setError('');
+    const params: Record<string, string | number | undefined> = { page, per_page: perPage };
+    if (appliedFilters.internalParentCategoryIds) params.internal_parent_category_ids = appliedFilters.internalParentCategoryIds;
+    if (appliedFilters.externalCategoryIds) params.external_category_ids = appliedFilters.externalCategoryIds;
+    if (appliedFilters.statusFilter) params.status = appliedFilters.statusFilter;
+    api.get<ListResp<any>>('/export/channels/rozetka/mappings/categories' + qs(params))
+      .then((d) => { setRows(d.items); setTotal(d.total); })
+      .catch((e: any) => setError(e.message || 'Не вдалось завантажити'))
+      .finally(() => setLoading(false));
+  }, [page, perPage, appliedFilters]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setPage(1); }, [appliedFilters]);
+  const pages = Math.max(1, Math.ceil(total / perPage));
+  const handleApply = (filters: RozetkaCategoryMappingFilterValues) => {
+    setAppliedFilters(filters);
+    setPage(1);
+  };
+  if (loading) return <LoadingState />;
+  if (error) return <ErrorState message={error} onRetry={load} />;
+  return (<>
+    <RozetkaCategoryMappingFilterPanel onApply={handleApply} />
+    {renderCategories(rows, openEdit)}
+    <Pagination page={page} pages={pages} total={total} onPage={setPage}
+      onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}
+      pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }} />
+  </>);
+}
+function AttributesMappingTab({ openEdit, openDelete }: {
+  openEdit: (r: any) => void; openDelete: (id: number) => void;
+}) {
+  const [appliedFilters, setAppliedFilters] = useState<RozetkaAttributeMappingFilterValues>({
+    internalAttrIds: '', externalAttrIds: '', externalCategoryIds: '',
+    statusFilter: '', scopeFilter: '',
+  });
+  const [rows, setRows] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(20);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const load = useCallback(() => {
+    setLoading(true); setError('');
+    const params: Record<string, string | number | undefined> = { page, per_page: perPage };
+    if (appliedFilters.internalAttrIds) params.internal_attr_ids = appliedFilters.internalAttrIds;
+    if (appliedFilters.externalAttrIds) params.external_attribute_ids = appliedFilters.externalAttrIds;
+    if (appliedFilters.externalCategoryIds) params.external_category_ids = appliedFilters.externalCategoryIds;
+    if (appliedFilters.statusFilter) params.status = appliedFilters.statusFilter;
+    if (appliedFilters.scopeFilter) params.scope = appliedFilters.scopeFilter;
+    api.get<ListResp<any>>('/export/channels/rozetka/mappings/attributes' + qs(params))
+      .then((d) => { setRows(d.items); setTotal(d.total); })
+      .catch((e: any) => setError(e.message || 'Не вдалось завантажити'))
+      .finally(() => setLoading(false));
+  }, [page, perPage, appliedFilters]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setPage(1); }, [appliedFilters]);
+  const pages = Math.max(1, Math.ceil(total / perPage));
+  const handleApply = (filters: RozetkaAttributeMappingFilterValues) => {
+    setAppliedFilters(filters);
+    setPage(1);
+  };
+  if (loading) return <LoadingState />;
+  if (error) return <ErrorState message={error} onRetry={load} />;
+  return (<>
+    <RozetkaAttributeMappingFilterPanel onApply={handleApply} />
+    {renderAttributes(rows, openEdit)}
+    <Pagination page={page} pages={pages} total={total} onPage={setPage}
+      onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}
+      pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }} />
+  </>);
+}
+function ValuesMappingTab({ openEdit, openDelete }: {
+  openEdit: (r: any) => void; openDelete: (id: number) => void;
+}) {
+  const [appliedFilters, setAppliedFilters] = useState<RozetkaValueMappingFilterValues>({
+    internalAttrIds: '', externalAttrIds: '', externalCategoryIds: '',
+    internalValueQ: '', externalValueQ: '',
+    statusFilter: '', valueMode: 'all',
+  });
+  const [rows, setRows] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(20);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const load = useCallback(() => {
+    setLoading(true); setError('');
+    const params: Record<string, string | number | undefined> = { page, per_page: perPage };
+    // Internal value text search
+    if (appliedFilters.internalValueQ) params.internal_q = appliedFilters.internalValueQ;
+    // Rozetka value text search
+    if (appliedFilters.externalValueQ) params.external_q = appliedFilters.externalValueQ;
+    // Multi-select entity filters
+    if (appliedFilters.internalAttrIds) params.internal_attr_ids = appliedFilters.internalAttrIds;
+    if (appliedFilters.externalAttrIds) params.external_attribute_ids = appliedFilters.externalAttrIds;
+    if (appliedFilters.externalCategoryIds) params.external_category_ids = appliedFilters.externalCategoryIds;
+    if (appliedFilters.statusFilter) params.status = appliedFilters.statusFilter;
+    if (appliedFilters.valueMode === 'unmapped') params.status = 'unmapped';
+    api.get<ListResp<any>>('/export/channels/rozetka/mappings/values' + qs(params))
+      .then((d) => { setRows(d.items); setTotal(d.total); })
+      .catch((e: any) => setError(e.message || 'Не вдалось завантажити'))
+      .finally(() => setLoading(false));
+  }, [page, perPage, appliedFilters]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setPage(1); }, [appliedFilters]);
+  const pages = Math.max(1, Math.ceil(total / perPage));
+  const handleApply = (filters: RozetkaValueMappingFilterValues) => {
+    setAppliedFilters(filters);
+    setPage(1);
+  };
+  if (loading) return <LoadingState />;
+  if (error) return <ErrorState message={error} onRetry={load} />;
+  return (<>
+    <RozetkaValueMappingFilterPanel onApply={handleApply} />
+    {renderValues(rows, openEdit, appliedFilters.valueMode === 'unmapped')}
+    <Pagination page={page} pages={pages} total={total} onPage={setPage}
+      onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}
+      pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }} />
+  </>);
+}
 function CoverageView({ coverage }: { coverage: Coverage | null }) {
   if (!coverage) return <LoadingState label="Завантаження покриття..." />;
   const blocks: { label: string; key: keyof Coverage }[] = [

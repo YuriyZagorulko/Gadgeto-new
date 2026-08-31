@@ -1,8 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { api, qs } from '@/lib/api';
-import MappingReview from '@/components/MappingReview';
 import { formatDateTime } from '@/lib/format';
 import {
   PageHeader,
@@ -20,18 +19,24 @@ import {
   ConfirmDialog,
   useToast,
 } from '@/components/ui';
+import EntityMultiSelect, {
+  useInternalCategories,
+  InternalCategorySelect,
+  InternalParentCategorySelect,
+  type CatOpt,
+} from '@/components/mapping/EntityMultiSelect';
+import ImportAttributeValueMappingFilterPanel from '@/components/import/ImportAttributeValueMappingFilters';
+import type { ImportAttributeValueMappingFilters as ImportAttributeValueMappingFilterValues } from '@/components/import/ImportAttributeValueMappingFilters';
 
-type Kind = 'attributes' | 'values' | 'categories' | 'review';
+type Kind = 'attributes' | 'values' | 'categories';
 
 const TABS: { key: Kind; label: string }[] = [
   { key: 'attributes', label: 'Маппінг атрибутів' },
   { key: 'values', label: 'Маппінг значень атрибутів' },
   { key: 'categories', label: 'Маппінг категорій' },
-  { key: 'review', label: 'Потребує перевірки' },
 ];
 
 const COLUMN_LABELS: Record<Kind, { supplierItem: string; catalog: string; attribute?: string }> = {
-  review: { supplierItem: '', catalog: '' },
   attributes: { supplierItem: 'Атрибут постачальника', catalog: 'Внутрішній атрибут' },
   values: { supplierItem: 'Значення постачальника', catalog: 'Внутрішнє значення', attribute: 'Атрибут' },
   categories: { supplierItem: 'Категорія постачальника', catalog: 'Внутрішня категорія' },
@@ -65,6 +70,35 @@ type SortDir = 'asc' | 'desc';
 export default function MappingsPage() {
   const toast = useToast();
   const [kind, setKind] = useState<Kind>('attributes');
+
+  // Per-kind filter state cache — each tab keeps its own independent state
+  type KindState = {
+    q: string; appliedQ: string; sortBy: SortKey; sortDir: SortDir;
+    page: number; perPage: number;
+    rows: Row[]; total: number; loading: boolean; error: string; tick: number;
+    fScope: string; fStatus: string; fMapped: string; fCatContext: string;
+    fInternalCategoryIds: string; fInternalParentCategoryIds: string; fInternalAttrIds: string;
+  };
+  const kindCache = useRef<Record<Kind, KindState>>({
+    attributes: { q: '', appliedQ: '', sortBy: 'updated_at' as SortKey, sortDir: 'desc' as SortDir, page: 1, perPage: 20, rows: [], total: 0, loading: true, error: '', tick: 0, fScope: '', fStatus: '', fMapped: '', fCatContext: '', fInternalCategoryIds: '', fInternalParentCategoryIds: '', fInternalAttrIds: '' },
+    values: { q: '', appliedQ: '', sortBy: 'updated_at' as SortKey, sortDir: 'desc' as SortDir, page: 1, perPage: 20, rows: [], total: 0, loading: true, error: '', tick: 0, fScope: '', fStatus: '', fMapped: '', fCatContext: '', fInternalCategoryIds: '', fInternalParentCategoryIds: '', fInternalAttrIds: '' },
+    categories: { q: '', appliedQ: '', sortBy: 'updated_at' as SortKey, sortDir: 'desc' as SortDir, page: 1, perPage: 20, rows: [], total: 0, loading: true, error: '', tick: 0, fScope: '', fStatus: '', fMapped: '', fCatContext: '', fInternalCategoryIds: '', fInternalParentCategoryIds: '', fInternalAttrIds: '' },
+  });
+
+  const switchKind = (k: Kind) => {
+    // Save current kind's state to cache
+    kindCache.current[kind] = { q, appliedQ, sortBy, sortDir, page, perPage, rows, total, loading, error, tick, fScope, fStatus, fMapped, fCatContext, fInternalCategoryIds: fInternalCategoryIds.join(','), fInternalParentCategoryIds: fInternalParentCategoryIds.join(','), fInternalAttrIds: fInternalAttrIds.join(',') };
+    // Load target kind's state from cache
+    const s = kindCache.current[k];
+    setQ(s.q); setAppliedQ(s.appliedQ); setSortBy(s.sortBy); setSortDir(s.sortDir);
+    setPage(s.page); setPerPage(s.perPage); setRows(s.rows); setTotal(s.total);
+    setLoading(s.loading); setError(s.error); setTick(s.tick);
+    setFScope(s.fScope); setFStatus(s.fStatus); setFMapped(s.fMapped); setFCatContext(s.fCatContext);
+    setFInternalCategoryIds(s.fInternalCategoryIds ? s.fInternalCategoryIds.split(',').filter(Boolean).map(Number) : []);
+    setFInternalParentCategoryIds(s.fInternalParentCategoryIds ? s.fInternalParentCategoryIds.split(',').filter(Boolean).map(Number) : []);
+    setFInternalAttrIds(s.fInternalAttrIds ? s.fInternalAttrIds.split(',').filter(Boolean).map(Number) : []);
+    setKind(k);
+  };
   const [q, setQ] = useState('');
   const [appliedQ, setAppliedQ] = useState('');
   const [sortBy, setSortBy] = useState<SortKey>('updated_at');
@@ -94,6 +128,25 @@ export default function MappingsPage() {
   const [fCatContext, setFCatContext] = useState('');  // '' | 'true' | 'false'       // values: holder attr
   const [fInternalAttrId, setFInternalAttrId] = useState(''); // values only
   const [fCatalogId, setFCatalogId] = useState('');
+  const [fInternalCategoryIds, setFInternalCategoryIds] = useState<(string | number)[]>([]);
+  const [fInternalParentCategoryIds, setFInternalParentCategoryIds] = useState<(string | number)[]>([]);
+  const [fInternalAttrIds, setFInternalAttrIds] = useState<(string | number)[]>([]);
+  const { cats: internalCatOpts, loading: catsLoading } = useInternalCategories();
+
+  // Values-specific filter state (owned by ImportAttributeValueMappingFilterPanel)
+  const valuesFilterRef = useRef<ImportAttributeValueMappingFilterValues>({
+    q: '', appliedQ: '',
+    supplierAttrIds: '', supplierAttrQ: '', supplierValueQ: '',
+    fStatus: '', fMapped: '', fScope: '',
+  });
+  const [fValQ, setFValQ] = useState('');
+  const [fValAppliedQ, setFValAppliedQ] = useState('');
+  const [fValSupplierAttrIds, setFValSupplierAttrIds] = useState('');
+  const [fValSupplierAttrQ, setFValSupplierAttrQ] = useState('');
+  const [fValSupplierValueQ, setFValSupplierValueQ] = useState('');
+  const [fValStatus, setFValStatus] = useState('');
+  const [fValMapped, setFValMapped] = useState('');
+  const [fValScope, setFValScope] = useState('');
   const [fActive, setFActive] = useState(true);
   const [saving, setSaving] = useState(false);
   const [togglingId, setTogglingId] = useState<number | null>(null);
@@ -113,31 +166,60 @@ export default function MappingsPage() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setError('');
-    const scopeSup = fScope && fScope !== 'global'
-      ? suppliers.find((x) => x.code === fScope)?.id : undefined;
-    api.get<ListResp>(`/mappings/${kind}` + qs({
-      page, per_page: perPage,
-      q: appliedQ || undefined,
-      sort_by: sortBy, sort_dir: sortDir,
-      active: fStatus === '' ? undefined : fStatus === 'true',
-      mapped: fMapped === '' ? undefined : fMapped === 'true',
-      scope: fScope === 'global' ? 'global' : (fScope ? 'supplier' : undefined),
-      supplier_id: scopeSup,
-      has_category_context: fCatContext === '' ? undefined : fCatContext === 'true',
-    }))
+    const isValues = kind === 'values';
+    const scopeVal = isValues ? fValScope : fScope;
+    const scopeSup = scopeVal && scopeVal !== 'global'
+      ? suppliers.find((x) => x.code === scopeVal)?.id : undefined;
+    const params: Record<string, string | number | boolean | undefined> = { page, per_page: perPage, sort_by: sortBy, sort_dir: sortDir };
+    if (isValues) {
+      params.q = fValAppliedQ || undefined;
+      params.active = fValStatus === '' ? undefined : fValStatus === 'true';
+      params.mapped = fValMapped === '' ? undefined : fValMapped === 'true';
+      params.scope = fValScope === 'global' ? 'global' : (fValScope ? 'supplier' : undefined);
+      params.supplier_id = scopeSup;
+      if (fValSupplierAttrIds) params.supplier_attr_ids = fValSupplierAttrIds;
+      if (fValSupplierAttrQ) params.supplier_attr_q = fValSupplierAttrQ;
+      if (fValSupplierValueQ) params.supplier_value_q = fValSupplierValueQ;
+    } else {
+      params.q = appliedQ || undefined;
+      params.active = fStatus === '' ? undefined : fStatus === 'true';
+      params.mapped = fMapped === '' ? undefined : fMapped === 'true';
+      params.scope = fScope === 'global' ? 'global' : (fScope ? 'supplier' : undefined);
+      params.supplier_id = scopeSup;
+      if (kind !== 'categories') {
+        params.has_category_context = fCatContext === '' ? undefined : fCatContext === 'true';
+      }
+      if (kind === 'categories' || kind === 'attributes') {
+        if (fInternalCategoryIds.length) params.internal_category_ids = fInternalCategoryIds.join(',');
+        if (fInternalParentCategoryIds.length) params.internal_parent_category_ids = fInternalParentCategoryIds.join(',');
+      }
+      if (kind === 'attributes') {
+        if (fInternalAttrIds.length) params.internal_attr_ids = fInternalAttrIds.join(',');
+      }
+    }
+    api.get<ListResp>(`/mappings/${kind}` + qs(params))
       .then((d) => { if (!cancelled) { setRows(d.items || []); setTotal(d.total); } })
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, [kind, appliedQ, sortBy, sortDir, page, perPage, tick, fScope, fStatus, fMapped, suppliers]);
+  }, [kind, appliedQ, sortBy, sortDir, page, perPage, tick, fScope, fStatus, fMapped, suppliers, fInternalCategoryIds, fInternalParentCategoryIds, fInternalAttrIds, fValAppliedQ, fValStatus, fValMapped, fValScope, fValSupplierAttrIds, fValSupplierAttrQ, fValSupplierValueQ]);
 
-  useEffect(() => { setPage(1); }, [kind, appliedQ, sortBy, sortDir, perPage, fScope, fStatus, fMapped]);
+  useEffect(() => { setPage(1); }, [kind, appliedQ, sortBy, sortDir, perPage, fScope, fStatus, fMapped, fInternalCategoryIds, fInternalParentCategoryIds, fInternalAttrIds, fValAppliedQ, fValStatus, fValMapped, fValScope, fValSupplierAttrIds, fValSupplierAttrQ, fValSupplierValueQ]);
 
   const resetFilters = () => {
-    setQ(''); setAppliedQ(''); setFStatus(''); setFMapped(''); setFScope(''); setFCatContext('');
+    if (kind === 'values') {
+      setFValQ(''); setFValAppliedQ(''); setFValSupplierAttrIds(''); setFValSupplierAttrQ(''); setFValSupplierValueQ('');
+      setFValStatus(''); setFValMapped(''); setFValScope('');
+      valuesFilterRef.current = { q: '', appliedQ: '', supplierAttrIds: '', supplierAttrQ: '', supplierValueQ: '', fStatus: '', fMapped: '', fScope: '' };
+    } else {
+      setQ(''); setAppliedQ(''); setFStatus(''); setFMapped(''); setFScope(''); setFCatContext('');
+      setFInternalCategoryIds([]); setFInternalParentCategoryIds([]); setFInternalAttrIds([]);
+    }
   };
 
-  const hasFilters = !!(appliedQ || fStatus || fMapped || fScope);
+  const hasFilters = kind === 'values'
+    ? !!(fValAppliedQ || fValSupplierAttrIds || fValSupplierAttrQ || fValSupplierValueQ || fValStatus || fValMapped || fValScope)
+    : !!(appliedQ || fStatus || fMapped || fScope || fInternalCategoryIds.length || fInternalParentCategoryIds.length || fInternalAttrIds.length);
 
   const toggleSort = (key: SortKey) => {
     if (sortBy === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -258,7 +340,7 @@ const openCreate = () => {
       {/* Tabs */}
       <div className="flex gap-1 mb-4 border-b border-gray-200 flex-wrap">
         {TABS.map((t) => (
-          <button key={t.key} onClick={() => { setKind(t.key); setAppliedQ(''); setQ(''); }}
+          <button key={t.key} onClick={() => switchKind(t.key)}
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
               kind === t.key ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-800'
             }`}>
@@ -268,12 +350,57 @@ const openCreate = () => {
       </div>
 
       {/* Toolbar */}
+      {kind === 'values' ? (
+        <ImportAttributeValueMappingFilterPanel
+          onApply={(filters) => {
+            valuesFilterRef.current = filters;
+            setFValQ(filters.q);
+            setFValAppliedQ(filters.appliedQ);
+            setFValSupplierAttrIds(filters.supplierAttrIds);
+            setFValSupplierAttrQ(filters.supplierAttrQ);
+            setFValSupplierValueQ(filters.supplierValueQ);
+            setFValStatus(filters.fStatus);
+            setFValMapped(filters.fMapped);
+            setFValScope(filters.fScope);
+            setPage(1);
+          }}
+          suppliers={suppliers}
+          initialFilters={valuesFilterRef.current}
+        />
+      ) : (
       <div className="bg-white border border-gray-200 rounded-lg p-3 mb-4 flex flex-wrap gap-3 items-end">
         <div className="w-64">
           <label className="block text-xs text-gray-500 mb-1">Пошук</label>
           <Input value={q} onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') setAppliedQ(q); }}
             placeholder={`Постачальник, ${COLUMN_LABELS[kind].supplierItem.toLowerCase()}…`} />
+        </div>
+        <div className="w-56">
+          <InternalCategorySelect
+            label="Внутрішня категорія"
+            selected={fInternalCategoryIds}
+            onChange={setFInternalCategoryIds}
+            cats={internalCatOpts}
+            loading={catsLoading}
+          />
+        </div>
+        <div className="w-56">
+          <InternalParentCategorySelect
+            label="Батьківська категорія"
+            selected={fInternalParentCategoryIds}
+            onChange={setFInternalParentCategoryIds}
+            cats={internalCatOpts}
+            loading={catsLoading}
+          />
+        </div>
+        <div className="w-56">
+          <EntityMultiSelect
+            endpoint="/attributes"
+            label="Внутрішній атрибут"
+            selected={fInternalAttrIds}
+            onChange={setFInternalAttrIds}
+            placeholder="Введіть для пошуку атрибутів..."
+          />
         </div>
         <div className="w-40">
           <label className="block text-xs text-gray-500 mb-1">Статус</label>
@@ -307,6 +434,7 @@ const openCreate = () => {
           <Button onClick={openCreate}>＋ Додати маппінг</Button>
         </div>
       </div>
+      )}
 
       {error && <ErrorState message={error} onRetry={reload} />}
       {!error && loading && <LoadingState label="Завантаження маппінгу..." />}
@@ -556,12 +684,7 @@ const openCreate = () => {
         onCancel={() => setDeleting(null)}
       />
 
-      {kind === 'review' && (
-        <div className="mt-4">
-          <MappingReview />
-        </div>
-      )}
-    </div>
+      </div>
   );
 }
 
@@ -569,57 +692,4 @@ const openCreate = () => {
 
 
 
-// ── Mapping Review Components ──────────────────────────────────────────
 
-function AmbiguousMappingsSection() {
-  const toast = useToast();
-  const [rows, setRows] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [assigning, setAssigning] = useState<number | null>(null);
-  const [cats, setCats] = useState<{ id: number; name: string }[]>([]);
-
-  useEffect(() => {
-    api.get<{ items: any[] }>('/categories').then((d) => setCats(d.items || [])).catch(() => {});
-  }, []);
-
-  const load = () => {
-    setLoading(true);
-    api.get<{ items: any[]; total: number }>('/mappings/attributes' + qs({
-      per_page: 200, has_category_context: false, mapped: true, active: true,
-    })).then((d) => {
-      // Filter to only those whose target attr has >1 category (ambiguous) or 0 (unassigned)
-      setRows(d.items.filter((r: any) => r.catalog_name));
-    }).catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  };
-  useEffect(() => { load(); }, []);
-
-  if (loading) return <LoadingState />;
-  if (error) return <ErrorState message={error} />;
-
-  return <div className="text-sm text-gray-500 p-4">Use the filter above to find mappings needing review.</div>;
-}
-
-function OrphanValueMappingsSection() {
-  const toast = useToast();
-  const [orphans, setOrphans] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const load = async () => {
-    setLoading(true);
-    try {
-      const d = await api.get<{ items: any[]; total: number }>('/mappings/values?per_page=200');
-      // Note: orphan detection requires backend support - for now show all
-      setOrphans(d.items || []);
-    } catch {
-      setOrphans([]);
-    } finally { setLoading(false); }
-  };
-  useEffect(() => { load(); }, []);
-
-  if (loading) return <LoadingState />;
-  if (orphans.length === 0) return <div className="text-sm text-gray-500 p-4">Всі значення мають активний батьківський маппінг.</div>;
-
-  return <div className="text-sm text-gray-500 p-4">Використовуйте фільтри вище для пошуку проблемних маппінгів.</div>;
-}

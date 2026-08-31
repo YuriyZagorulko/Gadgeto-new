@@ -67,11 +67,13 @@ _LIST_SQL = {
         "joins": """JOIN supplier_attribute_values sav ON sav.id = m.supplier_attribute_value_id
                     JOIN supplier_attributes ha ON ha.id = sav.supplier_attribute_id
                     LEFT JOIN suppliers s ON s.id = ha.supplier_id
-                    LEFT JOIN attribute_values av ON av.id = m.attribute_value_id""",
+                    LEFT JOIN attribute_values av ON av.id = m.attribute_value_id
+                    LEFT JOIN attributes attr ON attr.id = av.attribute_id""",
         "select_names": """ha.supplier_name AS holder_name,
                            sav.supplier_value AS supplier_item_name, av.value AS catalog_name,
+                           attr.name AS internal_attr_name,
                            (ha.supplier_id IS NULL) AS is_global""",
-        "search": ["ha.supplier_name", "sav.supplier_value", "av.value", "s.code"],
+        "search": ["ha.supplier_name", "sav.supplier_value", "av.value", "attr.name", "s.code"],
         "sort": {
             "id": "m.id", "supplier": "s.name", "supplier_code": "s.code",
             "attribute": "ha.supplier_name",
@@ -102,7 +104,7 @@ def _paged(cur, base_sql: str, count_sql: str, params: list, page: int, per_page
 def lookup_supplier_categories(
     supplier_id: Optional[int] = None, q: Optional[str] = None,
     unmapped: bool = False, page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=100),
+    per_page: int = Query(20, ge=1, le=500),
     user: dict = Depends(require_admin),
 ):
     conn, cur = admin_cursor()
@@ -132,7 +134,7 @@ def lookup_supplier_categories(
 def lookup_supplier_attributes(
     supplier_id: Optional[int] = None, q: Optional[str] = None,
     unmapped: bool = False, page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=100),
+    per_page: int = Query(20, ge=1, le=500),
     user: dict = Depends(require_admin),
 ):
     conn, cur = admin_cursor()
@@ -163,7 +165,7 @@ def lookup_supplier_attributes(
 def lookup_supplier_values(
     attribute_id: Optional[int] = None, q: Optional[str] = None,
     unmapped: bool = False, page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=100),
+    per_page: int = Query(20, ge=1, le=500),
     user: dict = Depends(require_admin),
 ):
     conn, cur = admin_cursor()
@@ -1310,7 +1312,25 @@ def list_mappings(
     active: Optional[bool] = None, mapped: Optional[bool] = None,
     scope: Optional[str] = Query(None, pattern="^(global|supplier)$"),
     internal_category_id: Optional[int] = None,
+    attribute_id: Optional[int] = Query(None, description="Filter by internal attribute ID (values tab)"),
+    supplier_category_id: Optional[int] = Query(None, description="Filter by supplier category (categories/attributes)"),
+    parent_category_id: Optional[int] = Query(None, description="Filter by parent category ID (categories)"),
     has_category_context: Optional[bool] = Query(None, description="Filter by whether category_id is set"),
+    # Phase 46: dedicated text-search filters (AND-based)
+    supplier_value_q: Optional[str] = Query(None, description="Search supplier value by name (values tab)"),
+    internal_value_q: Optional[str] = Query(None, description="Search internal value by name (values tab)"),
+    internal_attr_q: Optional[str] = Query(None, description="Search internal attribute by name (values/attributes tab)"),
+    supplier_attr_q: Optional[str] = Query(None, description="Search supplier attribute (holder) by name (values tab)"),
+    supplier_attr_ids: Optional[str] = Query(None, description="Comma-separated supplier attribute IDs (values tab)"),
+    supplier_category_q: Optional[str] = Query(None, description="Search supplier category by name (categories tab)"),
+    internal_category_q: Optional[str] = Query(None, description="Search internal category by name (categories/attributes tab)"),
+    parent_category_q: Optional[str] = Query(None, description="Search parent internal category by name"),
+    # Phase 48: multi-value entity filters (comma-separated IDs for OR-within-filter)
+    internal_attr_ids: Optional[str] = Query(None, description="Comma-separated internal attribute IDs"),
+    internal_category_ids: Optional[str] = Query(None, description="Comma-separated internal category IDs (attributes tab via cat.id)"),
+    supplier_category_ids: Optional[str] = Query(None, description="Comma-separated supplier category IDs"),
+    # Phase 51: multi-value parent category filter (OR within filter)
+    internal_parent_category_ids: Optional[str] = Query(None, description="Comma-separated parent category IDs"),
     sort_by: Optional[str] = None, sort_dir: str = Query("asc", pattern="^(asc|desc)$"),
     page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
     user: dict = Depends(require_admin),
@@ -1342,6 +1362,106 @@ def list_mappings(
             params.append(internal_category_id)
         if has_category_context is not None and kind == "attributes":
             conds.append("m.category_id IS " + ("NOT NULL" if has_category_context else "NULL"))
+        if attribute_id is not None and kind == "values":
+            conds.append("av.attribute_id = %s")
+            params.append(attribute_id)
+        if supplier_category_id is not None and kind in ("categories", "attributes"):
+            conds.append("m.supplier_category_id = %s")
+            params.append(supplier_category_id)
+        if parent_category_id is not None and kind == "categories":
+            conds.append("EXISTS (SELECT 1 FROM categories pc WHERE pc.id = c.parent_id AND pc.id = %s)")
+            params.append(parent_category_id)
+        # Phase 46: dedicated text-search filters
+        if supplier_value_q is not None and kind == "values":
+            conds.append("sav.supplier_value ILIKE %s")
+            params.append(f"%{supplier_value_q}%")
+        if internal_value_q is not None and kind == "values":
+            conds.append("av.value ILIKE %s")
+            params.append(f"%{internal_value_q}%")
+        if internal_attr_q is not None:
+            if kind == "values":
+                conds.append("attr.name ILIKE %s")
+            elif kind == "attributes":
+                conds.append("a.name ILIKE %s")
+            if kind in ("values", "attributes"):
+                params.append(f"%{internal_attr_q}%")
+        if supplier_attr_q is not None and kind == "values":
+            conds.append("ha.supplier_name ILIKE %s")
+            params.append(f"%{supplier_attr_q}%")
+        if supplier_category_q is not None and kind == "categories":
+            conds.append("sc.supplier_name ILIKE %s")
+            params.append(f"%{supplier_category_q}%")
+        if internal_category_q is not None:
+            if kind == "categories":
+                conds.append("c.name ILIKE %s")
+            elif kind == "attributes":
+                conds.append("cat.name ILIKE %s")
+            if kind in ("categories", "attributes"):
+                params.append(f"%{internal_category_q}%")
+        # Phase 47: parent internal category search (categories have parent_id)
+        if parent_category_q is not None and kind in ("categories", "attributes"):
+            if kind == "categories":
+                conds.append("EXISTS (SELECT 1 FROM categories pc WHERE pc.id = c.parent_id AND pc.name ILIKE %s)")
+            elif kind == "attributes":
+                conds.append("EXISTS (SELECT 1 FROM categories pc WHERE pc.id = cat.parent_id AND pc.name ILIKE %s)")
+            params.append(f"%{parent_category_q}%")
+        # Phase 48: multi-value entity filters (OR within filter, AND between filters)
+        if internal_attr_ids is not None:
+            ids = [x.strip() for x in internal_attr_ids.split(",") if x.strip()]
+            if ids:
+                placeholders = ", ".join(["%s"] * len(ids))
+                if kind == "values":
+                    conds.append(f"av.attribute_id IN ({placeholders})")
+                    params.extend(ids)
+                elif kind == "attributes":
+                    conds.append(f"a.id IN ({placeholders})")
+                    params.extend(ids)
+                # kind == "categories": attributes are not applicable there —
+                # no condition and no params (keeps SQL placeholder count right)
+        if internal_category_ids is not None and kind in ("categories", "attributes", "values"):
+            ids = [x.strip() for x in internal_category_ids.split(",") if x.strip()]
+            if ids:
+                placeholders = ", ".join(["%s"] * len(ids))
+                if kind == "categories":
+                    conds.append(f"c.id IN ({placeholders})")
+                elif kind == "attributes":
+                    conds.append(f"cat.id IN ({placeholders})")
+                elif kind == "values":
+                    # Internal categories of the value's attribute (category_attributes)
+                    conds.append(
+                        "EXISTS (SELECT 1 FROM category_attributes ca"
+                        f" WHERE ca.attribute_id = av.attribute_id AND ca.category_id IN ({placeholders}))"
+                    )
+                params.extend(ids)
+        if supplier_category_ids is not None and kind == "categories":
+            ids = [x.strip() for x in supplier_category_ids.split(",") if x.strip()]
+            if ids:
+                placeholders = ", ".join(["%s"] * len(ids))
+                conds.append(f"sc.id IN ({placeholders})")
+                params.extend(ids)
+        if supplier_attr_ids is not None and kind == "values":
+            ids = [x.strip() for x in supplier_attr_ids.split(",") if x.strip()]
+            if ids:
+                placeholders = ", ".join(["%s"] * len(ids))
+                conds.append(f"ha.id IN ({placeholders})")
+                params.extend(ids)
+        # Phase 51: multi-value parent internal category filter
+        if internal_parent_category_ids is not None and kind in ("categories", "attributes", "values"):
+            ids = [x.strip() for x in internal_parent_category_ids.split(",") if x.strip()]
+            if ids:
+                placeholders = ", ".join(["%s"] * len(ids))
+                if kind == "categories":
+                    conds.append(f"c.parent_id IN ({placeholders})")
+                elif kind == "attributes":
+                    conds.append(f"cat.parent_id IN ({placeholders})")
+                elif kind == "values":
+                    # Parent internal category of the value's attribute
+                    conds.append(
+                        "EXISTS (SELECT 1 FROM category_attributes ca"
+                        " JOIN categories pc ON pc.id = ca.category_id"
+                        f" WHERE ca.attribute_id = av.attribute_id AND pc.parent_id IN ({placeholders}))"
+                    )
+                params.extend(ids)
         where = " AND ".join(conds)
 
         order_col = L["sort"].get(sort_by or "", L["sort"]["id"])

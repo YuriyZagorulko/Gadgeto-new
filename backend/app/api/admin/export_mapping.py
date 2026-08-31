@@ -78,7 +78,14 @@ def _resolve_kind(kind: str):
     return _KIND_MAP[kind]
 
 
-def _list_category_mappings(cur, cid: int, q, status_filter, page: int, per_page: int):
+def _list_category_mappings(cur, cid: int, q, status_filter, page: int, per_page: int,
+                             parent_category_q: Optional[str] = None,
+                             internal_category_ids: Optional[str] = None,
+                             internal_parent_category_ids: Optional[str] = None,
+                             internal_q: Optional[str] = None,
+                             external_q: Optional[str] = None,
+                             external_category_ids: Optional[str] = None,
+                             external_parent_category_ids: Optional[str] = None):
     """All internal categories with their (optional) channel mapping row.
 
     Includes Rozetka category metadata: children_count, attribute_count, is_leaf.
@@ -89,11 +96,46 @@ def _list_category_mappings(cur, cid: int, q, status_filter, page: int, per_page
         where_conds.append(
             "(i.name ILIKE %s OR COALESCE(m.external_category_name, '') ILIKE %s)")
         where_params.extend([f"%{q}%", f"%{q}%"])
+    else:
+        if internal_q:
+            where_conds.append("i.name ILIKE %s")
+            where_params.append(f"%{internal_q}%")
+        if external_q:
+            where_conds.append("COALESCE(m.external_category_name, '') ILIKE %s")
+            where_params.append(f"%{external_q}%")
     if status_filter == "unmapped":
         where_conds.append("m.id IS NULL")
     elif status_filter:
         where_conds.append("m.status = %s")
         where_params.append(status_filter)
+    if parent_category_q:
+        where_conds.append("EXISTS (SELECT 1 FROM channel_external_categories pc WHERE pc.channel_id = %s AND pc.external_id = ec.parent_external_id AND pc.name ILIKE %s)")
+        where_params.extend([cid, f"%{parent_category_q}%"])
+    # Phase 52: multi-value entity filters
+    if internal_category_ids:
+        ids = [x.strip() for x in internal_category_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where_conds.append(f"i.id IN ({placeholders})")
+            where_params.extend(ids)
+    if internal_parent_category_ids:
+        ids = [x.strip() for x in internal_parent_category_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where_conds.append(f"i.parent_id IN ({placeholders})")
+            where_params.extend(ids)
+    if external_category_ids:
+        ids = [x.strip() for x in external_category_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where_conds.append(f"m.external_category_id IN ({placeholders})")
+            where_params.extend(ids)
+    if external_parent_category_ids:
+        ids = [x.strip() for x in external_parent_category_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where_conds.append(f"ec.parent_external_id IN ({placeholders})")
+            where_params.extend(ids)
     where_sql = (" WHERE " + " AND ".join(where_conds)) if where_conds else ""
     base = f"""
         FROM categories i
@@ -127,7 +169,16 @@ def _list_category_mappings(cur, cid: int, q, status_filter, page: int, per_page
 
 
 def _list_attribute_mappings(cur, cid: int, q, status_filter, ext_cat_id, scope,
-                             page: int, per_page: int):
+                             page: int, per_page: int,
+                             parent_category_q: Optional[str] = None,
+                             internal_attr_ids: Optional[str] = None,
+                             internal_category_ids: Optional[str] = None,
+                             internal_parent_category_ids: Optional[str] = None,
+                             external_attribute_ids: Optional[str] = None,
+                             internal_q: Optional[str] = None,
+                             external_q: Optional[str] = None,
+                             external_category_ids: Optional[str] = None,
+                             external_parent_category_ids: Optional[str] = None):
     """Attribute mappings — one row per (internal attribute × mapping context).
 
     An internal attribute can carry a global mapping and multiple
@@ -142,6 +193,7 @@ def _list_attribute_mappings(cur, cid: int, q, status_filter, ext_cat_id, scope,
                    m.external_attribute_name AS external_name,
                    m.external_category_id AS external_category_id,
                    ec.name AS external_category_name,
+                   ec.parent_external_id AS external_parent_category_id,
                    COALESCE(m.status, 'accepted') AS status,
                    m.confidence, m.source,
                    m.created_at AS created_at, m.updated_at AS updated_at
@@ -152,7 +204,7 @@ def _list_attribute_mappings(cur, cid: int, q, status_filter, ext_cat_id, scope,
                   AND ec.external_id = m.external_category_id
             WHERE m.channel_id = %s
             UNION ALL
-            SELECT i.id, i.name, NULL, NULL, NULL, NULL, NULL,
+            SELECT i.id, i.name, NULL, NULL, NULL, NULL, NULL, NULL,
                    'unmapped', NULL, NULL, NULL, NULL
             FROM attributes i
             WHERE NOT EXISTS (
@@ -165,6 +217,13 @@ def _list_attribute_mappings(cur, cid: int, q, status_filter, ext_cat_id, scope,
     if q:
         where.append("(internal_name ILIKE %s OR COALESCE(external_name, '') ILIKE %s)")
         params.extend([f"%{q}%", f"%{q}%"])
+    else:
+        if internal_q:
+            where.append("internal_name ILIKE %s")
+            params.append(f"%{internal_q}%")
+        if external_q:
+            where.append("COALESCE(external_name, '') ILIKE %s")
+            params.append(f"%{external_q}%")
     if status_filter == "unmapped":
         where.append("status = 'unmapped'")
     elif status_filter:
@@ -177,6 +236,55 @@ def _list_attribute_mappings(cur, cid: int, q, status_filter, ext_cat_id, scope,
         where.append("(mapping_id IS NULL OR external_category_id IS NULL)")
     elif scope == "category":
         where.append("(mapping_id IS NOT NULL AND external_category_id IS NOT NULL)")
+    if parent_category_q:
+        where.append("EXISTS (SELECT 1 FROM channel_external_categories pc WHERE pc.channel_id = %s AND pc.external_id = external_parent_category_id AND pc.name ILIKE %s)")
+        params.extend([cid, f"%{parent_category_q}%"])
+    # Phase 52/53: multi-value entity filters (applied over base CTE columns)
+    if internal_attr_ids:
+        ids = [x.strip() for x in internal_attr_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where.append(f"internal_id IN ({placeholders})")
+            params.extend(ids)
+    if internal_category_ids:
+        # Real relationship: attributes <-> categories via category_attributes
+        ids = [x.strip() for x in internal_category_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where.append(
+                "EXISTS (SELECT 1 FROM category_attributes ca"
+                f" WHERE ca.attribute_id = internal_id AND ca.category_id IN ({placeholders}))"
+            )
+            params.extend(ids)
+    if internal_parent_category_ids:
+        # Parent internal category via category_attributes -> categories.parent_id
+        ids = [x.strip() for x in internal_parent_category_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where.append(
+                "EXISTS (SELECT 1 FROM category_attributes ca"
+                " JOIN categories pc ON pc.id = ca.category_id"
+                f" WHERE ca.attribute_id = internal_id AND pc.parent_id IN ({placeholders}))"
+            )
+            params.extend(ids)
+    if external_attribute_ids:
+        ids = [x.strip() for x in external_attribute_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where.append(f"external_id IN ({placeholders})")
+            params.extend(ids)
+    if external_category_ids:
+        ids = [x.strip() for x in external_category_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where.append(f"external_category_id IN ({placeholders})")
+            params.extend(ids)
+    if external_parent_category_ids:
+        ids = [x.strip() for x in external_parent_category_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where.append(f"external_parent_category_id IN ({placeholders})")
+            params.extend(ids)
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
 
     cur.execute(
@@ -192,7 +300,18 @@ def _list_attribute_mappings(cur, cid: int, q, status_filter, ext_cat_id, scope,
 
 
 def _list_value_mappings(cur, cid: int, q, status_filter, ext_cat_id, attribute_id,
-                         page: int, per_page: int):
+                         page: int, per_page: int,
+                         parent_category_q: Optional[str] = None,
+                         internal_attr_ids: Optional[str] = None,
+                         external_attribute_ids: Optional[str] = None,
+                         internal_q: Optional[str] = None,
+                         external_q: Optional[str] = None,
+                         internal_attr_q: Optional[str] = None,
+                         external_attr_q: Optional[str] = None,
+                         internal_category_ids: Optional[str] = None,
+                         internal_parent_category_ids: Optional[str] = None,
+                         external_category_ids: Optional[str] = None,
+                         external_parent_category_ids: Optional[str] = None):
     """Value mappings — mapping rows plus unmapped internal attribute values.
 
     Mapped rows carry the resolved Rozetka attribute context (via the local
@@ -207,6 +326,7 @@ def _list_value_mappings(cur, cid: int, q, status_filter, ext_cat_id, attribute_
                    m.external_value_name AS external_name,
                    m.external_category_id AS external_category_id,
                    ec.name AS external_category_name,
+                   ec.parent_external_id AS external_parent_category_id,
                    ea.name AS external_attribute_name,
                    ea.external_id AS external_attribute_id,
                    COALESCE(m.status, 'accepted') AS status,
@@ -234,7 +354,7 @@ def _list_value_mappings(cur, cid: int, q, status_filter, ext_cat_id, attribute_
             WHERE m.channel_id = %s
             UNION ALL
             SELECT av.id, av.value, a.id, a.name,
-                   NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                   NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
                    'unmapped', NULL, NULL, NULL, NULL, NULL
             FROM attribute_values av
             JOIN attributes a ON a.id = av.attribute_id
@@ -248,6 +368,20 @@ def _list_value_mappings(cur, cid: int, q, status_filter, ext_cat_id, attribute_
     if q:
         where.append("(internal_name ILIKE %s OR COALESCE(external_name, '') ILIKE %s)")
         params.extend([f"%{q}%", f"%{q}%"])
+    else:
+        if internal_q:
+            where.append("internal_name ILIKE %s")
+            params.append(f"%{internal_q}%")
+        if external_q:
+            where.append("COALESCE(external_name, '') ILIKE %s")
+            params.append(f"%{external_q}%")
+    # Independent attribute-side text search (value mappings)
+    if internal_attr_q:
+        where.append("attribute_name ILIKE %s")
+        params.append(f"%{internal_attr_q}%")
+    if external_attr_q:
+        where.append("COALESCE(external_attribute_name, '') ILIKE %s")
+        params.append(f"%{external_attr_q}%")
     if status_filter == "unmapped":
         where.append("status = 'unmapped'")
     elif status_filter:
@@ -259,6 +393,55 @@ def _list_value_mappings(cur, cid: int, q, status_filter, ext_cat_id, attribute_
     if attribute_id:
         where.append("attribute_id = %s")
         params.append(attribute_id)
+    if parent_category_q:
+        where.append("EXISTS (SELECT 1 FROM channel_external_categories pc WHERE pc.channel_id = %s AND pc.external_id = external_parent_category_id AND pc.name ILIKE %s)")
+        params.extend([cid, f"%{parent_category_q}%"])
+    # Phase 52/53: multi-value entity filters (must run BEFORE where_sql is built)
+    if internal_attr_ids:
+        ids = [x.strip() for x in internal_attr_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where.append(f"attribute_id IN ({placeholders})")
+            params.extend(ids)
+    if external_attribute_ids:
+        ids = [x.strip() for x in external_attribute_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where.append(f"external_attribute_id IN ({placeholders})")
+            params.extend(ids)
+    if internal_category_ids:
+        # Real relationship: value -> attribute -> category_attributes
+        ids = [x.strip() for x in internal_category_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where.append(
+                "EXISTS (SELECT 1 FROM category_attributes ca"
+                f" WHERE ca.attribute_id = attribute_id AND ca.category_id IN ({placeholders}))"
+            )
+            params.extend(ids)
+    if internal_parent_category_ids:
+        # Parent internal category via category_attributes -> categories.parent_id
+        ids = [x.strip() for x in internal_parent_category_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where.append(
+                "EXISTS (SELECT 1 FROM category_attributes ca"
+                " JOIN categories pc ON pc.id = ca.category_id"
+                f" WHERE ca.attribute_id = attribute_id AND pc.parent_id IN ({placeholders}))"
+            )
+            params.extend(ids)
+    if external_category_ids:
+        ids = [x.strip() for x in external_category_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where.append(f"external_category_id IN ({placeholders})")
+            params.extend(ids)
+    if external_parent_category_ids:
+        ids = [x.strip() for x in external_parent_category_ids.split(",") if x.strip()]
+        if ids:
+            placeholders = ", ".join(["%s"] * len(ids))
+            where.append(f"external_parent_category_id IN ({placeholders})")
+            params.extend(ids)
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
 
     cur.execute(
@@ -283,6 +466,22 @@ def list_mappings(
         external_category_id: Optional[str] = Query(None),
         attribute_id: Optional[int] = Query(None),
         scope: Optional[str] = Query(None),
+        # Phase 47: text-search filters
+        parent_category_q: Optional[str] = Query(None, description="Search parent Rozetka category by name"),
+        # Phase 52+: independent internal/external text search
+        internal_q: Optional[str] = Query(None, description="Search only internal name"),
+        external_q: Optional[str] = Query(None, description="Search only external (Rozetka) name"),
+        # Value mappings: independent internal/external attribute name search
+        internal_attr_q: Optional[str] = Query(None, description="Values: search internal attribute by name"),
+        external_attr_q: Optional[str] = Query(None, description="Values: search Rozetka attribute by name"),
+        # Phase 52: multi-value entity filters (comma-separated IDs, OR-within-filter)
+        internal_attr_ids: Optional[str] = Query(None, description="Comma-separated internal attribute IDs"),
+        internal_category_ids: Optional[str] = Query(None, description="Comma-separated internal category IDs"),
+        internal_parent_category_ids: Optional[str] = Query(None, description="Comma-separated parent internal category IDs"),
+        external_attribute_ids: Optional[str] = Query(None, description="Comma-separated Rozetka attribute external IDs"),
+        # Phase 53: Rozetka category hierarchy (real channel_external_categories.parent_external_id)
+        external_category_ids: Optional[str] = Query(None, description="Comma-separated Rozetka category external IDs"),
+        external_parent_category_ids: Optional[str] = Query(None, description="Comma-separated parent Rozetka category external IDs"),
         user=Depends(require_admin),
 ):
     """List channel mappings.
@@ -305,16 +504,29 @@ def list_mappings(
         cid = ch["id"]
 
         if kind == "categories":
-            items, total = _list_category_mappings(cur, cid, q, status_filter,
-                                                   page, per_page)
+            items, total = _list_category_mappings(
+                cur, cid, q, status_filter, page, per_page, parent_category_q,
+                internal_category_ids, internal_parent_category_ids,
+                internal_q, external_q, external_category_ids, external_parent_category_ids,
+            )
         elif kind == "attributes":
-            items, total = _list_attribute_mappings(cur, cid, q, status_filter,
-                                                    external_category_id, scope,
-                                                    page, per_page)
+            items, total = _list_attribute_mappings(
+                cur, cid, q, status_filter, external_category_id, scope,
+                page, per_page, parent_category_q,
+                internal_attr_ids, internal_category_ids,
+                internal_parent_category_ids, external_attribute_ids,
+                internal_q, external_q,
+                external_category_ids, external_parent_category_ids,
+            )
         elif kind == "values":
-            items, total = _list_value_mappings(cur, cid, q, status_filter,
-                                               external_category_id, attribute_id,
-                                               page, per_page)
+            items, total = _list_value_mappings(
+                cur, cid, q, status_filter, external_category_id, attribute_id,
+                page, per_page, parent_category_q,
+                internal_attr_ids, external_attribute_ids,
+                internal_q, external_q, internal_attr_q, external_attr_q,
+                internal_category_ids, internal_parent_category_ids,
+                external_category_ids, external_parent_category_ids,
+            )
         else:  # unreachable (resolved by _resolve_kind)
             raise HTTPException(status_code=404, detail="Невідомий тип відповідностей")
         return {"items": items, "total": total, "page": page, "per_page": per_page}
@@ -490,7 +702,7 @@ def get_suggestions(
 
 @router.get("/export/channels/{code}/pickers/categories")
 def pick_categories(code: str, q: Optional[str] = Query(None),
-                          page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
+                          page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=500),
                           user=Depends(require_admin)):
     conn, cur = admin_cursor()
     try:
@@ -501,7 +713,7 @@ def pick_categories(code: str, q: Optional[str] = Query(None),
         cur.execute(f"SELECT count(*) AS c FROM categories WHERE {where}", params)
         total = cur.fetchone()["c"]
         cur.execute(
-            f"SELECT id, name FROM categories WHERE {where} ORDER BY name LIMIT %s OFFSET %s",
+            f"SELECT id, name, parent_id FROM categories WHERE {where} ORDER BY name LIMIT %s OFFSET %s",
             params + [per_page, (page - 1) * per_page])
         return {"items": cur.fetchall(), "total": total, "page": page, "per_page": per_page}
     finally:
@@ -510,7 +722,7 @@ def pick_categories(code: str, q: Optional[str] = Query(None),
 
 @router.get("/export/channels/{code}/pickers/attributes")
 def pick_attributes(code: str, q: Optional[str] = Query(None),
-                          page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
+                          page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=500),
                           user=Depends(require_admin)):
     conn, cur = admin_cursor()
     try:
@@ -531,7 +743,7 @@ def pick_attributes(code: str, q: Optional[str] = Query(None),
 @router.get("/export/channels/{code}/pickers/values")
 def pick_values(code: str, attribute_id: Optional[int] = Query(None),
                       q: Optional[str] = Query(None),
-                      page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
+                      page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=500),
                       user=Depends(require_admin)):
     conn, cur = admin_cursor()
     try:
@@ -556,11 +768,14 @@ def pick_values(code: str, attribute_id: Optional[int] = Query(None),
 
 @router.get("/export/channels/{code}/pickers/external-categories")
 def pick_external_categories(code: str, q: Optional[str] = Query(None),
-                                   page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=200),
-                                   user=Depends(require_admin)):
+                                    parents_only: bool = Query(False),
+                                    page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=500),
+                                    user=Depends(require_admin)):
     """Rozetka categories from the LOCAL taxonomy (never an API call).
 
     Returns metadata: children_count (0 = leaf), attribute_count.
+    When parents_only=True, only returns categories that have at least one
+    child category (i.e. parent categories).
     """
     conn, cur = admin_cursor()
     try:
@@ -571,6 +786,11 @@ def pick_external_categories(code: str, q: Optional[str] = Query(None),
         filters, params = ["c.channel_id = %s"], [ch["id"]]
         if q:
             filters.append("c.name ILIKE %s"); params.append(f"%{q}%")
+        if parents_only:
+            filters.append(
+                "EXISTS (SELECT 1 FROM channel_external_categories ch2 "
+                "WHERE ch2.channel_id = c.channel_id "
+                "AND ch2.parent_external_id = c.external_id)")
         where = " AND ".join(filters)
         cur.execute(
             f"SELECT count(*) AS c FROM channel_external_categories c WHERE {where}",
@@ -593,13 +813,18 @@ def pick_external_categories(code: str, q: Optional[str] = Query(None),
         conn.close()
 
 
+
 @router.get("/export/channels/{code}/pickers/external-attributes")
 def pick_external_attributes(code: str,
                                    category_external_id: Optional[str] = Query(None),
                                    q: Optional[str] = Query(None),
-                                   page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
+                                   page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=500),
                                    user=Depends(require_admin)):
-    """Rozetka attributes from local taxonomy, scoped to a Rozetka category."""
+    """Rozetka attributes from local taxonomy, scoped to a Rozetka category.
+
+    Uses DISTINCT ON (external_id) to avoid the same attribute appearing
+    multiple times when it belongs to multiple Rozetka categories.
+    """
     conn, cur = admin_cursor()
     try:
         cur.execute("SELECT id FROM channels WHERE code = %s", (code,))
@@ -612,11 +837,21 @@ def pick_external_attributes(code: str,
         if q:
             filters.append("name ILIKE %s"); params.append(f"%{q}%")
         where = " AND ".join(filters)
-        cur.execute(f"SELECT count(*) AS c FROM channel_external_attributes WHERE {where}", params)
+        # Count distinct external_ids for accurate pagination
+        cur.execute(f"SELECT COUNT(DISTINCT external_id) AS c FROM channel_external_attributes WHERE {where}", params)
         total = cur.fetchone()["c"]
+        # DISTINCT ON ensures each external_id appears once (ORDER BY external_id, name
+        # picks the first category's row for each attribute name)
         cur.execute(
-            f"SELECT id, external_id, name, category_external_id, param_type, unit"
-            f" FROM channel_external_attributes WHERE {where} ORDER BY name LIMIT %s OFFSET %s",
+            f"""SELECT external_id, name, category_external_id, param_type, unit
+                FROM (
+                    SELECT DISTINCT ON (external_id) external_id, name,
+                           category_external_id, param_type, unit
+                    FROM channel_external_attributes
+                    WHERE {where}
+                    ORDER BY external_id, name
+                ) sub
+                ORDER BY name LIMIT %s OFFSET %s""",
             params + [per_page, (page - 1) * per_page])
         return {"items": cur.fetchall(), "total": total, "page": page, "per_page": per_page}
     finally:
@@ -628,7 +863,7 @@ def pick_external_values(code: str,
                                category_external_id: Optional[str] = Query(None),
                                attribute_external_id: Optional[str] = Query(None),
                                q: Optional[str] = Query(None),
-                               page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100),
+                               page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=500),
                                user=Depends(require_admin)):
     """Rozetka values from local taxonomy, scoped to category + attribute."""
     conn, cur = admin_cursor()

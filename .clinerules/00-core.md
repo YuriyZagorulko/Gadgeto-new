@@ -85,3 +85,43 @@ If safety or the target environment is unclear: **STOP and ask.**
 
 Never assume an operation is safe just because it is executed from the project
 directory. Detailed safety rules are in `01-safety.md`.
+
+## Domain-Specific Skills
+
+Before modifying code in a domain covered by a project skill, **MUST read and follow the relevant domain skill**.
+
+Domain skills are the source of truth for domain-specific:
+
+* business rules;
+* data relationships;
+* allowed fields and attributes;
+* UI behavior;
+* API contracts;
+* mapping/filter rules;
+* integration-specific behavior.
+
+### Mandatory Rules
+
+1. **Do not infer domain rules from similar code.**
+2. **Do not copy fields, filters, state, API parameters, or UI behavior from one domain/context into another without verifying the domain skill.**
+3. **Do not generalize or unify domain-specific behavior solely to reduce duplication.**
+4. When a domain skill explicitly defines what is allowed or forbidden, **follow it over assumptions based on existing code**.
+5. If the required behavior is not defined by the relevant skill and cannot be established safely from the existing implementation, **stop and ask for clarification instead of guessing**.
+6. When modifying a domain covered by a skill, verify the final implementation against that skill before reporting completion.
+
+### Mapping
+
+Any work involving:
+
+* Import Mapping;
+* Rozetka Category Mapping;
+* Rozetka Attribute Mapping;
+* Rozetka Attribute Value Mapping;
+* mapping filters;
+* mapping state;
+* mapping API parameters;
+* mapping tables or columns;
+
+MUST use the `mapping-domain` skill before making changes.
+
+The `mapping-domain` skill is the source of truth for Mapping-specific rules and must be consulted before modifying Mapping code.
