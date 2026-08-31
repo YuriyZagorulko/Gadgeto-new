@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { api, qs } from '@/lib/api';
+import { formatPrice } from '@/lib/format';
 import {
   PageHeader, Button, Select, Input, LoadingState, ErrorState, useToast, Badge,
 } from '@/components/ui';
@@ -506,7 +507,7 @@ export default function RozetkaSettingsPage() {
                       <td className="p-2 text-xs font-mono max-w-24 truncate" title={r.sku}>{r.sku || '—'}</td>
                       <td className="p-2 text-xs max-w-36 truncate">{r.category_name || '—'}</td>
                       <td className="p-2 text-xs">{r.supplier_name || '—'}</td>
-                      <td className="p-2 text-right text-xs font-mono">{r.price ? r.price.toLocaleString('uk-UA') : '—'}</td>
+                      <td className="p-2 text-right text-xs font-mono">{formatPrice(r.price)}</td>
                       <td className="p-2">
                         {r.stock_status === 'in_stock' ? <Badge tone="green">В наявності</Badge> : <Badge tone="red">Немає</Badge>}
                       </td>
