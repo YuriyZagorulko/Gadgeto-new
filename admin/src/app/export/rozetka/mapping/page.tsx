@@ -331,12 +331,18 @@ const [fExtCatChildren, setFExtCatChildren] = useState(0);
 
       {tab === 'coverage' ? (
         <CoverageView coverage={coverage} />
-      ) : tab === 'categories' ? (
-        <CategoriesMappingTab key="categories" openEdit={openEdit} openDelete={handleDelete} />
-      ) : tab === 'attributes' ? (
-        <AttributesMappingTab key="attributes" openEdit={openEdit} openDelete={handleDelete} />
       ) : (
-        <ValuesMappingTab key="values" openEdit={openEdit} openDelete={handleDelete} />
+        <>
+          <div className={tab === 'categories' ? '' : 'hidden'}>
+            <CategoriesMappingTab openEdit={openEdit} openDelete={handleDelete} />
+          </div>
+          <div className={tab === 'attributes' ? '' : 'hidden'}>
+            <AttributesMappingTab openEdit={openEdit} openDelete={handleDelete} />
+          </div>
+          <div className={tab === 'values' ? '' : 'hidden'}>
+            <ValuesMappingTab openEdit={openEdit} openDelete={handleDelete} />
+          </div>
+        </>
       )}
 
       {/* Kind-specific modals */}
@@ -589,14 +595,14 @@ function CategoriesMappingTab({ openEdit, openDelete }: {
     setAppliedFilters(filters);
     setPage(1);
   };
-  if (loading) return <LoadingState />;
-  if (error) return <ErrorState message={error} onRetry={load} />;
   return (<>
     <RozetkaCategoryMappingFilterPanel onApply={handleApply} />
-    {renderCategories(rows, openEdit)}
-    <Pagination page={page} pages={pages} total={total} onPage={setPage}
-      onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}
-      pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }} />
+    {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={load} /> : (<>
+      {renderCategories(rows, openEdit)}
+      <Pagination page={page} pages={pages} total={total} onPage={setPage}
+        onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}
+        pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }} />
+    </>)}
   </>);
 }
 function AttributesMappingTab({ openEdit, openDelete }: {
@@ -632,14 +638,14 @@ function AttributesMappingTab({ openEdit, openDelete }: {
     setAppliedFilters(filters);
     setPage(1);
   };
-  if (loading) return <LoadingState />;
-  if (error) return <ErrorState message={error} onRetry={load} />;
   return (<>
     <RozetkaAttributeMappingFilterPanel onApply={handleApply} />
-    {renderAttributes(rows, openEdit)}
-    <Pagination page={page} pages={pages} total={total} onPage={setPage}
-      onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}
-      pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }} />
+    {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={load} /> : (<>
+      {renderAttributes(rows, openEdit)}
+      <Pagination page={page} pages={pages} total={total} onPage={setPage}
+        onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}
+        pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }} />
+    </>)}
   </>);
 }
 function ValuesMappingTab({ openEdit, openDelete }: {
@@ -681,14 +687,14 @@ function ValuesMappingTab({ openEdit, openDelete }: {
     setAppliedFilters(filters);
     setPage(1);
   };
-  if (loading) return <LoadingState />;
-  if (error) return <ErrorState message={error} onRetry={load} />;
   return (<>
     <RozetkaValueMappingFilterPanel onApply={handleApply} />
-    {renderValues(rows, openEdit, appliedFilters.valueMode === 'unmapped')}
-    <Pagination page={page} pages={pages} total={total} onPage={setPage}
-      onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}
-      pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }} />
+    {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={load} /> : (<>
+      {renderValues(rows, openEdit, appliedFilters.valueMode === 'unmapped')}
+      <Pagination page={page} pages={pages} total={total} onPage={setPage}
+        onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), pages))}
+        pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }} />
+    </>)}
   </>);
 }
 function CoverageView({ coverage }: { coverage: Coverage | null }) {
