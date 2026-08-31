@@ -73,7 +73,6 @@ export default function RozetkaCategoryMappingFilterPanel({ onApply }: Props) {
           label="Категорія Rozetka"
           selected={externalCategoryIds}
           onChange={setExternalCategoryIds}
-          extraParams={{ parents_only: '1' }}
           idKey="external_id"
           nameKey="name"
           placeholder="Введіть для пошуку категорій Rozetka..."
