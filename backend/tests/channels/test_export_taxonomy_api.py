@@ -72,6 +72,11 @@ class FakeCursor:
             return [RealDictRow({"id": 7})]
         if "from eff" in low:
             return self._rows
+        # Value mapping queries use WITH base AS (...); match them for mocks
+        if "from base" in low or "with base as" in low:
+            if "select count" in low:
+                return [RealDictRow({"c": 0})]
+            return []
         return []
 
     def fetchone(self):
@@ -305,3 +310,196 @@ def test_worker_marks_succeeded_when_no_errors():
     """A clean run finishes as SUCCEEDED without duplicates."""
     result, conn = _run_worker(_FakeTaxonomyService(errors=0))
     assert result["status"] == "SUCCEEDED"
+# ── Value Mapping Filter Tests ────────────────────────────────────────────
+
+
+def test_value_mappings_default_returns_200(client):
+    """Default listing without filters returns 200 and pagination."""
+    conn = FakeConn()
+    with patch("app.api.admin.export_mapping.admin_cursor",
+               return_value=(conn.cursor_obj, conn.cursor_obj)):
+        res = client.get(
+            "/api/v1/admin/export/channels/rozetka/mappings/values?per_page=5"
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert "items" in body
+    assert "total" in body
+    assert body["per_page"] == 5
+
+
+def test_value_mappings_internal_value_q(client):
+    """internal_q filters internal_name (av.value) in SQL."""
+    conn = FakeConn()
+    with patch("app.api.admin.export_mapping.admin_cursor",
+               return_value=(conn.cursor_obj, conn.cursor_obj)):
+        res = client.get(
+            "/api/v1/admin/export/channels/rozetka/mappings/values"
+            "?internal_q=шкіра&per_page=10"
+        )
+    assert res.status_code == 200
+    queries = conn.cursor_obj.queries
+    count_q = [q for q in queries if "count(*) AS c" in q and "from base" in q.lower()]
+    assert count_q, f"no count query found. queries: {queries}"
+    assert "internal_name ILIKE" in count_q[0]
+
+
+def test_value_mappings_external_value_q(client):
+    """external_q filters external_name (m.external_value_name) in SQL."""
+    conn = FakeConn()
+    with patch("app.api.admin.export_mapping.admin_cursor",
+               return_value=(conn.cursor_obj, conn.cursor_obj)):
+        res = client.get(
+            "/api/v1/admin/export/channels/rozetka/mappings/values"
+            "?external_q=черный&per_page=10"
+        )
+    assert res.status_code == 200
+    queries = conn.cursor_obj.queries
+    count_q = [q for q in queries if "count(*) AS c" in q and "from base" in q.lower()]
+    assert count_q, f"no count query found. queries: {queries}"
+    assert "external_name ILIKE" in count_q[0] or "COALESCE(external_name" in count_q[0]
+
+
+def test_value_mappings_internal_attr_ids(client):
+    """internal_attr_ids filters attribute_id IN (...) in SQL."""
+    conn = FakeConn()
+    with patch("app.api.admin.export_mapping.admin_cursor",
+               return_value=(conn.cursor_obj, conn.cursor_obj)):
+        res = client.get(
+            "/api/v1/admin/export/channels/rozetka/mappings/values"
+            "?internal_attr_ids=5,12&per_page=10"
+        )
+    assert res.status_code == 200
+    queries = conn.cursor_obj.queries
+    count_q = [q for q in queries if "count(*) AS c" in q and "from base" in q.lower()]
+    assert count_q, f"no count query found. queries: {queries}"
+def test_value_mappings_external_attribute_ids(client):
+    """external_attribute_ids filters external_attribute_id IN (...)."""
+    conn = FakeConn()
+    with patch("app.api.admin.export_mapping.admin_cursor",
+               return_value=(conn.cursor_obj, conn.cursor_obj)):
+        res = client.get(
+            "/api/v1/admin/export/channels/rozetka/mappings/values"
+            "?external_attribute_ids=13,52&per_page=10"
+        )
+    assert res.status_code == 200
+    queries = conn.cursor_obj.queries
+    count_q = [q for q in queries if "count(*) AS c" in q and "from base" in q.lower()]
+    assert count_q, f"no count query found. queries: {queries}"
+    assert "external_attribute_id IN" in count_q[0]
+
+
+def test_value_mappings_external_category_ids(client):
+    """external_category_ids filters external_category_id IN (...)."""
+    conn = FakeConn()
+    with patch("app.api.admin.export_mapping.admin_cursor",
+               return_value=(conn.cursor_obj, conn.cursor_obj)):
+        res = client.get(
+            "/api/v1/admin/export/channels/rozetka/mappings/values"
+            "?external_category_ids=80172,80173&per_page=10"
+        )
+    assert res.status_code == 200
+    queries = conn.cursor_obj.queries
+    count_q = [q for q in queries if "count(*) AS c" in q and "from base" in q.lower()]
+    assert count_q, f"no count query found. queries: {queries}"
+    assert "external_category_id IN" in count_q[0]
+
+
+def test_value_mappings_status_filter(client):
+    """status parameter filters status = %s in SQL."""
+    conn = FakeConn()
+    with patch("app.api.admin.export_mapping.admin_cursor",
+               return_value=(conn.cursor_obj, conn.cursor_obj)):
+        res = client.get(
+            "/api/v1/admin/export/channels/rozetka/mappings/values"
+            "?status=accepted&per_page=10"
+        )
+    assert res.status_code == 200
+    queries = conn.cursor_obj.queries
+    count_q = [q for q in queries if "count(*) AS c" in q and "from base" in q.lower()]
+    assert count_q, f"no count query found. queries: {queries}"
+    assert "status =" in count_q[0]
+
+
+def test_value_mappings_unmapped_filter(client):
+    """status=unmapped adds status = 'unmapped' to WHERE."""
+    conn = FakeConn()
+    with patch("app.api.admin.export_mapping.admin_cursor",
+               return_value=(conn.cursor_obj, conn.cursor_obj)):
+        res = client.get(
+            "/api/v1/admin/export/channels/rozetka/mappings/values"
+            "?status=unmapped&per_page=10"
+        )
+    assert res.status_code == 200
+    queries = conn.cursor_obj.queries
+    count_q = [q for q in queries if "count(*) AS c" in q and "from base" in q.lower()]
+    assert count_q, f"no count query found. queries: {queries}"
+    assert "status = 'unmapped'" in count_q[0]
+
+
+def test_value_mappings_combined_filtering(client):
+    """Combined filters produce AND in SQL with all conditions."""
+    conn = FakeConn()
+    with patch("app.api.admin.export_mapping.admin_cursor",
+               return_value=(conn.cursor_obj, conn.cursor_obj)):
+        res = client.get(
+            "/api/v1/admin/export/channels/rozetka/mappings/values"
+            "?internal_attr_ids=5"
+            "&external_attribute_ids=13"
+            "&external_category_ids=80172"
+            "&internal_q=шкіра"
+            "&external_q=черный"
+            "&status=accepted"
+            "&per_page=10"
+        )
+    assert res.status_code == 200
+    queries = conn.cursor_obj.queries
+    count_q = [q for q in queries if "count(*) AS c" in q and "from base" in q.lower()]
+    assert count_q, f"no count query found. queries: {queries}"
+    sql = count_q[0]
+    assert "internal_name ILIKE" in sql, f"internal_q: {sql}"
+    assert "COALESCE(external_name" in sql or "external_name ILIKE" in sql
+    assert "attribute_id IN" in sql, f"internal_attr_ids: {sql}"
+    assert "external_attribute_id IN" in sql
+    assert "external_category_id IN" in sql
+    assert "status =" in sql
+
+
+def test_value_mappings_attribute_q_independent(client):
+    """internal_attr_q and external_attr_q should filter attribute names."""
+    conn = FakeConn()
+    with patch("app.api.admin.export_mapping.admin_cursor",
+               return_value=(conn.cursor_obj, conn.cursor_obj)):
+        res = client.get(
+            "/api/v1/admin/export/channels/rozetka/mappings/values"
+            "?internal_attr_q=Колір"
+            "&external_attr_q=Цвет"
+            "&per_page=10"
+        )
+    assert res.status_code == 200
+    queries = conn.cursor_obj.queries
+    count_q = [q for q in queries if "count(*) AS c" in q and "from base" in q.lower()]
+    assert count_q, f"no count query found. queries: {queries}"
+    sql = count_q[0]
+    assert "attribute_name ILIKE" in sql, f"internal_attr_q should produce attribute_name: {sql}"
+
+
+def test_value_mappings_independent_attribute_value_search(client):
+    """Attribute search and value search filter different columns independently."""
+    conn = FakeConn()
+    with patch("app.api.admin.export_mapping.admin_cursor",
+               return_value=(conn.cursor_obj, conn.cursor_obj)):
+        res = client.get(
+            "/api/v1/admin/export/channels/rozetka/mappings/values"
+            "?internal_attr_q=Колір"
+            "&internal_q=Чорний"
+            "&per_page=10"
+        )
+    assert res.status_code == 200
+    queries = conn.cursor_obj.queries
+    count_q = [q for q in queries if "count(*) AS c" in q and "from base" in q.lower()]
+    assert count_q, f"no count query found. queries: {queries}"
+    sql = count_q[0]
+    assert "attribute_name ILIKE" in sql, f"attribute: {sql}"
+    assert "internal_name ILIKE" in sql, f"value: {sql}"
+    assert "AND" in sql, f"AND missing: {sql}"

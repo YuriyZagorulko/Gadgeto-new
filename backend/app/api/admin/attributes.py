@@ -24,13 +24,16 @@ class AttributeValueIn(BaseModel):
 
 @router.get("/attributes")
 def list_attributes(page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=200),
-                          search: Optional[str] = None,
+                          search: Optional[str] = Query(None),
+                          q: Optional[str] = Query(None, description="Alias for search (used by EntityMultiSelect)"),
                           user: dict = Depends(require_admin)):
     conn, cur = admin_cursor()
     try:
+        # EntityMultiSelect sends search as 'q' parameter
+        effective_search = search or q
         conds, params = ["1=1"], []
-        if search:
-            conds.append("a.name ILIKE %s"); params.append(f"%{search}%")
+        if effective_search:
+            conds.append("a.name ILIKE %s"); params.append(f"%{effective_search}%")
         where = " AND ".join(conds)
         cur.execute(f"SELECT count(*) AS c FROM attributes a WHERE {where}", params)
         total = cur.fetchone()["c"]
