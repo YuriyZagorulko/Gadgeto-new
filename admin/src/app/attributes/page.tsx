@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api, qs } from '@/lib/api';
 import { PageHeader, Button, Input, Select, Table, Th, Td, Pagination, LoadingState, ErrorState, EmptyState, Modal, ConfirmDialog, Badge, useToast, Spinner } from '@/components/ui';
+import { InternalParentCategorySelect } from '@/components/mapping/EntityMultiSelect';
 
 type Attribute = {
   id: number; name: string; slug: string; type: string;
@@ -34,16 +35,30 @@ const DEFAULT_CONFIG: CategoryConfig = {
 const EMPTY_ATTR = { name: '', type: 'select', is_filterable: true };
 const EMPTY_VALUE = { value: '', is_active: true };
 
+type SortCol = 'name' | 'type' | 'values_count' | 'products_count' | 'categories_count';
+const SORTABLE_COLS: { key: SortCol; label: string }[] = [
+  { key: 'name', label: 'Назва' },
+  { key: 'type', label: 'Тип' },
+  { key: 'categories_count', label: 'Категорій' },
+  { key: 'values_count', label: 'Значень' },
+  { key: 'products_count', label: 'Товарів' },
+];
+
 export default function AttributesPage() {
   const toast = useToast();
   const [search, setSearch] = useState('');
   const [applied, setApplied] = useState('');
   const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(20);
+  const [appliedParentCats, setAppliedParentCats] = useState<number[]>([]);
+  const [sortBy, setSortBy] = useState<SortCol | null>(null);
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [data, setData] = useState<ListResp | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [tick, setTick] = useState(0);
   const [allCategories, setAllCategories] = useState<CatOpt[]>([]);
+  const [catsLoading, setCatsLoading] = useState(true);
 
   const [modal, setModal] = useState<{ open: boolean; editing: Attribute | null }>({ open: false, editing: null });
   const [form, setForm] = useState(EMPTY_ATTR);
@@ -60,24 +75,41 @@ export default function AttributesPage() {
   const [valueForm, setValueForm] = useState(EMPTY_VALUE);
   const [deletingValue, setDeletingValue] = useState<{ aid: number; v: Value } | null>(null);
 
-  // Load categories once
+  // Load categories once (feeds the parent-category multi-filter)
   useEffect(() => {
+    setCatsLoading(true);
     api.get<{ items: CatOpt[] }>('/categories')
       .then((d) => setAllCategories(d.items || []))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setCatsLoading(false));
   }, []);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setError('');
-    api.get<ListResp>('/attributes' + qs({ page, per_page: 20, search: applied || undefined }))
+    api.get<ListResp>('/attributes' + qs({
+      page, per_page: perPage, search: applied || undefined,
+      parent_category_ids: appliedParentCats.length > 0 ? appliedParentCats.join(',') : undefined,
+      sort_by: sortBy || undefined, sort_order: sortOrder,
+    }))
       .then((d) => !cancelled && setData(d))
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, [page, applied, tick]);
+  }, [page, perPage, applied, appliedParentCats, sortBy, sortOrder, tick]);
 
   const reload = () => setTick((t) => t + 1);
+
+  /** Click handler for sortable column headers. */
+  const handleSort = (col: SortCol) => {
+    if (sortBy === col) {
+      setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(col);
+      setSortOrder('asc');
+    }
+    setPage(1);
+  };
 
   const loadValues = async (aid: number) => {
     setValuesLoading(true);
@@ -243,22 +275,32 @@ export default function AttributesPage() {
         <Button onClick={openCreate}>+ Новий атрибут</Button>
       } />
 
-      <div className="flex gap-2 mb-3">
+      <div className="flex flex-wrap gap-2 mb-3">
         <Input value={search} placeholder="Пошук атрибуту..."
           onKeyDown={(e) => { if (e.key === 'Enter') { setApplied(search); setPage(1); } }}
           onChange={(e) => setSearch(e.target.value)} className="max-w-xs" />
         <Button variant="secondary" onClick={() => { setApplied(search); setPage(1); }}>Знайти</Button>
+        <div className="w-64">
+          <InternalParentCategorySelect
+            label="Батьківська категорія"
+            selected={appliedParentCats}
+            onChange={(ids) => { setAppliedParentCats(ids as number[]); setPage(1); }}
+            cats={allCategories}
+            loading={catsLoading}
+          />
+        </div>
       </div>
 
-      {loading ? <LoadingState /> : error ? <ErrorState message={error} /> : !data ? <EmptyState title="Атрибутів не знайдено" /> : (
+      {loading ? <LoadingState /> : error ? <ErrorState message={error} /> : !data ? <EmptyState title="Атрибутів не знайдено" /> : data.items.length === 0 ? (
+        <EmptyState title="Атрибутів не знайдено" hint="Спробуйте змінити пошук або фільтри." />
+      ) : (
         <>
           <Table head={
             <tr>
-              <Th>Назва</Th>
-              <Th className="text-gray-500 text-xs">Тип</Th>
-              <Th className="text-gray-500 text-xs">Категорій</Th>
-              <Th className="text-gray-500 text-xs">Значень</Th>
-              <Th className="text-gray-500 text-xs">Товарів</Th>
+              {SORTABLE_COLS.map((c) => (
+                <SortableTh key={c.key} label={c.label} sortKey={c.key}
+                  active={sortBy === c.key} order={sortOrder} onSort={handleSort} />
+              ))}
               <Th className="text-gray-500 text-xs">Дії</Th>
             </tr>
           }>
@@ -275,7 +317,10 @@ export default function AttributesPage() {
               ))}
           </Table>
           <div className="mt-4">
-            <Pagination page={page} pages={data.total_pages} total={data.total} onPage={setPage} />
+            <Pagination page={page} pages={data.total_pages} total={data.total} onPage={setPage}
+              onGoToPage={(p) => setPage(Math.min(Math.max(p, 1), data.total_pages))}
+              pageSize={perPage} onPageSizeChange={(n) => { setPerPage(n); setPage(1); }}
+              pageSizeOptions={[20, 50, 100, 200]} />
           </div>
         </>
       )}
@@ -436,6 +481,28 @@ export default function AttributesPage() {
         confirmLabel="Видалити" danger busy={saving}
         onConfirm={doDeleteValue} onCancel={() => setDeletingValue(null)} />
     </div>
+  );
+}
+
+/** Sortable column header with ↑ / ↓ / ↕ indicator. */
+function SortableTh({ label, sortKey, active, order, onSort }: {
+  label: string; sortKey: SortCol; active: boolean; order: 'asc' | 'desc';
+  onSort: (k: SortCol) => void;
+}) {
+  return (
+    <Th>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        title={`Сортувати за «${label}»`}
+        className={`inline-flex items-center gap-1 uppercase tracking-wide transition-colors ${
+          active ? 'text-blue-600' : 'text-gray-500 hover:text-gray-900'
+        }`}
+      >
+        <span>{label}</span>
+        <span aria-hidden className="text-[15px] leading-[15px]">{active ? (order === 'asc' ? '↑' : '↓') : '↕'}</span>
+      </button>
+    </Th>
   );
 }
 

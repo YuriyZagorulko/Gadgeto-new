@@ -26,10 +26,25 @@ class AttributeValueIn(BaseModel):
     is_active: bool = True
 
 
+# Whitelist of sortable columns → SQL expressions (aliases may be used if present in SELECT)
+SORT_COLUMNS = {
+    "name": "a.name",
+    "type": "a.type",
+    "values_count": "values_count",
+    "products_count": "products_count",
+    "categories_count": "categories_count",
+}
+
+
 @router.get("/attributes")
 def list_attributes(page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=500),
                           search: Optional[str] = Query(None),
                           q: Optional[str] = Query(None, description="Alias for search (used by EntityMultiSelect)"),
+                          parent_category_ids: Optional[str] = Query(
+                              None, description="Comma-separated parent category IDs (OR within filter); matches any selected subtree"),
+                          sort_by: Optional[str] = Query(
+                              None, description="Sort column: name, type, values_count, products_count, categories_count"),
+                          sort_order: str = Query("asc", pattern="^(asc|desc)$"),
                           user: dict = Depends(require_admin)):
     conn, cur = admin_cursor()
     try:
@@ -38,7 +53,40 @@ def list_attributes(page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, 
         conds, params = ["1=1"], []
         if effective_search:
             conds.append("a.name ILIKE %s"); params.append(f"%{effective_search}%")
+        if parent_category_ids:
+            root_ids = [x.strip() for x in parent_category_ids.split(",") if x.strip()]
+            if root_ids:
+                placeholders = ", ".join(["%s"] * len(root_ids))
+                # Resolve the union of subtrees (parent + all descendants) of the
+                # selected roots and keep only attributes assigned to any category in it.
+                cur.execute(f"""
+                    WITH RECURSIVE cat_tree AS (
+                        SELECT id FROM categories WHERE id IN ({placeholders})
+                        UNION ALL
+                        SELECT k.id FROM categories k JOIN cat_tree ct ON k.parent_id = ct.id
+                    ) SELECT id FROM cat_tree
+                """, root_ids)
+                subtree = [r["id"] for r in cur.fetchall()]
+                if subtree:
+                    placeholders2 = ", ".join(["%s"] * len(subtree))
+                    conds.append(
+                        "EXISTS (SELECT 1 FROM category_attributes ca "
+                        f"WHERE ca.attribute_id = a.id AND ca.category_id IN ({placeholders2}))"
+                    )
+                    params.extend(subtree)
+                else:
+                    conds.append("1=0")
         where = " AND ".join(conds)
+
+        if sort_by and sort_by not in SORT_COLUMNS:
+            raise HTTPException(status_code=400,
+                                detail=f"Невірне поле для сортування: {sort_by}")
+        direction = "ASC" if sort_order == "asc" else "DESC"
+        if sort_by:
+            order_clause = f"{SORT_COLUMNS[sort_by]} {direction}, a.id {direction}"
+        else:
+            order_clause = "a.sort_order, a.name"
+
         cur.execute(f"SELECT count(*) AS c FROM attributes a WHERE {where}", params)
         total = cur.fetchone()["c"]
         offset = (page - 1) * per_page
@@ -48,7 +96,7 @@ def list_attributes(page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, 
                    (SELECT count(*) FROM product_attributes pa WHERE pa.attribute_id=a.id) AS products_count,
                    (SELECT count(*) FROM category_attributes ca WHERE ca.attribute_id=a.id) AS categories_count
             FROM attributes a WHERE {where}
-            ORDER BY a.sort_order, a.name LIMIT %s OFFSET %s
+            ORDER BY {order_clause} LIMIT %s OFFSET %s
         """, params + [per_page, offset])
         items = cur.fetchall()
         return {"items": items, "total": total, "page": page, "per_page": per_page,
