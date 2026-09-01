@@ -200,7 +200,7 @@ def test_products_stock_status_filter(client):
 
 
 def test_products_per_page_max_enforced(client):
-    """per_page above 100 must be rejected."""
+    """per_page above 500 must be rejected."""
     conn = FakeConn(FakeCursor([]))
     with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/products",

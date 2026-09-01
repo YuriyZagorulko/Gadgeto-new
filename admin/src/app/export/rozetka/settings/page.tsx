@@ -27,7 +27,7 @@ const TABS: { key: TabName; label: string }[] = [
   { key: 'products', label: 'Експорт товарів' },
 ];
 
-const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 200, 500];
 
 /* ───── Searchable Category Select ───── */
 

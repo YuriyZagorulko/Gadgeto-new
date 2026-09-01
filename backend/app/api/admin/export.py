@@ -109,7 +109,7 @@ def upsert_setting(code: str, body: ChannelSettingUpdate, user=Depends(require_a
 def list_listings(
         code: str,
         page: int = Query(1, ge=1),
-        per_page: int = Query(20, ge=1, le=100),
+        per_page: int = Query(20, ge=1, le=500),
         publication_status: Optional[str] = Query(None),
         sync_status: Optional[str] = Query(None),
         q: Optional[str] = Query(None),
@@ -547,7 +547,7 @@ def taxonomy_values(
 def channel_products(
         code: str,
         page: int = Query(1, ge=1),
-        per_page: int = Query(20, ge=1, le=100),
+        per_page: int = Query(20, ge=1, le=500),
         q: Optional[str] = Query(None),
         category_id: Optional[int] = Query(None),
         publication_status: Optional[str] = Query(None),

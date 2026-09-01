@@ -23,6 +23,8 @@ def find_duplicate_category(cur, name: str, parent_id: Optional[int],
     under the same parent, excluding *exclude_id* if given.
 
     Returns None when no duplicate exists.
+
+    Works with RealDictCursor (used by admin_cursor) and plain tuple cursor.
     """
     norm = normalize_name(name)
     if parent_id is None:
@@ -36,7 +38,9 @@ def find_duplicate_category(cur, name: str, parent_id: Optional[int],
         params.append(exclude_id)
     cur.execute(sql, params)
     row = cur.fetchone()
-    return row[0] if row else None
+    if row is None:
+        return None
+    return row["id"] if isinstance(row, dict) else row[0]
 
 
 def find_duplicate_attribute(cur, name: str,
@@ -45,6 +49,7 @@ def find_duplicate_attribute(cur, name: str,
     excluding *exclude_id* if given.
 
     Attributes are globally unique by normalized name.
+    Works with RealDictCursor and plain tuple cursor.
     """
     norm = normalize_name(name)
     sql = "SELECT id FROM attributes WHERE LOWER(TRIM(name)) = %s"
@@ -54,7 +59,9 @@ def find_duplicate_attribute(cur, name: str,
         params.append(exclude_id)
     cur.execute(sql, params)
     row = cur.fetchone()
-    return row[0] if row else None
+    if row is None:
+        return None
+    return row["id"] if isinstance(row, dict) else row[0]
 
 
 def find_duplicate_attribute_value(cur, attribute_id: int, value: str,
@@ -63,6 +70,7 @@ def find_duplicate_attribute_value(cur, attribute_id: int, value: str,
     value for the same attribute, excluding *exclude_id* if given.
 
     Returns None when no duplicate exists.
+    Works with RealDictCursor and plain tuple cursor.
     """
     norm = normalize_name(value)
     sql = "SELECT id FROM attribute_values WHERE attribute_id = %s AND LOWER(TRIM(value)) = %s"
@@ -72,4 +80,6 @@ def find_duplicate_attribute_value(cur, attribute_id: int, value: str,
         params.append(exclude_id)
     cur.execute(sql, params)
     row = cur.fetchone()
-    return row[0] if row else None
+    if row is None:
+        return None
+    return row["id"] if isinstance(row, dict) else row[0]

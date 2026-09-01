@@ -298,7 +298,7 @@ export function Pagination({
   onGoToPage,
   pageSize,
   onPageSizeChange,
-  pageSizeOptions = [25, 50, 100],
+  pageSizeOptions = [25, 50, 100, 200, 500],
 }: {
   page: number;
   pages: number;
