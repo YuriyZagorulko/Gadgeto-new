@@ -430,7 +430,26 @@ def _process_product(ctx: dict, product_id: int) -> dict:
     ext_cat_id = _get_external_category_id(ctx["resolver"], product)
     transformed = _build_transform_payload(product, ctx["resolver"],
                                            ext_cat_id, ctx["public_base_url"])
-    apply_settings(ctx["settings"], transformed)
+    apply_settings(transformed, ctx["settings"])
+
+    # Apply Rozetka commission pricing — adjusts the export price upward
+    # so that after Rozetka deducts its commission, the seller receives
+    # the intended net price.  The commission is category-dependent and
+    # supports parent-category inheritance (child categories without
+    # explicit rules inherit from ancestors).
+    pricing_resolver = ctx.get("pricing_resolver")
+    if pricing_resolver and pricing_resolver.has_rules and ext_cat_id:
+        brand = None
+        if product.get("brand") and isinstance(product["brand"], dict):
+            brand = product["brand"].get("name")
+        export_price_uah = transformed.get("export_price") or 0
+        # Convert UAH → kopecks for the resolver
+        base_kopecks = int(round(export_price_uah * 100))
+        commission_kopecks = pricing_resolver.calculate_export_price(
+            str(ext_cat_id), base_kopecks, brand)
+        if commission_kopecks is not None:
+            # Convert back to UAH (major units) for the payload builder
+            transformed["export_price"] = commission_kopecks / 100.0
 
     content_hash, commercial_hash = compute_listing_hashes(
         ctx["resolver"], product, transformed, ctx["public_base_url"])
@@ -663,6 +682,12 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
         from app.channels.validation import (
             _load_product_data as load_product_data,
         )
+        # Rozetka commission pricing resolver — loaded once, shared across
+        # all products in this run.  Category inheritance is resolved
+        # server-side, so child categories without explicit rules receive
+        # their parent's commission rate.
+        from app.services.rozetka_pricing import RozetkaPricingResolver
+        pricing_resolver = RozetkaPricingResolver(cur, channel_id)
 
         ctx = {
             "channel_id": channel_id, "code": channel_code,
@@ -670,6 +695,7 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
             "settings": settings, "public_base_url": public_base_url,
             "load_product": load_product_data,
             "classify": adapter.classify_error,
+            "pricing_resolver": pricing_resolver,
         }
 
         for idx, product_id in enumerate(product_ids, start=1):

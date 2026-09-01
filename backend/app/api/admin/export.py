@@ -844,6 +844,7 @@ def export_preview(
         apply_export_settings,
         stock_exclusion_reason,
     )
+    from app.services.rozetka_pricing import RozetkaPricingResolver
 
     conn, cur = admin_cursor()
     try:
@@ -854,6 +855,9 @@ def export_preview(
 
         # Single resolver shared across all preview products
         resolver = ChannelMappingResolver(channel_id=cid, channel_code=code)
+
+        # Rozetka commission pricing resolver (same instance as the real export)
+        pricing_resolver = RozetkaPricingResolver(cur, cid)
 
         # Export settings so the preview can show the ACTUAL price that the
         # real export would submit (single source of truth).
@@ -890,6 +894,16 @@ def export_preview(
             # Apply the SAME export settings/preview as the real export.
             if payload is not None and export_settings is not None:
                 apply_export_settings(payload, export_settings)
+                # Apply Rozetka commission pricing (same logic as export_run.py)
+                if pricing_resolver.has_rules and ext_cat_id:
+                    brand = None
+                    if product.get("brand") and isinstance(product["brand"], dict):
+                        brand = product["brand"].get("name")
+                    base_kopecks = int(round((payload.get("export_price") or 0) * 100))
+                    commission_kopecks = pricing_resolver.calculate_export_price(
+                        str(ext_cat_id), base_kopecks, brand)
+                    if commission_kopecks is not None:
+                        payload["export_price"] = commission_kopecks / 100.0
                 product["export_price"] = payload.get("export_price")
 
             validation = _validate(pid, channel_code=code,
