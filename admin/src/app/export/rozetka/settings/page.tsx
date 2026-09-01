@@ -426,8 +426,6 @@ export default function RozetkaSettingsPage() {
             <SettingRow skey="price_markup_type" label="Тип націнки" hint="Відсоток від ціни або фіксована сума" type="select" />
             <SettingRow skey="price_markup_value" label="Розмір націнки" hint="15 = 15% або 15 грн" type="number" />
             <SettingRow skey="price_rounding" label="Округлення ціни" hint="До найближчого X (0 = без округлення)" type="number" />
-            <SettingRow skey="min_stock_for_export" label="Мінімальний залишок" hint="Не експортувати товари з кількістю менше" type="number" />
-            <SettingRow skey="export_out_of_stock" label="Експорт без залишку" hint="Експортувати товари з нульовою кількістю" type="select" />
           </div>
           <div className="mt-6 pt-4 border-t border-gray-100">
             <h3 className="text-sm font-semibold text-gray-700 mb-2">Поточні значення</h3>
@@ -435,8 +433,6 @@ export default function RozetkaSettingsPage() {
               <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Тип націнки</span><div className="font-medium">{settings.price_markup_type === 'fixed' ? 'Фіксована' : 'Відсоток'}</div></div>
               <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Розмір націнки</span><div className="font-medium">{settings.price_markup_value || '0'}{settings.price_markup_type === 'fixed' ? ' грн' : '%'}</div></div>
               <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Округлення</span><div className="font-medium">{settings.price_rounding ? `до ${settings.price_rounding}` : '—'}</div></div>
-              <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Мін. залишок</span><div className="font-medium">{settings.min_stock_for_export ? `≥ ${settings.min_stock_for_export}` : '—'}</div></div>
-              <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Експорт без залишку</span><div className="font-medium">{settings.export_out_of_stock === 'true' ? 'Так' : 'Ні'}</div></div>
             </div>
           </div>
         </div>

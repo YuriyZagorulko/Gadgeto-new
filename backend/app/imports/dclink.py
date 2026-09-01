@@ -42,6 +42,18 @@ PROTECTED_CORE_FIELDS = frozenset({
 })
 
 
+def _detect_in_stock(stocks) -> bool:
+    """Determine whether a DC-Link product is in stock.
+
+    `stocks` is a list of warehouse IDs where the product is available.
+    A product is considered in stock only when at least one warehouse
+    ID > 0 is present.  `[0]` / `[]` / None mean out of stock.
+    """
+    if not stocks:
+        return False
+    return any(isinstance(s, (int, float)) and s > 0 for s in stocks)
+
+
 def _validate_attributes(raw_attributes, stats, sku, logger_prefix=""):
     """Check that no attribute name collides with protected core fields.
     Logs a warning and returns only safe attributes (non-core-field names)."""
@@ -404,8 +416,8 @@ class DCLinkImporter:
                 if url and url not in images:
                     images.append(url)
 
-            stocks = item.get("stocks", [])
-            in_stock = bool(stocks) and any(s is not None for s in stocks)
+            stocks = item.get("stocks") or []
+            in_stock = _detect_in_stock(stocks)
 
             raw_options = item.get("options") or []
             raw_attributes = []

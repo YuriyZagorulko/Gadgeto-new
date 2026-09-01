@@ -56,6 +56,24 @@ MAX_LOGS = 300
 MAX_RESULTS = 1000
 
 
+def rozetka_stock_quantity(transformed: dict) -> int:
+    """Rozetka stock_quantity from a transformed product.
+
+    Business rule: in_stock → 10, out_of_stock → 0.  DC-Link API does not
+    provide exact stock counts, so a fixed value is used for in-stock
+    products (see ROZETKA_IN_STOCK_QUANTITY in payload.py).  Any existing
+    positive stock_qty from a supplier that DOES provide exact quantities
+    is preserved.
+    """
+    from app.channels.rozetka.payload import ROZETKA_IN_STOCK_QUANTITY
+
+    stock_status = (transformed.get("stock_status") or "").strip()
+    if stock_status == "in_stock":
+        existing = int(transformed.get("stock_qty") or 0)
+        return existing if existing > 0 else ROZETKA_IN_STOCK_QUANTITY
+    return int(transformed.get("stock_qty") or 0)
+
+
 class ExportRunBusy(Exception):
     """An export run is already active for this channel."""
 
@@ -123,6 +141,11 @@ def compute_listing_hashes(resolver, product: dict, transformed: dict,
     Content reuses validation.compute_content_hash; the commercial axis
     uses the SETTINGS-APPLIED price so a markup change alone triggers a
     price update on the next run.
+
+    `stock_status` is part of the commercial hash so that a product
+    flipping in_stock → out_of_stock (or back) changes the hash even when
+    stock_qty stays 0 — this drives the Rozetka stock_quantity update
+    (10 → 0 → 10) on subsequent exports.
     """
     from app.channels.validation import (
         _get_external_category_id,
@@ -135,6 +158,7 @@ def compute_listing_hashes(resolver, product: dict, transformed: dict,
     commercial_raw = json.dumps({
         "price": transformed.get("export_price"),
         "stock_qty": transformed.get("stock_qty"),
+        "stock_status": transformed.get("stock_status"),
         "currency": transformed.get("currency"),
     }, sort_keys=True, ensure_ascii=False, default=str)
     return content_hash, hashlib.sha256(commercial_raw.encode()).hexdigest()
@@ -504,7 +528,7 @@ def _resolve_and_push(ctx: dict, listing: dict, product_id: int, sku: str,
 
     result: dict = {"product_id": product_id, "sku": sku}
     price = transformed.get("export_price")
-    stock_qty = int(transformed.get("stock_qty") or 0)
+    stock_qty = rozetka_stock_quantity(transformed)
     return _push_product_ops(ctx, adapter, operation, transformed,
                              attr_specs, refs, adopted, listing,
                              content_hash, commercial_hash, price,

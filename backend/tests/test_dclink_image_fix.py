@@ -1,4 +1,5 @@
-"""Regression tests for DC-Link KeyError fix and image deduplication fix."""
+"""Regression tests for DC-Link KeyError fix, image deduplication fix,
+and stock detection logic."""
 
 import importlib.util
 import sys
@@ -157,3 +158,64 @@ def test_upsert_images_urls_collected_before_execution():
         "_upsert_images must collect URLs into a list before DB operations"
     assert "url = img_url.strip()" not in src or "urls_to_import" in src, \
         "_upsert_images should strip URLs early, not re-strip in loop"
+
+# ---------------------------------------------------------------------------
+# Stock detection tests
+# ---------------------------------------------------------------------------
+
+
+def test_detect_in_stock_true_for_positive_warehouse_ids():
+    """stocks=[1000], [382], [382,1001] must all be in stock."""
+    dclink = _load_module("dclink_stock", _DCLINK_PATH)
+    assert dclink._detect_in_stock([1000]) is True
+    assert dclink._detect_in_stock([382]) is True
+    assert dclink._detect_in_stock([382, 1001]) is True
+
+
+def test_detect_in_stock_false_for_zero_empty_none():
+    """stocks=[0], [], None must all be out of stock."""
+    dclink = _load_module("dclink_stock", _DCLINK_PATH)
+    assert dclink._detect_in_stock([0]) is False
+    assert dclink._detect_in_stock([]) is False
+    assert dclink._detect_in_stock(None) is False
+
+
+def test_parse_products_marks_out_of_stock():
+    """parse_products() must produce in_stock=False for stocks=[0]."""
+    dclink = _load_module("dclink_parse", _DCLINK_PATH)
+    imp = dclink.DCLinkImporter()
+
+    # Patch dependencies used inside parse_products.
+    imp._pick_price = lambda item, category_path=None: 1000
+    imp._process_attributes = lambda raw, sku="", category_id=None: ([], [], [])
+    imp.category_map = {}
+
+    # resolve_category_path is imported as module-level name; patch it.
+    dclink.resolve_category_path = lambda name, map, sku="": "Тест Категорія"
+
+    # The internal-category DB lookup inside parse_products is wrapped in
+    # try/except and degrades to _internal_cat_id=None on failure.
+    feed = [{"articul": "R80", "name": "Bloody R80",
+             "category_id": "11", "stocks": [0], "available": []}]
+    items = list(imp.parse_products(feed, {"11": "Миші"}))
+    assert len(items) == 1
+    assert items[0].in_stock is False, \
+        "stocks=[0] must be interpreted as out of stock"
+
+
+def test_parse_products_marks_in_stock():
+    """parse_products() must produce in_stock=True for stocks=[1000]."""
+    dclink = _load_module("dclink_parse2", _DCLINK_PATH)
+    imp = dclink.DCLinkImporter()
+
+    imp._pick_price = lambda item, category_path=None: 1000
+    imp._process_attributes = lambda raw, sku="", category_id=None: ([], [], [])
+    imp.category_map = {}
+    dclink.resolve_category_path = lambda name, map, sku="": "Тест Категорія"
+
+    feed = [{"articul": "R80", "name": "Bloody R80",
+             "category_id": "11", "stocks": [1000], "available": {"1000": "*"}}]
+    items = list(imp.parse_products(feed, {"11": "Миші"}))
+    assert len(items) == 1
+    assert items[0].in_stock is True, \
+        "stocks=[1000] must be interpreted as in stock"

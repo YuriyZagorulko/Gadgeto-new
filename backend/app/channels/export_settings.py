@@ -146,21 +146,10 @@ EXCLUDED_BY_STOCK_RULE = "EXCLUDED_BY_STOCK_RULE"
 
 
 def stock_exclusion_reason(stock_qty, settings: dict) -> Optional[str]:
-    """Return a Ukrainian reason string when the product violates the stock
-    rule, or None when it may be exported.
+    """All products are exported regardless of stock quantity.
 
-    Semantics (documented behaviour of the settings keys):
-      * export_out_of_stock = true  -> quantity is irrelevant;
-      * otherwise the product needs
-        stock_qty >= max(1, min_stock_for_export).
+    The only difference is stock_quantity in the Rozetka payload:
+    in_stock → 10, out_of_stock → 0.  This function always returns None
+    (no exclusion) because stock-based filtering is no longer applied.
     """
-    if settings.get("export_out_of_stock"):
-        return None
-    qty = int(stock_qty or 0)
-    required = max(1, int(settings.get("min_stock_for_export", 1) or 1))
-    if qty >= required:
-        return None
-    return (
-        f"Залишок {qty} менше мінімального для експорту ({required}). "
-        f"Експорт без залишку вимкнено."
-    )
+    return None

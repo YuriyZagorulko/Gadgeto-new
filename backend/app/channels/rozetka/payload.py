@@ -9,6 +9,10 @@ import logging
 from typing import Any, Optional
 from app.channels.export_settings import parse_bool, parse_float
 
+# Rozetka stock quantity sent for in-stock products when exact quantity is
+# unknown (DC-Link does not provide exact stock counts).
+ROZETKA_IN_STOCK_QUANTITY = 10
+
 logger = logging.getLogger("channels.rozetka.payload")
 
 SELECT_TYPES = {"list", "listvalues", "combobox", "checkboxgroup","checkboxgroupvalues"}
@@ -110,6 +114,9 @@ def build_create_payload(transformed, attr_specs):
         raise PayloadBuildError("Missing product title")
     description = (transformed.get("description") or "").strip()
     stock_qty = int(transformed.get("stock_qty") or 0)
+    stock_status = (transformed.get("stock_status") or "").strip()
+    if stock_status == "in_stock" and stock_qty <= 0:
+        stock_qty = ROZETKA_IN_STOCK_QUANTITY
     export_price = transformed.get("export_price")
     base_price = transformed.get("price") or 0
     price_value = export_price if export_price is not None else base_price
