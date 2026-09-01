@@ -6,6 +6,7 @@ from typing import Optional
 
 from app.api.admin.deps import require_admin
 from app.core.db_connect import admin_cursor
+from app.utils.duplicate_check import find_duplicate_category, normalize_name
 
 router = APIRouter()
 
@@ -67,6 +68,13 @@ def list_categories(user: dict = Depends(require_admin),
 def create_category(data: CategoryIn, user: dict = Depends(require_admin)):
     conn, cur = admin_cursor()
     try:
+        dup = find_duplicate_category(cur, data.name, data.parent_id)
+        if dup:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Категорія з назвою «{data.name.strip()}» вже існує "
+                       f"в цій батьківській категорії.",
+            )
         slug = _slugify(data.name)
         base = slug
         i = 2
@@ -95,6 +103,13 @@ def update_category(cid: int, data: CategoryIn, user: dict = Depends(require_adm
             raise HTTPException(status_code=404, detail="Категорію не знайдено")
         if data.parent_id == cid:
             raise HTTPException(status_code=400, detail="Категорія не може бути батьком для себе")
+        dup = find_duplicate_category(cur, data.name, data.parent_id, exclude_id=cid)
+        if dup:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Категорія з назвою «{data.name.strip()}» вже існує "
+                       f"в цій батьківській категорії.",
+            )
         cur.execute(
             """UPDATE categories SET name=%s, parent_id=%s, description=%s,
                is_active=%s, sort_order=%s, updated_at=NOW() WHERE id=%s""",
@@ -115,6 +130,9 @@ def delete_category(cid: int, user: dict = Depends(require_admin)):
         cur.execute("SELECT count(*) AS c FROM product_categories WHERE category_id=%s", (cid,))
         if cur.fetchone()["c"]:
             raise HTTPException(status_code=409, detail="До категорії прив'язані товари — спочатку приберіть прив'язки")
+        cur.execute("SELECT count(*) AS c FROM category_mappings WHERE category_id=%s", (cid,))
+        if cur.fetchone()["c"]:
+            raise HTTPException(status_code=409, detail="До категорії прив'язані маппінги — спочатку видаліть їх")
         cur.execute("DELETE FROM category_filters WHERE category_id=%s", (cid,))
         cur.execute("DELETE FROM categories WHERE id=%s", (cid,))
         return {"ok": True}

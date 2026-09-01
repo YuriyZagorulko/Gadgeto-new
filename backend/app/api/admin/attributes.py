@@ -7,6 +7,10 @@ from typing import Optional
 
 from app.api.admin.deps import require_admin
 from app.core.db_connect import admin_cursor
+from app.utils.duplicate_check import (
+    find_duplicate_attribute,
+    find_duplicate_attribute_value,
+)
 
 router = APIRouter()
 
@@ -23,7 +27,7 @@ class AttributeValueIn(BaseModel):
 
 
 @router.get("/attributes")
-def list_attributes(page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=200),
+def list_attributes(page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, le=500),
                           search: Optional[str] = Query(None),
                           q: Optional[str] = Query(None, description="Alias for search (used by EntityMultiSelect)"),
                           user: dict = Depends(require_admin)):
@@ -57,6 +61,12 @@ def list_attributes(page: int = Query(1, ge=1), per_page: int = Query(50, ge=1, 
 def create_attribute(data: AttributeIn, user: dict = Depends(require_admin)):
     conn, cur = admin_cursor()
     try:
+        dup = find_duplicate_attribute(cur, data.name)
+        if dup:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Атрибут з назвою «{data.name.strip()}» вже існує.",
+            )
         slug = re.sub(r"[^a-z0-9]+", "-", data.name.lower()).strip("-") or "attr"
         cur.execute("""INSERT INTO attributes (name, slug, type, is_filterable, is_global, created_at, updated_at)
                        VALUES (%s,%s,%s,%s,false,NOW(),NOW()) RETURNING id""",
@@ -70,6 +80,12 @@ def create_attribute(data: AttributeIn, user: dict = Depends(require_admin)):
 def update_attribute(aid: int, data: AttributeIn, user: dict = Depends(require_admin)):
     conn, cur = admin_cursor()
     try:
+        dup = find_duplicate_attribute(cur, data.name, exclude_id=aid)
+        if dup:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Атрибут з назвою «{data.name.strip()}» вже існує.",
+            )
         cur.execute("UPDATE attributes SET name=%s, type=%s, is_filterable=%s, updated_at=NOW() WHERE id=%s",
                     (data.name.strip(), data.type, data.is_filterable, aid))
         return {"ok": True}
@@ -112,20 +128,13 @@ def list_values(aid: int, user: dict = Depends(require_admin)):
 def create_value(aid: int, data: AttributeValueIn, user: dict = Depends(require_admin)):
     conn, cur = admin_cursor()
     try:
+        dup = find_duplicate_attribute_value(cur, aid, data.value)
+        if dup:
+            return {"ok": True, "id": dup, "already_existed": True}
         slug = re.sub(r"[^a-z0-9]+", "-", data.value.lower()).strip("-") or "value"
-        try:
-            cur.execute("""INSERT INTO attribute_values (attribute_id, value, slug, is_active)
-                           VALUES (%s,%s,%s,%s) RETURNING id""", (aid, data.value.strip(), slug, data.is_active))
-            return {"ok": True, "id": cur.fetchone()["id"]}
-        except psycopg2.errors.UniqueViolation:
-            conn.rollback()
-            # Value already exists — return its ID
-            cur.execute("SELECT id FROM attribute_values WHERE attribute_id=%s AND value=%s",
-                        (aid, data.value.strip()))
-            existing = cur.fetchone()
-            if existing:
-                return {"ok": True, "id": existing["id"], "already_existed": True}
-            raise
+        cur.execute("""INSERT INTO attribute_values (attribute_id, value, slug, is_active)
+                       VALUES (%s,%s,%s,%s) RETURNING id""", (aid, data.value.strip(), slug, data.is_active))
+        return {"ok": True, "id": cur.fetchone()["id"]}
     finally:
         conn.close()
 
@@ -134,6 +143,12 @@ def create_value(aid: int, data: AttributeValueIn, user: dict = Depends(require_
 def update_value(aid: int, vid: int, data: AttributeValueIn, user: dict = Depends(require_admin)):
     conn, cur = admin_cursor()
     try:
+        dup = find_duplicate_attribute_value(cur, aid, data.value, exclude_id=vid)
+        if dup:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Значення «{data.value.strip()}» вже існує для цього атрибуту.",
+            )
         cur.execute("UPDATE attribute_values SET value=%s, is_active=%s, updated_at=NOW() WHERE id=%s AND attribute_id=%s",
                     (data.value.strip(), data.is_active, vid, aid))
         return {"ok": True}

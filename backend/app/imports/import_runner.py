@@ -139,7 +139,9 @@ class ImportRunner:
         conn = psycopg2.connect(DB)
         cur = conn.cursor()
         try:
-            cur.execute('SELECT id FROM categories WHERE name = %s', (name,))
+            # Case-insensitive lookup to avoid duplicates with different casing
+            cur.execute('SELECT id FROM categories WHERE LOWER(TRIM(name)) = %s',
+                        (name.strip().lower(),))
             row = cur.fetchone()
             if row:
                 return row[0]
@@ -165,7 +167,9 @@ class ImportRunner:
         conn = psycopg2.connect(DB)
         cur = conn.cursor()
         try:
-            cur.execute('SELECT id FROM attributes WHERE name = %s', (name,))
+            # Case-insensitive lookup to avoid duplicates with different casing
+            cur.execute('SELECT id FROM attributes WHERE LOWER(TRIM(name)) = %s',
+                        (name.strip().lower(),))
             row = cur.fetchone()
             if row:
                 return row[0]
@@ -191,9 +195,10 @@ class ImportRunner:
         conn = psycopg2.connect(DB)
         cur = conn.cursor()
         try:
+            # Case-insensitive lookup to avoid duplicates with different casing
             cur.execute(
-                'SELECT id FROM attribute_values WHERE attribute_id=%s AND value=%s',
-                (attr_id, value),
+                'SELECT id FROM attribute_values WHERE attribute_id=%s AND LOWER(TRIM(value)) = %s',
+                (attr_id, value.strip().lower()),
             )
             row = cur.fetchone()
             if row:

@@ -1593,18 +1593,21 @@ def create_mapping(kind: str, body: MappingCreate, user: dict = Depends(require_
 
         # ── upsert — one mapping per supplier item (migration 013) ─────────
         table_has_category = kind in ("categories", "attributes")
+        # category context column: needed for attributes (to scope by category),
+        # redundant for categories (c_fk is already category_id).
+        needs_category_context = (kind == "attributes")
         iv_cols = f"{s_fk}, {c_fk}, is_active, created_by_user_id"
         iv_vals = "%s, %s, %s, %s"
-        if table_has_category:
+        if needs_category_context:
             iv_cols += ", category_id"
             iv_vals += ", %s"
         iv_cols += ", created_at, updated_at"
         iv_vals += ", NOW(), NOW()"
         up_sets = f"{c_fk} = EXCLUDED.{c_fk}, is_active = EXCLUDED.is_active, updated_at = NOW()"
-        if table_has_category:
+        if needs_category_context:
             up_sets += ", category_id = EXCLUDED.category_id"
         iv_params = [s_item_id, target, body.is_active, user.get("id")]
-        if table_has_category:
+        if needs_category_context:
             iv_params.append(body.category_id)
         cur.execute(
             f"""INSERT INTO {table} ({iv_cols})
