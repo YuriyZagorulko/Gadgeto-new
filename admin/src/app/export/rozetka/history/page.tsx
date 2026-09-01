@@ -72,6 +72,7 @@ export default function ExportHistoryPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [confirmDel, setConfirmDel] = useState<number | null>(null);
+  const [cancellingId, setCancellingId] = useState<number | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -98,6 +99,20 @@ export default function ExportHistoryPage() {
     } finally {
       setDeletingId(null);
       setConfirmDel(null);
+    }
+  };
+
+  const handleCancel = async (runId: number) => {
+    if (!confirm('Скасувати експорт #' + runId + '?')) return;
+    setCancellingId(runId);
+    try {
+      const res = await api.post<{ detail: string }>('/export/channels/rozetka/export/' + runId + '/cancel');
+      toast.push('success', res.detail || 'Скасування запитано');
+      load();
+    } catch (e: any) {
+      toast.push('error', e.message || 'Помилка скасування');
+    } finally {
+      setCancellingId(null);
     }
   };
 
@@ -190,6 +205,15 @@ export default function ExportHistoryPage() {
                         >
                           Деталі
                         </Link>
+                        {isActive && (
+                          <button
+                            onClick={() => handleCancel(r.id)}
+                            disabled={cancellingId === r.id}
+                            className="text-orange-600 hover:text-orange-800 text-xs font-medium disabled:opacity-50"
+                          >
+                            {cancellingId === r.id ? '...' : 'Скасувати'}
+                          </button>
+                        )}
                         {!isActive && (
                           <button
                             onClick={() => setConfirmDel(r.id)}

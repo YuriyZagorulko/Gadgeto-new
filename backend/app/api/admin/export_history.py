@@ -145,6 +145,63 @@ def export_history_detail(
         conn.close()
 
 
+@router.post("/export/channels/{code}/export/{run_id}/cancel")
+def cancel_export_run(code: str, run_id: int, user=Depends(require_admin)):
+    """Request cancellation of a running/queued export run.
+
+    Sets cancel_requested so the worker stops at the next safe point.
+    If the worker has no live heartbeat, transitions to CANCELLED immediately.
+    """
+    conn, cur = admin_cursor()
+    try:
+        ch = _resolve_rozetka_channel(cur)
+        cid = ch["id"]
+
+        cur.execute("""
+            SELECT id, status, heartbeat_at FROM sync_runs
+            WHERE id=%s AND channel_id=%s AND run_type=%s
+        """, (run_id, cid, RUN_TYPE))
+        run = cur.fetchone()
+        if not run:
+            raise HTTPException(status_code=404, detail="Експорт не знайдено")
+
+        status = run["status"]
+        if status not in ("QUEUED", "RUNNING"):
+            raise HTTPException(
+                status_code=409,
+                detail="Експорт можна скасувати лише у статусах QUEUED або RUNNING.",
+            )
+
+        heartbeat_at = run.get("heartbeat_at")
+        worker_alive = status == "RUNNING" and heartbeat_at is not None
+
+        if worker_alive:
+            cur.execute(
+                "UPDATE sync_runs SET cancel_requested=TRUE, updated_at=NOW()"
+                " WHERE id=%s AND status='RUNNING'",
+                (run_id,),
+            )
+            conn.commit()
+            return {
+                "cancelled_done": False,
+                "detail": "Скасування запитано. Експорт зупиниться на безпечній точці.",
+            }
+
+        # No live worker — transition immediately
+        cur.execute(
+            "UPDATE sync_runs SET status='CANCELLED', finished_at=NOW(), updated_at=NOW(),"
+            " cancel_requested=TRUE, heartbeat_at=NOW() WHERE id=%s",
+            (run_id,),
+        )
+        conn.commit()
+        return {
+            "cancelled_done": True,
+            "detail": "Експорт перервано адміністратором.",
+        }
+    finally:
+        conn.close()
+
+
 @router.delete("/export/channels/{code}/history/{run_id}")
 def export_history_delete(
     code: str,
