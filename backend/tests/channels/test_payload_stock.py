@@ -73,11 +73,12 @@ def test_create_payload_price_pipeline_untouched():
 # ── UPDATE (PUT /items/mass-update) payload ────────────────────────────
 
 
-def _update_stock_quantity(stock_status, stock_qty):
+def _update_stock_quantity(stock_status, stock_qty, product_status="PUBLISHED"):
     """Mirror export_run.rozetka_stock_quantity for the transformed dict."""
     from app.channels.export_run import rozetka_stock_quantity
     return rozetka_stock_quantity({"stock_status": stock_status,
-                                   "stock_qty": stock_qty})
+                                   "stock_qty": stock_qty,
+                                   "product_status": product_status})
 
 
 def test_update_stock_in_stock_uses_10():
@@ -129,3 +130,13 @@ def test_update_stock_preserves_positive_exact_qty():
     """A supplier-provided exact positive stock_qty is preserved."""
     assert _update_stock_quantity("in_stock", 25) == 25
     assert _update_stock_quantity("in_stock", 0) == 10
+
+
+def test_update_stock_hidden_product_returns_0():
+    """A HIDDEN product (e.g. after supplier removal) gets stock_quantity=0
+    regardless of stock_status, so its existing Rozetka listing is deactivated."""
+    assert _update_stock_quantity("in_stock", 0, product_status="HIDDEN") == 0
+    assert _update_stock_quantity("in_stock", 25, product_status="HIDDEN") == 0
+    assert _update_stock_quantity("out_of_stock", 0, product_status="HIDDEN") == 0
+    assert _update_stock_quantity("in_stock", 10, product_status="DRAFT") == 0
+    assert _update_stock_quantity("in_stock", 10, product_status="ARCHIVED") == 0

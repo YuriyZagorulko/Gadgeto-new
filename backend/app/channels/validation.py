@@ -403,4 +403,5 @@ def _build_transform_payload(product: dict, resolver: ChannelMappingResolver,
         "currency": product.get("currency") or "UAH",
         "stock_qty": product.get("stock_qty") or 0,
         "stock_status": product.get("stock_status") or "out_of_stock",
+        "product_status": product.get("status") or "DRAFT",
     }

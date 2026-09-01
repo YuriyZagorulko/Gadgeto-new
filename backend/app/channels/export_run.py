@@ -64,7 +64,14 @@ def rozetka_stock_quantity(transformed: dict) -> int:
     products (see ROZETKA_IN_STOCK_QUANTITY in payload.py).  Any existing
     positive stock_qty from a supplier that DOES provide exact quantities
     is preserved.
+
+    Products that are not PUBLISHED (e.g. HIDDEN after supplier removal)
+    always get stock_quantity = 0 so their existing Rozetka listing is
+    deactivated.
     """
+    product_status = (transformed.get("product_status") or "").strip()
+    if product_status != "PUBLISHED":
+        return 0
     from app.channels.rozetka.payload import ROZETKA_IN_STOCK_QUANTITY
 
     stock_status = (transformed.get("stock_status") or "").strip()
@@ -394,49 +401,26 @@ def _process_product(ctx: dict, product_id: int) -> dict:
     if not validation.get("ready"):
         store_validation_issues(ctx["cur"], listing["id"], issues)
         reason = "; ".join(i.get("message", "") for i in error_issues)[:500]
-        # SKU/name/category come from the product data validation already
-        # loaded — no second DB query for the same product.
         v_sku = validation.get("sku") or ""
         v_name = validation.get("name") or ""
         v_cat = validation.get("external_category_id")
 
         # If the product failed validation because it is HIDDEN/not published
-        # AND it was previously exported to Rozetka, deactivate the remote
-        # offer by zeroing its stock via the adapter's unpublish() method.
-        if listing.get("external_id"):
-            has_hidden_issue = any(
-                i.get("code") == "PRODUCT_NOT_PUBLISHED" for i in error_issues
-            )
-            if has_hidden_issue:
-                try:
-                    ctx["adapter"].unpublish({
-                        "sku": listing.get("sku") or "",
-                        "external_ref": {
-                            "rz_item_id": int(listing["external_id"])
-                        } if listing["external_id"].isdigit() else {},
-                        "external_id": listing.get("external_id"),
-                        "price": 0,
-                        "stock_quantity": 0,
-                    })
-                    finish_listing_ok(ctx["cur"], listing,
-                                      listing.get("external_id"),
-                                      "", "", None)
-                except Exception as exc:
-                    etype, _retryable = ctx["classify"](exc)
-                    logger.warning(
-                        "Unpublish failed for hidden product %s: %s %s",
-                        product_id, etype, exc)
-                    finish_listing_error(
-                        ctx["cur"], listing["id"], etype, str(exc)[:2000])
+        # BUT it was previously exported to Rozetka, we must still sync the
+        # deactivation — proceed to the UPDATE path below so the existing
+        # Rozetka listing gets updated with stock=0.
+        has_hidden_issue = any(
+            i.get("code") == "PRODUCT_NOT_PUBLISHED" for i in error_issues
+        )
+        if not (listing.get("external_id") and has_hidden_issue
+                and len(error_issues) == 1):
+            return {"product_id": product_id, "sku": v_sku, "name": v_name,
+                    "status": "skipped", "reason": reason,
+                    "issues": _summarize_validation_issues(error_issues, v_cat)}
 
-        return {"product_id": product_id, "sku": v_sku, "name": v_name,
-                "status": "skipped", "reason": reason,
-                "issues": _summarize_validation_issues(error_issues, v_cat)}
-
-    # Validation passed (ready=True). Clear any stale validation issues from
-    # a previous failed export attempt so the UI/history does not show old
-    # MISSING_REQUIRED_ATTR_MAPPING / other blocking errors that are no longer
-    # relevant after Phase 37/39.
+    # Validation passed (ready=True) OR the product has an existing Rozetka
+    # listing and is HIDDEN (proceeding to update with stock=0).
+    # Clear any stale validation issues from a previous failed export attempt.
     store_validation_issues(ctx["cur"], listing["id"], [])
 
     product = ctx["load_product"](ctx["cur"], product_id)
