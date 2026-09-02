@@ -96,15 +96,21 @@ def _cleanup_supplier_temp_files(supplier_code: str):
                         pass
 
 
-def _start_heartbeat(job_id: int):
+def _start_heartbeat(job_id: int, run_id=None):
     """Background daemon thread that keeps heartbeat_at fresh.
 
     The importer reports real progress every N products, but long stages
     (feed download/parse, finalize) may not emit progress for a while. The
     heartbeat guarantees the stale detector never fires for a genuinely
     working job, while a dead process stops heartbeating immediately.
+
+    Additionally bumps the parent `catalog_sync_runs.heartbeat_at` when a
+    `run_id` is supplied (i.e. the import runs as part of an automated
+    synchronization), so a long-running supplier import never gets
+    falsely marked stale by `reconcile_catalog_sync_runs`.
     """
     stop = threading.Event()
+    run_id = run_id or 0
 
     def _loop():
         while not stop.wait(30):
@@ -112,6 +118,13 @@ def _start_heartbeat(job_id: int):
                 refresh_heartbeat(job_id)
             except Exception:
                 break
+            if run_id:
+                try:
+                    # Lazy import avoids any module-load ordering concerns.
+                    from app.tasks.state import touch_catalog_run
+                    touch_catalog_run(run_id)
+                except Exception:
+                    pass
 
     t = threading.Thread(target=_loop, daemon=True, name=f"import-heartbeat-{job_id}")
     t.start()
@@ -139,7 +152,8 @@ def _flush_error_counts(conn, job_id, runner):
         pass
 
 
-def run_full_import(supplier_code, job_id, supplier_id, import_type="full"):
+def run_full_import(supplier_code, job_id, supplier_id, import_type="full",
+                    run_id=None):
     """Run a full import for one job and drive its lifecycle in import_jobs.
 
     Status flow: QUEUED -> RUNNING -> SUCCEEDED / FAILED / CANCELLED.
@@ -180,7 +194,8 @@ def run_full_import(supplier_code, job_id, supplier_id, import_type="full"):
         cur.close()
         _log(conn, job_id, "INFO", f"Початок імпорту {supplier_code.upper()}")
 
-        heartbeat_stop, _ = _start_heartbeat(job_id)
+        heartbeat_stop, _ = _start_heartbeat(job_id, run_id)
+
 
         progress("authenticating", 0, 0, 0, 0, 0, 0, "Авторизація...")
         progress("downloading", 0, 0, 0, 0, 0, 0, "Завантаження каталогу...")

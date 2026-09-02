@@ -12,7 +12,10 @@ alembic>=1.14.0
 pgvector>=0.3.0
 
 
-# Background jobs
+# Background jobs / automation
+celery[redis]>=5.4.0
+redis>=5.0.0
+fakeredis>=2.23.0  # tests only — in-memory Redis substitute
 
 # Pydantic and validation
 pydantic>=2.10.0

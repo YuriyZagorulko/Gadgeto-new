@@ -82,6 +82,33 @@ class Settings(BaseSettings):
     # Supplier feeds (temporary working storage path)
     SUPPLIER_FEEDS_DIR: str = Field(default="/data/feeds")
 
+    # ── Celery / Redis (catalog automation) ──────────────────────────────────
+    # Broker/backend URLs. In docker-compose they point at the `redis` service.
+    CELERY_BROKER_URL: str = Field(default="redis://localhost:6379/0")
+    CELERY_RESULT_BACKEND: str = Field(default="redis://localhost:6379/1")
+    # Lock/status inspection uses the same Redis instance.
+    CATALOG_SYNC_REDIS_URL: str = Field(default="redis://localhost:6379/0")
+
+    # ── Catalog automation (Celery Beat orchestrated) ────────────────────────
+    # Master switch. Beat always fires the scheduled task; the task itself
+    # checks this flag (env default, overridable at runtime via the `settings`
+    # DB table through the admin "Автоматизація" enable/disable API).
+    CATALOG_SYNC_ENABLED: bool = Field(default=False)
+    # Beat cadence: run the full catalog sync every N hours (crontab hour=*/N).
+    CATALOG_SYNC_INTERVAL_HOURS: int = Field(default=4, ge=1)
+    # Anchor hour (0-23) for the cadence. anchor=2, interval=4 → 02/06/10/14/18/22.
+    CATALOG_SYNC_ANCHOR_HOUR: int = Field(default=0, ge=0, le=23)
+    # Distributed lock TTL (seconds) — must comfortably exceed the longest
+    # realistic sync so overlapping runs are blocked, not the lock.
+    CATALOG_SYNC_LOCK_TIMEOUT: int = Field(default=6 * 3600, ge=60)
+    # Max automatic retries for transient supplier/export failures.
+    CATALOG_SYNC_MAX_RETRIES: int = Field(default=3, ge=0)
+    # Base countdown (seconds) for exponential backoff: 60, 120, 240, ...
+    CATALOG_SYNC_RETRY_BACKOFF: int = Field(default=60, ge=1)
+    # Optional public base URL baked into exported image URLs. When empty the
+    # existing manual-export behaviour is preserved (URLs passed through).
+    CATALOG_SYNC_PUBLIC_BASE_URL: str = Field(default="")
+
 
 @lru_cache
 def get_settings() -> Settings:

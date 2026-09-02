@@ -45,7 +45,14 @@ const navItems: NavItem[] = [
   },
   { href: '/orders', label: 'Замовлення', icon: '🧾' },
   { href: '/users', label: 'Користувачі', icon: '👤' },
-  { href: '/settings', label: 'Налаштування', icon: '⚙️' },
+  {
+    label: 'Налаштування',
+    icon: '⚙️',
+    children: [
+      { href: '/settings', label: 'Налаштування' },
+      { href: '/automation', label: 'Автоматизація' },
+    ],
+  },
   {
     label: 'Експорт',
     icon: '📤',

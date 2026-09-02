@@ -22,11 +22,9 @@ COPY migrations/ ./migrations/
 COPY backend/pyproject.toml .
 
 # Create entrypoint script (no alembic - tables already exist in the host database)
-RUN echo '#!/bin/bash\n\
-cd /app\n\
-echo "Starting Gadgeto backend..."\n\
-uvicorn app.main:app --host 0.0.0.0 --port 8000\n\
-' > /entrypoint.sh && chmod +x /entrypoint.sh
+# When the container command passes arguments (celery worker / beat in
+# docker-compose), execute them directly instead of the uvicorn API server.
+RUN printf '#!/bin/bash\ncd /app\nif [ "$#" -gt 0 ]; then\n  echo "Starting: $*"\n  exec "$@"\nfi\necho "Starting Gadgeto backend..."\nuvicorn app.main:app --host 0.0.0.0 --port 8000\n' > /entrypoint.sh && chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
 EXPOSE 8000

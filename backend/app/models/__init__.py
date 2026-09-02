@@ -49,6 +49,7 @@ from app.models.channel_mapping import (
 )
 
 from app.models.rozetka_pricing import RozetkaPricingImport, RozetkaCategoryPricingRule
+from app.models.catalog_sync import CatalogSyncRun, CatalogSyncLog
 
 __all__ = [
     "Base", "User", "UserRole", "UserStatus", "UserSession",
@@ -68,4 +69,5 @@ __all__ = [
     "SyncJobErrorType", "SyncLogLevel",
     "ChannelExternalCategory", "ChannelExternalAttribute", "ChannelExternalValue",
     "ChannelCategoryMapping", "ChannelAttributeMapping", "ChannelValueMapping",
+    "CatalogSyncRun", "CatalogSyncLog",
 ]

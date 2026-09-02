@@ -24,6 +24,8 @@ dependencies = [
     "python-slugify>=8.0.0",
     "email-validator>=2.2.0",
     "Pillow>=11.0.0",
+    "celery[redis]>=5.4.0",
+    "redis>=5.0.0",
 ]
 
 [tool.setuptools.packages.find]

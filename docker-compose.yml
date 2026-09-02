@@ -1,5 +1,21 @@
 
 services:
+  # ── Redis (catalog automation broker/lock/state) ────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: gadgeto-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+  # ── Backend API (FastAPI / Uvicorn) ──────────────────────────────────────────
   backend:
     build:
       context: .
@@ -23,6 +39,13 @@ services:
       - SUPPLIER_ITLINK_CUSTOMER_ID=${SUPPLIER_ITLINK_CUSTOMER_ID:-}
       - SUPPLIER_DCLINK_LOGIN=${SUPPLIER_DCLINK_LOGIN:-}
       - SUPPLIER_DCLINK_PASSWORD=${SUPPLIER_DCLINK_PASSWORD:-}
+      # Redis / Celery (catalog automation)
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CATALOG_SYNC_REDIS_URL=redis://redis:6379/0
+      - CATALOG_SYNC_ENABLED=${CATALOG_SYNC_ENABLED:-true}
+      - CATALOG_SYNC_INTERVAL_HOURS=${CATALOG_SYNC_INTERVAL_HOURS:-4}
+      - CATALOG_SYNC_ANCHOR_HOUR=${CATALOG_SYNC_ANCHOR_HOUR:-2}
       # Brevo — set these in .env or via your deployment secrets
       - BREVO_API_KEY=${BREVO_API_KEY:-}
       - BREVO_SENDER_EMAIL=${BREVO_SENDER_EMAIL:-noreply@gadgeto.com.ua}
@@ -45,6 +68,97 @@ services:
       interval: 10s
       timeout: 4s
       retries: 5
+    depends_on:
+      redis:
+        condition: service_started
+
+  # ── Celery Worker (catalog automation — import/export jobs) ─────────────────
+  celery-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: gadgeto-celery-worker
+    command:
+      - /bin/sh
+      - -c
+      - |
+        cd /app &&
+        celery -A app.tasks worker
+        --loglevel=info
+        --concurrency=1
+        --max-tasks-per-child=1
+        --without-heartbeat
+        --without-gossip
+        --without-mingle
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://gadgeto:gadgeto@host.docker.internal:5432/gadgeto
+      - SECRET_KEY=dev-secret-key-change-me
+      - ENVIRONMENT=development
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CATALOG_SYNC_REDIS_URL=redis://redis:6379/0
+      - CATALOG_SYNC_ENABLED=${CATALOG_SYNC_ENABLED:-true}
+      - CATALOG_SYNC_INTERVAL_HOURS=${CATALOG_SYNC_INTERVAL_HOURS:-4}
+      - CATALOG_SYNC_ANCHOR_HOUR=${CATALOG_SYNC_ANCHOR_HOUR:-2}
+      - SUPPLIER_ITLINK_USERNAME=${SUPPLIER_ITLINK_USERNAME:-}
+      - SUPPLIER_ITLINK_PASSWORD=${SUPPLIER_ITLINK_PASSWORD:-}
+      - SUPPLIER_ITLINK_PRICE_ID=${SUPPLIER_ITLINK_PRICE_ID:-}
+      - SUPPLIER_ITLINK_CUSTOMER_ID=${SUPPLIER_ITLINK_CUSTOMER_ID:-}
+      - SUPPLIER_DCLINK_LOGIN=${SUPPLIER_DCLINK_LOGIN:-}
+      - SUPPLIER_DCLINK_PASSWORD=${SUPPLIER_DCLINK_PASSWORD:-}
+      - ROZETKA_API_URL=${ROZETKA_API_URL:-https://api-seller.rozetka.com.ua}
+      - ROZETKA_SELLER_USERNAME=${ROZETKA_SELLER_USERNAME:-}
+      - ROZETKA_SELLER_PASSWORD=${ROZETKA_SELLER_PASSWORD:-}
+    extra_hosts:
+      # DATABASE_URL points at the host-run PostgreSQL (same as backend)
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend:/app
+      - ./migrations:/app/migrations
+      - ./data/media:/app/media
+      - ${SUPPLIER_FEEDS_HOST_DIR:-./data/feeds}:/data/feeds
+    depends_on:
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── Celery Beat (catalog automation — periodic scheduler) ───────────────────
+  celery-beat:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: gadgeto-celery-beat
+    command:
+      - /bin/sh
+      - -c
+      - |
+        cd /app &&
+        celery -A app.tasks beat
+        --loglevel=info
+        --pidfile=/tmp/celery-beat.pid
+        --scheduler celery.beat.PersistentScheduler
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://gadgeto:gadgeto@host.docker.internal:5432/gadgeto
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CATALOG_SYNC_REDIS_URL=redis://redis:6379/0
+      - CATALOG_SYNC_ENABLED=${CATALOG_SYNC_ENABLED:-true}
+      - CATALOG_SYNC_INTERVAL_HOURS=${CATALOG_SYNC_INTERVAL_HOURS:-4}
+      - CATALOG_SYNC_ANCHOR_HOUR=${CATALOG_SYNC_ANCHOR_HOUR:-2}
+    extra_hosts:
+      # DATABASE_URL points at the host-run PostgreSQL (same as backend)
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend:/app
+      - ./migrations:/app/migrations
+    depends_on:
+      redis:
+        condition: service_started
+    restart: unless-stopped
 
   frontend:
     build:
@@ -85,6 +199,7 @@ services:
       - backend
 
 volumes:
+  redis_data:
   frontend_node_modules:
   frontend_next:
   admin_node_modules:
