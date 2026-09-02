@@ -476,46 +476,6 @@ function AutomationPanel() {
           <Pagination page={historyPage} pages={Math.ceil(historyTotal / 10)} total={historyTotal} onPage={setHistoryPage} />
         </div>
       </div>
-
-      {/* ── Manual import buttons (separate from automation — no catalog_sync_runs) */}
-      <div className="border-t border-gray-200 pt-6 mt-6">
-        <h3 className="font-medium text-gray-800 mb-3">Ручні дії</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <Button variant="primary" disabled={hasActive}
-              onClick={() => {
-                if (confirm('Запустити повний імпорт товарів для ВСІХ активних постачальників? Це може тривати довго.')) {
-                  api.post('/imports/run-all', { action: 'import' })
-                    .then(() => toast.push('success', 'Глобальний імпорт запущено'))
-                    .catch((e) => toast.push('error', (e as Error).message));
-                }
-              }}>
-              Імпортувати всі товари
-            </Button>
-            <p className="text-xs text-gray-500 mt-2">
-              Повний імпорт товарів з усіх активних постачальників.
-            </p>
-            <p className="text-xs text-gray-400 mt-1">
-              Повідомлення з'явиться, коли завершиться (може тривати довго).
-            </p>
-          </div>
-          <div>
-            <Button variant="secondary" disabled={hasActive}
-              onClick={() => {
-                if (confirm('Запустити оновлення цін і залишків з фідів для ВСІХ активних постачальників?')) {
-                  api.post('/imports/run-all', { action: 'update' })
-                    .then(() => toast.push('success', 'Оновлення цін і залишків запущено'))
-                    .catch((e) => toast.push('error', (e as Error).message));
-                }
-              }}>
-              Оновити ціни та залишки
-            </Button>
-            <p className="text-xs text-gray-500 mt-2">
-              Оновити ціни та наявність товарів з фідів постачальників.
-            </p>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

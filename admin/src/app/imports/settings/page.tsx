@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { api, qs } from '@/lib/api';
-import { PageHeader, LoadingState, EmptyState, useToast } from '@/components/ui';
+import { PageHeader, LoadingState, EmptyState, useToast, Button } from '@/components/ui';
 import PricingTab from '@/components/PricingTab';
 
 type Sup = { id: number; code: string; name: string; config: Record<string, string> };
@@ -30,10 +30,15 @@ export default function ImportSettingsPage() {
             className={'pb-2 text-sm font-medium border-b-2 transition-colors ' + (tab === 'pricing' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700')}>
             Ціноутворення
           </button>
+          <button onClick={() => setTab('manual')}
+            className={'pb-2 text-sm font-medium border-b-2 transition-colors ' + (tab === 'manual' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700')}>
+            Ручний імпорт
+          </button>
         </div>
       </div>
       {tab === 'settings' && <SettingsTab />}
       {tab === 'pricing' && <PricingTab />}
+      {tab === 'manual' && <ManualImportTab />}
     </div>
   );
 }
@@ -121,6 +126,67 @@ function SettingsTab() {
           );
         })
       )}
+    </div>
+  );
+}
+
+/* =====================================================================
+   TAB 3: Manual Import — global actions (separate from automation)
+   ===================================================================== */
+
+function ManualImportTab() {
+  const toast = useToast();
+  const [hasActive, setHasActive] = useState(false);
+
+  useEffect(() => {
+    // Check for any running import jobs to disable buttons
+    api.get<{ items: unknown[] }>('/imports' + qs({ page: 1, per_page: 1, status: 'RUNNING' }))
+      .then((d) => setHasActive((d.items?.length || 0) > 0))
+      .catch(() => {});
+  }, []);
+
+  const runImport = async (action: 'import' | 'update') => {
+    const actionLabel = action === 'import'
+      ? 'повний імпорт товарів для ВСІХ активних постачальників? Це може тривати довго.'
+      : 'оновлення цін і залишків з фідів для ВСІХ активних постачальників?';
+    if (!confirm('Запустити ' + actionLabel)) return;
+
+    try {
+      await api.post('/imports/run-all', { action });
+      toast.push('success', action === 'import' ? 'Глобальний імпорт запущено' : 'Оновлення цін і залишків запущено');
+    } catch (e: unknown) {
+      toast.push('error', (e as Error).message);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <h3 className="font-medium text-gray-800">Ручні дії</h3>
+      <p className="text-xs text-gray-500">
+        Ці дії працюють окремо від автоматизації — вони не створюють catalog_sync_runs
+        і не мають фази експорту. Використовуйте для разового запуску без розкладу.
+      </p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <Button variant="primary" disabled={hasActive} onClick={() => runImport('import')}>
+            Імпортувати всі товари
+          </Button>
+          <p className="text-xs text-gray-500 mt-2">
+            Повний імпорт товарів з усіх активних постачальників.
+          </p>
+          <p className="text-xs text-gray-400 mt-1">
+            Повідомлення з'явиться, коли завершиться (може тривати довго).
+          </p>
+        </div>
+        <div>
+          <Button variant="secondary" disabled={hasActive} onClick={() => runImport('update')}>
+            Оновити ціни та залишки
+          </Button>
+          <p className="text-xs text-gray-500 mt-2">
+            Оновити ціни та наявність товарів з фідів постачальників.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
