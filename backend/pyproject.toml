@@ -43,3 +43,7 @@ ignore = ["E501"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
+markers = [
+    "unit: fast, no PostgreSQL dependency. Safe to run anywhere.",
+    "integration: requires a dedicated TEST_DATABASE_URL; rolled back automatically by the db_connection fixture.",
+]

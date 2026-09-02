@@ -525,24 +525,22 @@ def test_preview_validation_issues(client):
     assert prod["issues"][0]["code"] == "MISSING_CATEGORY_MAPPING"
 
 
-def test_preview_unknown_channel(client):
-    """Preview with unknown channel code returns 404."""
-    # Resolve is done via _resolve_channel which queries the DB;
-    # the preview endpoint calls db() then _resolve_channel which raises on not found.
-    # We can't easily mock this without also intercepting the channel lookup,
-    # so we verify _resolve_channel behavior directly.
+def test_preview_unknown_channel(client, db_connection):
+    """Preview with unknown channel code returns 404.
+
+    Uses the ``db_connection`` fixture so the test runs against the
+    dedicated ``gadgeto_test`` database and the test transaction is
+    rolled back at teardown.
+    """
     from app.api.admin.export import _resolve_channel
     from fastapi import HTTPException
-    import psycopg2
-    conn = psycopg2.connect(app.core.db_connect.DB)
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    cur = db_connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         _resolve_channel(cur, "unknown_channel_that_does_not_exist")
         assert False, "Should have raised 404"
     except HTTPException as e:
         assert e.status_code == 404
-    finally:
-        conn.close()
 
 
 def test_preview_unauthorized(client):
