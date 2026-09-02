@@ -63,3 +63,6 @@ Thumbs.db
 data/
 .helper
 audit_reports/
+# Celery Beat scheduler state
+celerybeat-schedule
+celerybeat-schedule.*

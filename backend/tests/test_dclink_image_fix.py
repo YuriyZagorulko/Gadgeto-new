@@ -53,14 +53,14 @@ def test_download_feed_resilient_to_missing_id():
 
     def mock_get_categories(sid):
         # Return categories WITHOUT "id"
-        return [{"category_id": 123, "name": "Test Category"}]
+        return [{"categoryID": 123, "name": "Test Category"}]
 
     def mock_get_products(sid, cat_id):
         # Return products WITHOUT "id"
-        return [{"product_id": 999, "articul": "TEST001", "name": "Test Product"}]
+        return [{"productID": 999, "articul": "TEST001", "name": "Test Product"}]
 
     def mock_get_products_content(sid, product_ids):
-        return [{"id": 999, "articul": "TEST001", "name": "Test Product", "options": []}]
+        return [{"productID": 999, "articul": "TEST001", "name": "Test Product", "options": []}]
 
     imp._login = mock_login
     imp._get_categories = mock_get_categories
@@ -71,7 +71,7 @@ def test_download_feed_resilient_to_missing_id():
 
     assert len(cat_map) == 1, "Expected 1 mapped category"
     assert cat_map["123"] == "Test Category"
-    assert content == [{"id": 999, "articul": "TEST001", "name": "Test Product", "options": []}]
+    assert content == [{"productID": 999, "articul": "TEST001", "name": "Test Product", "options": []}]
 
 
 def test_download_feed_resilient_to_mixed_keys():
@@ -86,13 +86,13 @@ def test_download_feed_resilient_to_mixed_keys():
         # Mix of "id" and "category_id"
         return [
             {"id": 1, "name": "Standard"},
-            {"category_id": 2, "name": "Alternative"},
+            {"categoryID": 2, "name": "Alternative"},
         ]
 
     def mock_get_products(sid, cat_id):
         return [
             {"id": 10, "articul": "A001"},
-            {"product_id": 20, "articul": "A002"},
+            {"productID": 20, "articul": "A002"},
         ]
 
     def mock_get_products_content(sid, product_ids):

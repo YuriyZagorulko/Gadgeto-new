@@ -33,8 +33,10 @@ def _product_row(**kw):
         "listing_id": 1, "publication_status": "ready",
         "sync_status": "idle", "external_id": None,
         "last_error_type": None, "last_error_message": None,
-        "last_synced_at": None,
+        "last_synced_at": None, "last_attempt_at": None,
         "has_mapping": True,
+        "supplier_id": 1, "supplier_name": "Test Supplier",
+        "remote_status": None,
     }
     row.update(kw)
     return row
@@ -64,6 +66,12 @@ class FakeCursor:
                     "id": 1, "code": "rozetka", "name": "Rozetka",
                     "is_enabled": False, "created_at": None, "updated_at": None,
                 })]
+            return []
+        # Pricing rules — return empty (test does not exercise pricing)
+        if "from rozetka_category_pricing_rules" in low:
+            return []
+        # Taxonomy hierarchy — return empty (test does not exercise taxonomy)
+        if "from channel_external_categories" in low and "where channel_id" in low:
             return []
         # Count query
         if low.startswith("select count"):
@@ -120,7 +128,7 @@ def test_products_pagination(client):
     """Returns paginated results with correct count."""
     rows = [_product_row(id=i) for i in range(1, 11)]
     conn = FakeConn(FakeCursor(rows))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/products",
                          params={"page": 1, "per_page": 5})
     assert res.status_code == 200
@@ -138,7 +146,7 @@ def test_products_search_by_sku(client):
     """Search q parameter filters by SKU."""
     rows = [_product_row(id=1, sku="ABC-123")]
     conn = FakeConn(FakeCursor(rows))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/products",
                          params={"q": "ABC-123"})
     assert res.status_code == 200
@@ -148,7 +156,7 @@ def test_products_search_by_name(client):
     """Search q parameter filters by product name."""
     rows = [_product_row(id=42, name="Ноутбук Lenovo")]
     conn = FakeConn(FakeCursor(rows))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/products",
                          params={"q": "Lenovo"})
     assert res.status_code == 200
@@ -157,7 +165,7 @@ def test_products_search_by_name(client):
 def test_products_category_filter(client):
     """Filter by internal category id."""
     conn = FakeConn(FakeCursor([_product_row(category_id=5)]))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/products",
                          params={"category_id": 5})
     assert res.status_code == 200
@@ -166,7 +174,7 @@ def test_products_category_filter(client):
 def test_products_publication_status_filter(client):
     """Filter by publication status."""
     conn = FakeConn(FakeCursor([_product_row(publication_status="published")]))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/products",
                          params={"publication_status": "published"})
     assert res.status_code == 200
@@ -175,7 +183,7 @@ def test_products_publication_status_filter(client):
 def test_products_sync_status_filter(client):
     """Filter by sync status."""
     conn = FakeConn(FakeCursor([_product_row(sync_status="error")]))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/products",
                          params={"sync_status": "error"})
     assert res.status_code == 200
@@ -184,7 +192,7 @@ def test_products_sync_status_filter(client):
 def test_products_has_mapping_filter(client):
     """Filter by has_mapping flag."""
     conn = FakeConn(FakeCursor([_product_row(has_mapping=True)]))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/products",
                          params={"has_mapping": "true"})
     assert res.status_code == 200
@@ -193,7 +201,7 @@ def test_products_has_mapping_filter(client):
 def test_products_stock_status_filter(client):
     """Filter by stock_status."""
     conn = FakeConn(FakeCursor([_product_row(stock_status="in_stock")]))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/products",
                          params={"stock_status": "in_stock"})
     assert res.status_code == 200
@@ -202,7 +210,7 @@ def test_products_stock_status_filter(client):
 def test_products_per_page_max_enforced(client):
     """per_page above 500 must be rejected."""
     conn = FakeConn(FakeCursor([]))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/products",
                          params={"per_page": 999})
     assert res.status_code == 422
@@ -211,7 +219,7 @@ def test_products_per_page_max_enforced(client):
 def test_products_empty_result(client):
     """Empty result returns zero total and empty items."""
     conn = FakeConn(FakeCursor([]))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/products",
                          params={"q": "zzz_nonexistent_zzz"})
     assert res.status_code == 200
@@ -239,7 +247,9 @@ def test_products_unknown_channel(client):
     from app.api.admin.export import _resolve_channel
     from fastapi import HTTPException
     import psycopg2
-    conn = psycopg2.connect(app.core.db_connect.DB)
+    from app.core.db_connect import DB
+
+    conn = psycopg2.connect(DB)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         _resolve_channel(cur, "unknown_channel_that_does_not_exist")
@@ -261,7 +271,7 @@ def test_products_response_shape(client):
                          publication_status="ready",
                          sync_status="idle")]
     conn = FakeConn(FakeCursor(rows))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/products")
     assert res.status_code == 200
     item = res.json()["items"][0]
@@ -283,7 +293,7 @@ def test_products_response_shape(client):
 def test_preview_by_product_ids(client):
     """Preview accepts explicit product IDs."""
     conn = FakeConn(FakeCursor([]))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)), \
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)), \
          patch("app.channels.mapping_resolver.ChannelMappingResolver") as MockResolver, \
          patch("app.channels.validation.validate_product") as MockValidate, \
          patch("app.channels.validation._load_product_data") as MockLoad, \
@@ -324,7 +334,7 @@ def test_preview_all_matching_filters(client):
     row = RealDictRow({"id": 42})
     cursor = FakeCursor([row])
     conn = FakeConn(cursor)
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)), \
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)), \
          patch("app.channels.mapping_resolver.ChannelMappingResolver") as MockResolver, \
          patch("app.channels.validation.validate_product") as MockValidate, \
          patch("app.channels.validation._load_product_data") as MockLoad, \
@@ -369,7 +379,7 @@ def test_preview_with_exclude_ids(client):
     row = RealDictRow({"id": 1})
     cursor = FakeCursor([row])
     conn = FakeConn(cursor)
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)), \
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)), \
          patch("app.channels.validation.validate_product") as MockV, \
          patch("app.channels.mapping_resolver.ChannelMappingResolver") as MockR, \
          patch("app.channels.validation._load_product_data") as MockL, \
@@ -407,7 +417,7 @@ def test_preview_with_exclude_ids(client):
 def test_preview_empty_selection_rejected(client):
     """Empty product_ids with all_matching_filters=False is rejected."""
     conn = FakeConn(FakeCursor([]))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)):
         res = client.post(
             "/api/v1/admin/export/channels/rozetka/export/preview",
             json={"selection": {"all_matching_filters": False,
@@ -419,7 +429,7 @@ def test_preview_empty_selection_rejected(client):
 def test_preview_missing_product_ids_rejected(client):
     """Missing product_ids field raises 422."""
     conn = FakeConn(FakeCursor([]))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)):
         res = client.post(
             "/api/v1/admin/export/channels/rozetka/export/preview",
             json={"selection": {"all_matching_filters": False}},
@@ -432,7 +442,7 @@ def test_preview_limit_exceeded(client):
     rows = [RealDictRow({"id": i}) for i in range(51)]
     cursor = FakeCursor(rows)
     conn = FakeConn(cursor)
-    with patch("app.api.admin.export.db",
+    with patch("app.api.admin.export.admin_cursor",
                return_value=(conn, conn.cursor_obj)):
         res = client.post(
             "/api/v1/admin/export/channels/rozetka/export/preview",
@@ -450,7 +460,7 @@ def test_preview_limit_exceeded(client):
 def test_preview_resolved_category(client):
     """Preview returns resolved Rozetka category info."""
     conn = FakeConn(FakeCursor([]))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)), \
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)), \
          patch("app.channels.mapping_resolver.ChannelMappingResolver") as MockR, \
          patch("app.channels.validation.validate_product") as MockV, \
          patch("app.channels.validation._load_product_data") as MockL, \
@@ -487,7 +497,7 @@ def test_preview_resolved_category(client):
 def test_preview_validation_issues(client):
     """Preview returns validation issues from validate_product."""
     conn = FakeConn(FakeCursor([]))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)), \
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)), \
          patch("app.channels.mapping_resolver.ChannelMappingResolver") as MockR, \
          patch("app.channels.validation.validate_product") as MockV, \
          patch("app.channels.validation._load_product_data") as MockL, \
@@ -560,7 +570,7 @@ def test_preview_unauthorized(client):
 def test_preview_no_rozetka_call(client):
     """Preview NEVER calls Rozetka API."""
     conn = FakeConn(FakeCursor([]))
-    with patch("app.api.admin.export.db", return_value=(conn, conn.cursor_obj)), \
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)), \
          patch("app.channels.mapping_resolver.ChannelMappingResolver") as MockR, \
          patch("app.channels.validation.validate_product") as MockV, \
          patch("app.channels.validation._load_product_data") as MockL, \

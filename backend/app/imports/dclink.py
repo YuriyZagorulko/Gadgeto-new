@@ -300,7 +300,7 @@ class DCLinkImporter:
             if enriched.get("description"):
                 base["description"] = enriched["description"]
             # Options/attributes from content endpoint
-            if enriched.get("options"):
+            if enriched.get("options") is not None:
                 base["options"] = enriched["options"]
             # Additional images from content endpoint (structured format)
             if enriched.get("images"):

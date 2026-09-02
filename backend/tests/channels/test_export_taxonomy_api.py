@@ -42,7 +42,7 @@ class FakeCursor:
 
     def _produce(self, sql, params=()):
         low = sql.lower()
-        if low.startswith("select count") and "channel_external_categories" in low:
+        if low.startswith("select count") and low[:80].find("channel_external_categories") >= 0:
             return [RealDictRow({"c": 4761})]
         if low.startswith("select count") and "channel_external_attributes" in low:
             return [RealDictRow({"c": 882})]
@@ -137,7 +137,7 @@ def test_taxonomy_get_uses_aliased_count_columns(client):
     get_taxonomy_stats must alias the column (AS c) or the endpoint 500s.
     """
     conn = FakeConn()
-    with patch("app.api.admin.export.db", return_value=(conn.cursor_obj, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn.cursor_obj, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/taxonomy")
     assert res.status_code == 200, res.text
     assert res.json()["items"]["categories"] == 4761
@@ -149,7 +149,7 @@ def test_taxonomy_get_uses_aliased_count_columns(client):
 
 def test_taxonomy_get_never_triggers_refresh(client):
     """GET /taxonomy is strictly read-only: it must never drive a refresh."""
-    with patch("app.api.admin.export.db",
+    with patch("app.api.admin.export.admin_cursor",
                return_value=(FakeConn().cursor_obj, FakeConn().cursor_obj)), \
          patch("app.channels.taxonomy.get_taxonomy_service") as svc:
         res = client.get("/api/v1/admin/export/channels/rozetka/taxonomy")
@@ -171,7 +171,7 @@ def test_taxonomy_status_shape(client):
             "logs": [{"t": 1, "ts": "09:42:11", "level": "INFO", "message": "start"}],
         }),
     })]
-    with patch("app.api.admin.export.db", return_value=(conn.cursor_obj, conn.cursor_obj)):
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn.cursor_obj, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/taxonomy/status")
     assert res.status_code == 200
     body = res.json()
@@ -183,7 +183,7 @@ def test_taxonomy_status_shape(client):
 def test_refresh_starts_background(client):
     """POST /taxonomy/refresh must launch a background job, not run sync."""
     fake_loop = FakeLoop()
-    with patch("app.api.admin.export.db",
+    with patch("app.api.admin.export.admin_cursor",
                return_value=(FakeConn().cursor_obj, FakeConn().cursor_obj)), \
          patch("app.channels.rozetka.taxonomy_run.start_taxonomy_refresh", return_value=99) as start, \
          patch("app.channels.taxonomy.get_taxonomy_service") as sync, \
@@ -201,7 +201,7 @@ def test_refresh_starts_background(client):
 
 def test_mapping_list_includes_unmapped(client):
     conn = FakeConn()
-    with patch("app.api.admin.export_mapping.db",
+    with patch("app.api.admin.export_mapping.admin_cursor",
                return_value=(conn.cursor_obj, conn.cursor_obj)):
         res = client.get("/api/v1/admin/export/channels/rozetka/mappings/categories?per_page=5&status=unmapped")
     assert res.status_code == 200
@@ -214,7 +214,7 @@ def test_mapping_list_includes_unmapped(client):
 def test_mapping_create_is_idempotent(client):
     """Creating a mapping for an already-existing (internal, category) updates it."""
     conn = FakeConn()
-    with patch("app.api.admin.export_mapping.db",
+    with patch("app.api.admin.export_mapping.admin_cursor",
                return_value=(conn.cursor_obj, conn.cursor_obj)):
         res = client.post(
             "/api/v1/admin/export/channels/rozetka/mappings/categories",
@@ -229,7 +229,7 @@ def test_mapping_create_is_idempotent(client):
 def test_mapping_create_never_auto_accepts(client):
     """A mapping created without an explicit status must not be accepted."""
     conn = FakeConn()
-    with patch("app.api.admin.export_mapping.db",
+    with patch("app.api.admin.export_mapping.admin_cursor",
                return_value=(conn.cursor_obj, conn.cursor_obj)):
         res = client.post(
             "/api/v1/admin/export/channels/rozetka/mappings/categories",
