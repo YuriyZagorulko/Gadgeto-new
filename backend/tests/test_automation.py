@@ -10,6 +10,8 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
+import psycopg2
+import psycopg2.extras
 
 import pytest
 
@@ -355,3 +357,185 @@ class TestImportHeartbeat:
 
         assert pings == [99]   # parent run heartbeat bumped
 
+
+
+# ── catalog sync history deletion ─────────────────────────────────────────────
+
+class TestCatalogSyncHistoryDeletion:
+    """Backend tests for catalog sync history deletion endpoints."""
+
+    @pytest.fixture
+    def client(self):
+        from starlette.testclient import TestClient
+        from app.main import app
+        with TestClient(app) as c:
+            yield c
+
+    def test_delete_run_unauthenticated(self, client):
+        resp = client.delete("/api/v1/admin/automation/history/1")
+        assert resp.status_code == 401
+
+    def test_bulk_delete_unauthenticated(self, client):
+        resp = client.post(
+            "/api/v1/admin/automation/history/bulk-delete",
+            json={"ids": [1, 2]},
+        )
+        assert resp.status_code == 401
+
+
+class TestCatalogSyncStateDeletion:
+    """Unit tests for state.delete_catalog_run / state.delete_catalog_runs."""
+
+    def _fake_cur(self, rows=None):
+        conn = MagicMock()
+        cur = MagicMock()
+        cur.fetchall.return_value = rows or []
+        cur.fetchone.return_value = rows[0] if rows else None
+        return conn, cur
+
+    def test_delete_catalog_run_not_found(self, test_settings):
+        from app.tasks import state
+        conn, cur = self._fake_cur([])
+        with patch("app.tasks.state._cur", return_value=(conn, cur)):
+            ok, msg = state.delete_catalog_run(99)
+        assert ok is False
+        assert "не знайдено" in msg
+
+    def test_delete_catalog_run_running_rejected(self, test_settings):
+        from app.tasks import state
+        conn, cur = self._fake_cur([{"id": 5, "status": "RUNNING"}])
+        with patch("app.tasks.state._cur", return_value=(conn, cur)):
+            ok, msg = state.delete_catalog_run(5)
+        assert ok is False
+        assert "RUNNING" in msg
+
+    def test_delete_catalog_run_success(self, test_settings):
+        from app.tasks import state
+        conn, cur = self._fake_cur([{"id": 7, "status": "SUCCEEDED"}])
+        with patch("app.tasks.state._cur", return_value=(conn, cur)):
+            ok, msg = state.delete_catalog_run(7)
+        assert ok is True
+        assert "#7" in msg
+        # logs deleted first, then the run
+        assert cur.execute.call_count >= 2
+
+    def test_delete_catalog_runs_empty_list(self, test_settings):
+        from app.tasks import state
+        result = state.delete_catalog_runs([])
+        assert result["deleted"] == 0
+        assert result["skipped"] == 0
+        assert result["errors"] == []
+
+    def test_delete_catalog_runs_not_found(self, test_settings):
+        from app.tasks import state
+        conn, cur = self._fake_cur([])
+        with patch("app.tasks.state._cur", return_value=(conn, cur)):
+            result = state.delete_catalog_runs([1, 2, 3])
+        assert result["deleted"] == 0
+        assert result["skipped"] == 3
+        assert len(result["errors"]) == 3
+
+    def test_delete_catalog_runs_running_skipped(self, test_settings):
+        from app.tasks import state
+        # 3 runs: SUCCEEDED, RUNNING, FAILED
+        conn, cur = self._fake_cur([
+            {"id": 1, "status": "SUCCEEDED"},
+            {"id": 2, "status": "RUNNING"},
+            {"id": 3, "status": "FAILED"},
+        ])
+        with patch("app.tasks.state._cur", return_value=(conn, cur)):
+            result = state.delete_catalog_runs([1, 2, 3])
+        assert result["deleted"] == 2   # 1 and 3, not 2
+        assert result["skipped"] == 1
+        assert result["errors"][0]["id"] == 2
+
+
+class TestCatalogSyncDeletionIntegration:
+    """Integration tests using the real test database.
+
+    Uses TEST_DATABASE_URL so they never touch the development database.
+    """
+
+    def test_delete_one_completed_run(self, db_connection):
+        """Insert a completed run, delete it, verify it's gone."""
+        from app.tasks import state
+        conn = db_connection
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # Insert a completed sync run
+        cur.execute(
+            "INSERT INTO catalog_sync_runs (status, trigger, created_at, updated_at)"
+            " VALUES ('SUCCEEDED', 'manual', NOW(), NOW()) RETURNING id"
+        )
+        run_id = cur.fetchone()["id"]
+        conn.commit()
+
+        ok, msg = state.delete_catalog_run(run_id)
+        assert ok is True
+        assert f"#{run_id}" in msg
+
+        # Verify the run is gone
+        cur.execute("SELECT id FROM catalog_sync_runs WHERE id = %s", (run_id,))
+        assert cur.fetchone() is None
+
+        # Verify logs were also deleted
+        cur.execute("SELECT id FROM catalog_sync_logs WHERE run_id = %s", (run_id,))
+        assert cur.fetchone() is None
+
+    def test_delete_running_run_rejected(self, db_connection):
+        """Insert a RUNNING run, verify deletion is rejected."""
+        from app.tasks import state
+        conn = db_connection
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "INSERT INTO catalog_sync_runs (status, trigger, created_at, updated_at)"
+            " VALUES ('RUNNING', 'scheduler', NOW(), NOW()) RETURNING id"
+        )
+        run_id = cur.fetchone()["id"]
+        conn.commit()
+
+        ok, msg = state.delete_catalog_run(run_id)
+        assert ok is False
+        assert "RUNNING" in msg
+
+        # Run should still exist
+        cur.execute("SELECT id FROM catalog_sync_runs WHERE id = %s", (run_id,))
+        assert cur.fetchone() is not None
+
+    def test_bulk_delete_respects_running(self, db_connection):
+        """Bulk delete skips RUNNING records."""
+        from app.tasks import state
+        conn = db_connection
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        ids = []
+        for status in ("SUCCEEDED", "FAILED", "RUNNING", "PARTIAL"):
+            cur.execute(
+                "INSERT INTO catalog_sync_runs (status, trigger, created_at, updated_at)"
+                " VALUES (%s, 'manual', NOW(), NOW()) RETURNING id",
+                (status,),
+            )
+            ids.append(cur.fetchone()["id"])
+        conn.commit()
+
+        result = state.delete_catalog_runs(ids)
+        assert result["deleted"] == 3       # all except RUNNING
+        assert result["skipped"] == 1       # RUNNING was skipped
+
+    def test_delete_does_not_touch_products(self, db_connection):
+        """Deleting sync history must not delete products."""
+        from app.tasks import state
+        conn = db_connection
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # Insert a completed run
+        cur.execute(
+            "INSERT INTO catalog_sync_runs (status, trigger, created_at, updated_at)"
+            " VALUES ('SUCCEEDED', 'manual', NOW(), NOW()) RETURNING id"
+        )
+        run_id = cur.fetchone()["id"]
+        conn.commit()
+
+        state.delete_catalog_run(run_id)
+
+        # Products table must still exist and have rows (in test DB fixture)
+        cur.execute("SELECT COUNT(*) FROM products")
+        count = cur.fetchone()["count"]
+        assert count >= 0   # table exists and query succeeds

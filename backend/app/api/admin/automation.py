@@ -236,3 +236,39 @@ def automation_disable(user=Depends(require_admin_role)):
     """Disable scheduled automation."""
     state.set_automation_enabled(False)
     return {"detail": "Автоматизацію вимкнено", "enabled": False}
+
+# ── deletion ──────────────────────────────────────────────────────────────────
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: list[int]
+
+
+@router.delete("/automation/history/{run_id}")
+def automation_delete_run(
+    run_id: int,
+    user=Depends(require_admin),
+):
+    """Видалити один запис історії синхронізації (не активний)."""
+    success, detail = state.delete_catalog_run(run_id)
+    if not success:
+        if "не знайдено" in detail:
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=409, detail=detail)
+    return {"ok": True, "detail": detail}
+
+
+@router.post("/automation/history/bulk-delete")
+def automation_bulk_delete_runs(
+    data: BulkDeleteRequest,
+    user=Depends(require_admin),
+):
+    """Bulk-delete completed catalog sync history records (RUNNING skipped)."""
+    if not data.ids:
+        raise HTTPException(status_code=400, detail="Список ID порожній.")
+    result = state.delete_catalog_runs(data.ids)
+    return {
+        "detail": f"Видалено: {result['deleted']}, пропущено: {result['skipped']}.",
+        **result,
+    }
+

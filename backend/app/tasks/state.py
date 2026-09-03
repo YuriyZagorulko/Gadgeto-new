@@ -537,6 +537,75 @@ def reset_import_job_for_retry(job_id: int) -> None:
         conn.close()
 
 
+# ── deletion ─────────────────────────────────────────────────────────────────
+
+def delete_catalog_run(run_id: int) -> tuple[bool, str]:
+    """Delete one catalog_sync_runs record and its logs.
+
+    Returns (success, message).  Does NOT delete RUNNING records.
+    """
+    conn, cur = _cur()
+    try:
+        cur.execute(
+            "SELECT id, status FROM catalog_sync_runs WHERE id = %s", (run_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            return False, "Запуск не знайдено."
+        if row["status"] == RUN_RUNNING:
+            return False, "Активний запуск (RUNNING) не можна видалити."
+        # Delete logs first (no FK cascade)
+        cur.execute(
+            "DELETE FROM catalog_sync_logs WHERE run_id = %s", (run_id,)
+        )
+        cur.execute("DELETE FROM catalog_sync_runs WHERE id = %s", (run_id,))
+        return True, f"Запуск #{run_id} видалено."
+    finally:
+        conn.close()
+
+
+def delete_catalog_runs(run_ids: list[int]) -> dict:
+    """Delete multiple catalog_sync_runs records and their logs.
+
+    RUNNING records are skipped.  Returns statistics.
+    """
+    if not run_ids:
+        return {"deleted": 0, "skipped": 0, "errors": []}
+    conn, cur = _cur()
+    try:
+        cur.execute(
+            "SELECT id, status FROM catalog_sync_runs WHERE id = ANY(%s)",
+            (run_ids,),
+        )
+        rows = {r["id"]: r["status"] for r in cur.fetchall()}
+        to_delete, errors = [], []
+        for rid in run_ids:
+            if rid not in rows:
+                errors.append({"id": rid, "reason": "Запуск не знайдено."})
+            elif rows[rid] == RUN_RUNNING:
+                errors.append(
+                    {"id": rid, "reason": "Активний запуск (RUNNING) не можна видалити."}
+                )
+            else:
+                to_delete.append(rid)
+        if to_delete:
+            cur.execute(
+                "DELETE FROM catalog_sync_logs WHERE run_id = ANY(%s)",
+                (to_delete,),
+            )
+            cur.execute(
+                "DELETE FROM catalog_sync_runs WHERE id = ANY(%s)",
+                (to_delete,),
+            )
+        return {
+            "deleted": len(to_delete),
+            "skipped": len(errors),
+            "errors": errors,
+        }
+    finally:
+        conn.close()
+
+
 # ── export product selection (mirrors the existing export-all resolution) ───
 
 def resolve_auto_export_product_ids(channel_id: int) -> list[int]:

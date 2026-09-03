@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useState } from 'react';
 import { api, qs } from '@/lib/api';
 import {
   PageHeader, Button, Table, Th, Td, Badge, Input, Modal,
-  Pagination, ErrorState, EmptyState, useToast,
+  Pagination, ErrorState, EmptyState, useToast, ConfirmDialog,
 } from '@/components/ui';
 
 /* Convenient presets only — the actual interval is stored in the backend
@@ -96,6 +96,7 @@ function AutomationPanel() {
   const [historyPage, setHistoryPage] = useState(1);
   const [historyTotal, setHistoryTotal] = useState(0);
   const [expandedRun, setExpandedRun] = useState<number | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ ids: number[]; count: number } | null>(null);
   // interval editor
   const [intervalModalOpen, setIntervalModalOpen] = useState(false);
   const [intervalDraft, setIntervalDraft] = useState(4);
@@ -417,11 +418,25 @@ function AutomationPanel() {
 
       {/* ── History */}
       <div>
-        <h3 className="font-medium text-gray-800 mb-3">Історія синхронізацій</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-medium text-gray-800">Історія синхронізацій</h3>
+          {historyItems.length > 0 && historyItems.some(r => r.status !== 'RUNNING') && (
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={() => {
+                const completed = historyItems.filter(r => r.status !== 'RUNNING').map(r => r.id);
+                setConfirmDelete({ ids: completed, count: completed.length });
+              }}
+            >
+              Очистити історію
+            </Button>
+          )}
+        </div>
         {historyItems.length === 0 ? (
           <EmptyState title="Історії не знайдено" hint="Після запуску автоматичної синхронізації результати з'являться тут." />
         ) : (
-          <Table head={<tr><Th>Дата</Th><Th>Статус</Th><Th>Тригер</Th><Th>Постачальники</Th><Th>Експорт</Th><Th></Th></tr>}>
+          <Table head={<tr><Th>Дата</Th><Th>Статус</Th><Th>Тригер</Th><Th>Постачальники</Th><Th>Експорт</Th><Th></Th><Th></Th></tr>}>
             {historyItems.map((r) => (
               <Fragment key={r.id}>
                 <tr className="hover:bg-gray-50 cursor-pointer" onClick={() => setExpandedRun(expandedRun === r.id ? null : r.id)}>
@@ -439,10 +454,25 @@ function AutomationPanel() {
                   <Td className="text-xs">{r.suppliers?.length || 0} / {r.suppliers?.filter((s) => s.status === 'SUCCEEDED' || s.status === 'COMPLETED').length || 0} успішно</Td>
                   <Td className="text-xs">{r.exports?.filter((e) => e.status === 'SUCCEEDED').length || 0} / {r.exports?.length || 0}</Td>
                   <Td><Button size="sm" variant="ghost">{expandedRun === r.id ? 'Сховати' : 'Деталі'}</Button></Td>
+                  <Td>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-red-600 hover:text-red-800"
+                      disabled={r.status === 'RUNNING'}
+                      title={r.status === 'RUNNING' ? 'Активну синхронізацію не можна видалити' : 'Видалити'}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmDelete({ ids: [r.id], count: 1 });
+                      }}
+                    >
+                      &#x1F5D1;
+                    </Button>
+                  </Td>
                 </tr>
                 {expandedRun === r.id && (
                   <tr className="bg-gray-50/60">
-                    <td colSpan={6} className="px-6 py-3">
+                    <td colSpan={7} className="px-6 py-3">
                       <div className="text-xs space-y-2">
                         <div className="font-medium text-gray-500">Постачальники:</div>
                         {r.suppliers?.length ? r.suppliers.map((s) => (
@@ -475,6 +505,27 @@ function AutomationPanel() {
         <div className="mt-3 flex justify-center">
           <Pagination page={historyPage} pages={Math.ceil(historyTotal / 10)} total={historyTotal} onPage={setHistoryPage} />
         </div>
+
+        <ConfirmDialog
+          open={!!confirmDelete}
+          message={
+            confirmDelete
+              ? confirmDelete.count === 1
+                ? `Ви впевнені, що хочете видалити запуск #${confirmDelete.ids[0]}? Це видалить лише запис історії синхронізації. Товари та інші дані залишаться незмінними.`
+                : `Ви впевнені, що хочете видалити ${confirmDelete.count} записів історії синхронізацій? Активні синхронізації (RUNNING) буде пропущено.`
+              : ''
+          }
+          confirmLabel={
+            confirmDelete && confirmDelete.count === 1
+              ? `Видалити запуск #${confirmDelete.ids[0]}`
+              : confirmDelete
+              ? `Видалити ${confirmDelete.count} записів`
+              : ''
+          }
+          danger
+          onConfirm={() => confirmDelete && handleDelete(confirmDelete.ids, confirmDelete.count)}
+          onCancel={() => setConfirmDelete(null)}
+        />
       </div>
     </div>
   );
