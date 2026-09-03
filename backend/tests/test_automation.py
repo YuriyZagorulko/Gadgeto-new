@@ -6,7 +6,6 @@ sync require a running Celery broker and a real DB.
 """
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -539,3 +538,211 @@ class TestCatalogSyncDeletionIntegration:
         cur.execute("SELECT COUNT(*) FROM products")
         count = cur.fetchone()["count"]
         assert count >= 0   # table exists and query succeeds
+# ── supplier / channel enabled flags (checkboxes write these directly) ───────
+
+class TestAutomationSelection:
+    """Unit tests for the supplier / export-platform checkboxes that write the
+    `suppliers.enabled` and `channels.is_enabled` columns directly."""
+
+    def _mock_cur(self, fetchone=None, fetchall=None):
+        conn = MagicMock()
+        cur = MagicMock()
+        cur.fetchone.return_value = fetchone
+        cur.fetchall.return_value = fetchall if fetchall is not None else []
+        conn.cursor.return_value = cur
+        return conn, cur
+
+    # ── suppliers ──
+
+    def test_set_suppliers_enabled_writes_enabled_column(self, test_settings):
+        from app.tasks import state
+        conn, cur = self._mock_cur()
+        with patch("app.tasks.state._cur", return_value=(conn, cur)):
+            state.set_suppliers_enabled(["itlink"])
+        sql, params = cur.execute.call_args[0]
+        assert "UPDATE suppliers" in sql
+        assert "enabled" in sql
+        assert params[0] == ["itlink"]
+        # both system supplier codes are in scope
+        assert set(params[1]) == {"itlink", "dclink"}
+
+    def test_set_suppliers_enabled_ignores_unknown(self, test_settings):
+        from app.tasks import state
+        conn, cur = self._mock_cur()
+        with patch("app.tasks.state._cur", return_value=(conn, cur)):
+            state.set_suppliers_enabled(["itlink", "nope"])
+        sql, params = cur.execute.call_args[0]
+        assert params[0] == ["itlink"]
+
+    def test_resolve_enabled_suppliers_all_enabled(self, test_settings):
+        from app.tasks import state
+        rows = [
+            {"id": 1, "code": "itlink", "name": "IT-Link", "enabled": True},
+            {"id": 2, "code": "dclink", "name": "DC-Link", "enabled": True},
+        ]
+        conn, cur = self._mock_cur(fetchone=None, fetchall=rows)
+        with patch("app.tasks.state._cur", return_value=(conn, cur)):
+            result = state.resolve_enabled_suppliers()
+        assert sorted(s["code"] for s in result) == ["dclink", "itlink"]
+
+    def test_resolve_enabled_suppliers_skips_disabled(self, test_settings):
+        from app.tasks import state
+        rows = [
+            {"id": 1, "code": "itlink", "name": "IT-Link", "enabled": True},
+            {"id": 2, "code": "dclink", "name": "DC-Link", "enabled": False},
+        ]
+        conn, cur = self._mock_cur(fetchone=None, fetchall=rows)
+        with patch("app.tasks.state._cur", return_value=(conn, cur)):
+            result = state.resolve_enabled_suppliers()
+        assert [s["code"] for s in result] == ["itlink"]
+
+    # ── channels (export platforms) ──
+
+    def test_set_channels_enabled_writes_is_enabled_column(self, test_settings):
+        from app.tasks import state
+        rows = [{"id": 1, "code": "rozetka", "name": "Rozetka",
+                 "is_enabled": True}]
+        conn, cur = self._mock_cur(fetchone=None, fetchall=rows)
+        with patch("app.tasks.state._cur", return_value=(conn, cur)):
+            state.set_channels_enabled(["rozetka"])
+        sql, params = cur.execute.call_args[0]
+        assert "UPDATE channels" in sql
+        assert "is_enabled" in sql
+        assert params[0] == ["rozetka"]
+
+    def test_set_channels_enabled_ignores_unknown(self, test_settings):
+        from app.tasks import state
+        rows = [{"id": 1, "code": "rozetka", "name": "Rozetka",
+                 "is_enabled": True}]
+        conn, cur = self._mock_cur(fetchone=None, fetchall=rows)
+        with patch("app.tasks.state._cur", return_value=(conn, cur)):
+            state.set_channels_enabled(["nope"])
+        sql, params = cur.execute.call_args[0]
+        # unknown channel filtered out — nothing selected, all disabled
+        assert params[0] == []
+
+    def test_resolve_enabled_channels_default(self, test_settings):
+        from app.tasks import state
+        rows = [
+            {"id": 1, "code": "rozetka", "name": "Rozetka", "is_enabled": True},
+            {"id": 2, "code": "prom", "name": "Prom", "is_enabled": True},
+        ]
+        conn, cur = self._mock_cur(fetchone=None, fetchall=rows)
+        with patch("app.tasks.state._cur", return_value=(conn, cur)):
+            result = state.resolve_enabled_channels()
+        # only channels with an adapter may participate
+        assert [ch["code"] for ch in result] == ["rozetka"]
+
+    def test_resolve_enabled_channels_skips_disabled(self, test_settings):
+        from app.tasks import state
+        rows = [
+            {"id": 1, "code": "rozetka", "name": "Rozetka", "is_enabled": False},
+        ]
+        conn, cur = self._mock_cur(fetchone=None, fetchall=rows)
+        with patch("app.tasks.state._cur", return_value=(conn, cur)):
+            result = state.resolve_enabled_channels()
+        assert result == []
+class TestAutomationSelectionAPI:
+    """The save endpoints write the underlying columns; they still require an
+    authenticated admin."""
+
+    @pytest.fixture
+    def client(self):
+        from starlette.testclient import TestClient
+        from app.main import app
+        with TestClient(app) as c:
+            yield c
+
+    def test_set_suppliers_unauthenticated(self, client):
+        resp = client.put(
+            "/api/v1/admin/automation/suppliers",
+            json={"supplier_codes": ["itlink"]},
+        )
+        assert resp.status_code == 401
+
+    def test_set_channels_unauthenticated(self, client):
+        resp = client.put(
+            "/api/v1/admin/automation/channels",
+            json={"channel_codes": ["rozetka"]},
+        )
+        assert resp.status_code == 401
+
+
+class TestAutomationSelectionIntegration:
+    """The checkboxes write `suppliers.enabled` / `channels.is_enabled` in the
+    real (dedicated test) database — one source of truth."""
+
+    def _autocommit_cur(self):
+        from app.core.db_connect import cursor as db_cursor_cc
+        return db_cursor_cc()
+
+    def test_supplier_checkbox_writes_enabled_field(self, test_settings):
+        from app.tasks import state
+        conn, cur = self._autocommit_cur()
+        try:
+            cur.execute(
+                "INSERT INTO suppliers (code, name, enabled, created_at, updated_at)"
+                " VALUES ('itlink', 'IT-Link', TRUE, NOW(), NOW()),"
+                "        ('dclink', 'DC-Link', TRUE, NOW(), NOW())"
+                " ON CONFLICT (code) DO NOTHING"
+            )
+            conn.close()
+
+            # uncheck DC-Link → its `enabled` column must become FALSE
+            state.set_suppliers_enabled(["itlink"])
+            conn2, cur2 = self._autocommit_cur()
+            cur2.execute(
+                "SELECT code, enabled FROM suppliers WHERE code IN ('itlink','dclink')"
+            )
+            rows = {r["code"]: r["enabled"] for r in cur2.fetchall()}
+            conn2.close()
+            assert rows == {"itlink": True, "dclink": False}
+
+            result = state.resolve_enabled_suppliers()
+            assert [s["code"] for s in result] == ["itlink"]
+        finally:
+            conn3, cur3 = self._autocommit_cur()
+            cur3.execute(
+                "DELETE FROM suppliers WHERE code IN ('itlink', 'dclink')"
+            )
+            conn3.close()
+
+    def test_channel_checkbox_writes_is_enabled_field(self, test_settings):
+        from app.tasks import state
+        conn, cur = self._autocommit_cur()
+        try:
+            cur.execute(
+                "INSERT INTO channels (code, name, is_enabled, created_at, updated_at)"
+                " VALUES ('rozetka', 'Rozetka', TRUE, NOW(), NOW())"
+                " ON CONFLICT (code) DO NOTHING"
+            )
+            conn.close()
+
+            # uncheck everything → `is_enabled` must become FALSE
+            state.set_channels_enabled([])
+            conn2, cur2 = self._autocommit_cur()
+            cur2.execute(
+                "SELECT is_enabled FROM channels WHERE code = 'rozetka'"
+            )
+            enabled = cur2.fetchone()["is_enabled"]
+            conn2.close()
+            assert enabled is False
+
+            assert state.resolve_enabled_channels() == []
+
+            # check again → `is_enabled` must be TRUE
+            state.set_channels_enabled(["rozetka"])
+            conn3, cur3 = self._autocommit_cur()
+            cur3.execute(
+                "SELECT is_enabled FROM channels WHERE code = 'rozetka'"
+            )
+            enabled = cur3.fetchone()["is_enabled"]
+            conn3.close()
+            assert enabled is True
+
+            result = state.resolve_enabled_channels()
+            assert [ch["code"] for ch in result] == ["rozetka"]
+        finally:
+            conn4, cur4 = self._autocommit_cur()
+            cur4.execute("DELETE FROM channels WHERE code = 'rozetka'")
+            conn4.close()

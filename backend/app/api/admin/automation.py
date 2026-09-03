@@ -27,6 +27,16 @@ class IntervalUpdate(BaseModel):
     interval_hours: int = Field(ge=1, le=8760)
 
 
+class SupplierSelectionUpdate(BaseModel):
+    """Body for PUT /automation/suppliers — codes selected for automated import."""
+    supplier_codes: list[str] = Field(default_factory=list)
+
+
+class ChannelSelectionUpdate(BaseModel):
+    """Body for PUT /automation/channels — codes selected for automated export."""
+    channel_codes: list[str] = Field(default_factory=list)
+
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _load_run_logs(run_id: int, limit: int = 50) -> list[dict]:
@@ -103,7 +113,35 @@ def _export_summary(run: dict) -> list[dict]:
 
 @router.get("/automation/status")
 def automation_status(user=Depends(require_admin)):
-    """Current automation status: toggle, schedule, current/last/next run."""
+    """Current automation status: toggle, schedule, suppliers/channels,
+    current/last/next run.
+
+    `suppliers[].enabled` is the `suppliers.enabled` column and
+    `channels[].enabled` is the `channels.is_enabled` column — the checkboxes
+    on the admin page write these fields directly, so there is exactly one
+    source of truth.
+    """
+
+    # Suppliers selectable for the automated import phase (system suppliers
+    # only).  A supplier participates when its `enabled` column is TRUE.
+    suppliers_payload = [
+        {"code": s["code"], "name": s["name"], "enabled": bool(s["enabled"])}
+        for s in state.list_suppliers()
+    ]
+
+    # Channels selectable for the automated export phase — only syncable
+    # channels (those with an adapter; currently just Rozetka).  A channel
+    # participates when its `is_enabled` column is TRUE.
+    channels_payload = []
+    for ch in state.list_channels():
+        if not ch.get("has_adapter"):
+            continue
+        channels_payload.append({
+            "code": ch["code"],
+            "name": ch["name"],
+            "enabled": bool(ch["is_enabled"]),
+        })
+
     enabled = state.is_automation_enabled()
     interval = state.get_automation_interval_hours()
 
@@ -139,6 +177,8 @@ def automation_status(user=Depends(require_admin)):
     return {
         "enabled": enabled,
         "interval_hours": interval,
+        "suppliers": suppliers_payload,
+        "channels": channels_payload,
         "current_run": current_run,
         "last_run": last_run,
         "next_run_at": next_run.isoformat() if next_run else None,
@@ -221,6 +261,57 @@ def automation_set_interval(
         "detail": f"Інтервал автоматизації оновлено: кожні {interval} год.",
         "interval_hours": interval,
         "next_run_at": next_run.isoformat() if next_run else None,
+    }
+
+
+@router.put("/automation/suppliers")
+def automation_set_suppliers(
+    payload: SupplierSelectionUpdate,
+    user=Depends(require_admin_role),
+):
+    """Persist which suppliers participate in the automated import phase.
+
+    Writes the `suppliers.enabled` column directly (one source of truth).
+    Only predefined system suppliers (IT-Link, DC-Link) can be toggled.
+    """
+    available = {s["code"] for s in state.list_suppliers()}
+    unknown = [c for c in payload.supplier_codes if c not in available]
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Невідомі постачальники: {', '.join(sorted(unknown))}",
+        )
+    codes = sorted(set(payload.supplier_codes))
+    state.set_suppliers_enabled(codes)
+    return {
+        "detail": "Постачальників для автоматичного імпорту збережено",
+        "supplier_codes": codes,
+    }
+
+
+@router.put("/automation/channels")
+def automation_set_channels(
+    payload: ChannelSelectionUpdate,
+    user=Depends(require_admin_role),
+):
+    """Persist which channels participate in the automated export phase.
+
+    Writes the `channels.is_enabled` column directly (one source of truth).
+    Only channels that have a working adapter (currently Rozetka) can be
+    toggled.
+    """
+    available = {ch["code"] for ch in state.list_channels() if ch.get("has_adapter")}
+    unknown = [c for c in payload.channel_codes if c not in available]
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Невідомі платформи експорту: {', '.join(sorted(unknown))}",
+        )
+    codes = sorted(set(payload.channel_codes))
+    state.set_channels_enabled(codes)
+    return {
+        "detail": "Платформи для автоматичного експорту збережено",
+        "channel_codes": codes,
     }
 
 

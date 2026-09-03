@@ -54,6 +54,8 @@ function intervalLabel(h: number): string {
 type AutomationStatus = {
   enabled: boolean;
   interval_hours: number;
+  suppliers: Array<{ code: string; name: string; enabled: boolean }>;
+  channels: Array<{ code: string; name: string; enabled: boolean }>;
   current_run: {
     id: number; status: string; trigger: string;
     started_at: string | null; finished_at: string | null;
@@ -103,6 +105,11 @@ function AutomationPanel() {
   const [customMode, setCustomMode] = useState(false);
   const [customValue, setCustomValue] = useState('');
   const [savingInterval, setSavingInterval] = useState(false);
+  // supplier / export-platform selection for the automated sync
+  const [supplierDraft, setSupplierDraft] = useState<Record<string, boolean>>({});
+  const [channelDraft, setChannelDraft] = useState<Record<string, boolean>>({});
+  const [savingSuppliers, setSavingSuppliers] = useState(false);
+  const [savingChannels, setSavingChannels] = useState(false);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -127,6 +134,19 @@ function AutomationPanel() {
   useEffect(() => { loadStatus(); }, [loadStatus]);
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
+  // Keep the selection drafts in sync with the loaded status.  The backend
+  // exposes the raw `enabled` / `is_enabled` column values, so the checkboxes
+  // always mirror the single stored source of truth.
+  useEffect(() => {
+    if (!statusData) return;
+    setSupplierDraft(Object.fromEntries(
+      (statusData.suppliers || []).map((s) => [s.code, s.enabled]),
+    ));
+    setChannelDraft(Object.fromEntries(
+      (statusData.channels || []).map((c) => [c.code, c.enabled]),
+    ));
+  }, [statusData]);
+
   const hasActive = statusData?.current_run?.status === 'RUNNING';
   useEffect(() => {
     if (!hasActive) return;
@@ -149,6 +169,38 @@ function AutomationPanel() {
       toast.push('error', (e as Error).message);
     } finally {
       setToggling(false);
+    }
+  };
+
+  const saveSupplierSelection = async () => {
+    setSavingSuppliers(true);
+    try {
+      const codes = Object.entries(supplierDraft)
+        .filter(([, checked]) => checked)
+        .map(([code]) => code);
+      await api.put('/automation/suppliers', { supplier_codes: codes });
+      toast.push('success', 'Постачальників для автоматичного імпорту збережено');
+      loadStatus();
+    } catch (e: unknown) {
+      toast.push('error', (e as Error).message);
+    } finally {
+      setSavingSuppliers(false);
+    }
+  };
+
+  const saveChannelSelection = async () => {
+    setSavingChannels(true);
+    try {
+      const codes = Object.entries(channelDraft)
+        .filter(([, checked]) => checked)
+        .map(([code]) => code);
+      await api.put('/automation/channels', { channel_codes: codes });
+      toast.push('success', 'Платформи для автоматичного експорту збережено');
+      loadStatus();
+    } catch (e: unknown) {
+      toast.push('error', (e as Error).message);
+    } finally {
+      setSavingChannels(false);
     }
   };
 
@@ -274,6 +326,74 @@ function AutomationPanel() {
             <span className={`ml-2 font-medium ${lockDisplay.cls}`}>{lockDisplay.label}</span>
           </div>
         </div>
+      </div>
+
+      {/* ── Supplier selection (automated import) */}
+      <div className="bg-white border border-gray-200 rounded-lg p-5">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h3 className="font-semibold text-gray-900">Постачальники для автоматичного імпорту</h3>
+            <p className="text-xs text-gray-500 mt-1">
+              Автоматична синхронізація імпортуватиме товари лише з обраних постачальників.
+            </p>
+          </div>
+          <Button variant="primary" size="sm" loading={savingSuppliers}
+            onClick={saveSupplierSelection}>
+            Зберегти
+          </Button>
+        </div>
+        {statusData?.suppliers?.length ? (
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+            {statusData.suppliers.map((s) => (
+              <label key={s.code}
+                className="flex items-center gap-3 border border-gray-200 rounded-lg p-3 cursor-pointer hover:bg-gray-50">
+                <input
+                  type="checkbox"
+                  className="rounded border-gray-300"
+                  checked={!!supplierDraft[s.code]}
+                  onChange={(e) => setSupplierDraft((d) => ({ ...d, [s.code]: e.target.checked }))}
+                />
+                <span className="text-sm font-medium text-gray-800">{s.name}</span>
+              </label>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-400 mt-3">Постачальників не знайдено.</p>
+        )}
+      </div>
+
+      {/* ── Export platform selection (automated export) */}
+      <div className="bg-white border border-gray-200 rounded-lg p-5">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h3 className="font-semibold text-gray-900">Платформи для автоматичного експорту</h3>
+            <p className="text-xs text-gray-500 mt-1">
+              Після успішного імпорту товари експортуватимуться на обрані платформи.
+            </p>
+          </div>
+          <Button variant="primary" size="sm" loading={savingChannels}
+            onClick={saveChannelSelection}>
+            Зберегти
+          </Button>
+        </div>
+        {statusData?.channels?.length ? (
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+            {statusData.channels.map((ch) => (
+              <label key={ch.code}
+                className="flex items-center gap-3 border border-gray-200 rounded-lg p-3 cursor-pointer hover:bg-gray-50">
+                <input
+                  type="checkbox"
+                  className="rounded border-gray-300"
+                  checked={!!channelDraft[ch.code]}
+                  onChange={(e) => setChannelDraft((d) => ({ ...d, [ch.code]: e.target.checked }))}
+                />
+                <span className="text-sm font-medium text-gray-800">{ch.name}</span>
+              </label>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-400 mt-3">Платформ експорту не знайдено.</p>
+        )}
       </div>
 
       {/* ── Interval editor */}

@@ -119,6 +119,45 @@ def set_automation_interval_hours(hours: int) -> int:
     return hours
 
 
+# ── supplier / channel enabled flags (checkboxes write these directly) ───────
+# The automation checkbox on the admin "Автоматизація" page toggles the
+# EXISTING boolean columns on the suppliers / channels tables directly —
+# there is no separate selection setting.  The automation then simply resolves
+# all enabled suppliers / enabled adapter-enabled channels.
+
+def set_suppliers_enabled(enabled_codes: list[str]) -> None:
+    """Set `enabled` for every system supplier: True for the listed codes,
+    False for the rest."""
+    system_codes = list(SYSTEM_SUPPLIERS.keys())
+    codes = [c for c in enabled_codes if c in system_codes]
+    conn, cur = _cur()
+    try:
+        cur.execute(
+            "UPDATE suppliers SET enabled = (code = ANY(%s)), updated_at = NOW()"
+            " WHERE code = ANY(%s)",
+            (codes, system_codes),
+        )
+    finally:
+        conn.close()
+
+
+def set_channels_enabled(enabled_codes: list[str]) -> None:
+    """Set `is_enabled` for every adapter-supported channel: True for the
+    listed codes, False for the rest.  Channels without an adapter are not
+    syncable and are left untouched."""
+    adapter_codes = [ch["code"] for ch in list_channels() if ch.get("has_adapter")]
+    codes = [c for c in enabled_codes if c in adapter_codes]
+    conn, cur = _cur()
+    try:
+        cur.execute(
+            "UPDATE channels SET is_enabled = (code = ANY(%s)), updated_at = NOW()"
+            " WHERE code = ANY(%s)",
+            (codes, adapter_codes),
+        )
+    finally:
+        conn.close()
+
+
 def get_last_catalog_sync_start() -> Optional[datetime]:
     """START time (naive **UTC**) of the most recent catalog sync.
 
@@ -445,6 +484,12 @@ def list_suppliers() -> list[dict]:
 
 
 def resolve_enabled_suppliers() -> list[dict]:
+    """Suppliers that participate in the automated catalog sync.
+
+    The checkbox on the admin page writes the `suppliers.enabled` column
+    directly, so this is simply the list of globally-enabled suppliers (the
+    same list the manual "import all" uses).
+    """
     return [s for s in list_suppliers() if s["enabled"]]
 
 
@@ -483,6 +528,12 @@ def _channel_has_adapter(code: str) -> bool:
 
 
 def resolve_enabled_channels() -> list[dict]:
+    """Channels that participate in the automated export phase.
+
+    The checkbox on the admin page writes the `channels.is_enabled` column
+    directly, so this is simply the list of globally-enabled channels that
+    have a working adapter.
+    """
     return [ch for ch in list_channels() if ch["is_enabled"] and ch["has_adapter"]]
 
 

@@ -24,6 +24,7 @@ from typing import Optional
 from celery import chord
 
 from app.core.config import settings
+from app.services.email import send_catalog_sync_failure_email
 from app.tasks import state
 from app.tasks.celery_app import celery_app
 from app.tasks.channel_export import export_channel
@@ -70,6 +71,28 @@ def _release_run_lock(run: Optional[dict]) -> None:
         except Exception:
             logger.warning("Could not release lock for run %s", run.get("id"),
                           exc_info=True)
+
+
+def _notify_failure(run_id: int, status: str, trigger: str,
+                    failures: list) -> None:
+    """Best-effort admin email about a failed/partial catalog sync run.
+
+    Email problems must never affect the run result — everything is caught.
+    """
+    try:
+        run = state.load_catalog_run(run_id) or {}
+        sent = send_catalog_sync_failure_email(
+            run_id=run_id, status=status, trigger=trigger, failures=failures,
+            started_at=run.get("started_at"), finished_at=run.get("finished_at"),
+        )
+        if sent:
+            state.append_run_log(
+                run_id, "INFO",
+                f"Admin failure notification email sent ({status})",
+            )
+    except Exception:
+        logger.warning("Could not send catalog sync failure email (run #%s)",
+                       run_id, exc_info=True)
 
 
 @celery_app.task(name="app.tasks.catalog_sync.run_catalog_sync")
@@ -189,6 +212,11 @@ def after_supplier_imports(results: list, run_id: int) -> dict:
             " (supplier import failed)",
         )
         _release_run_lock(state.load_catalog_run(run_id))
+        _notify_failure(
+            run_id, state.RUN_FAILED, run.get("trigger") or "manual",
+            [{"source": "supplier", "name": f.get("supplier"),
+              "status": "FAILED", "error": f.get("error")} for f in failed],
+        )
         return {"status": "FAILED", "run_id": run_id,
                 "failed_suppliers": [f.get("supplier") for f in failed]}
 
@@ -244,4 +272,11 @@ def after_channel_exports(results: list, run_id: int) -> dict:
     state.finish_catalog_run(run_id, final)
     state.append_run_log(run_id, "INFO", f"Catalog sync completed ({final})")
     _release_run_lock(state.load_catalog_run(run_id))
+    if final in (state.RUN_FAILED, state.RUN_PARTIAL):
+        _notify_failure(
+            run_id, final, run.get("trigger") or "manual",
+            [{"source": "channel", "name": r.get("channel"),
+              "status": r.get("status"), "error": r.get("error")}
+             for r in results if r.get("status") in ("FAILED", "PARTIAL")],
+        )
     return {"status": final, "run_id": run_id, "exports": export_info}

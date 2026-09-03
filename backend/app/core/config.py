@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     BREVO_API_KEY: str = Field(default="")
     BREVO_SENDER_EMAIL: str = Field(default="noreply@gadgeto.com.ua")
     BREVO_SENDER_NAME: str = Field(default="Gadgeto")
+    # Admin failure-notification recipients (catalog sync alerts). Accepts a
+    # JSON array or a comma-separated list — parsed in app.services.email.
+    # Empty string disables the notifications.
+    ADMIN_NOTIFICATION_EMAILS: str = Field(default="")
     SMTP_HOST: str = Field(default="")
     SMTP_PORT: int = Field(default=587)
     SMTP_USERNAME: str = Field(default="")
