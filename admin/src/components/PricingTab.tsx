@@ -28,6 +28,10 @@ export default function PricingTab() {
   const [previewCurrency, setPreviewCurrency] = useState('UAH');
   const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editThreshold, setEditThreshold] = useState('');
+  const [editMultiplier, setEditMultiplier] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 const loadConfig = useCallback(() => {
     setLoading(true);
     api.get<PricingConfig>('/pricing/config')
@@ -80,6 +84,37 @@ const loadConfig = useCallback(() => {
     } catch (e: unknown) { toast.push('error', (e as Error).message); }
   };
 
+  const startEdit = (r: Rule) => {
+    setEditingId(r.id);
+    setEditThreshold(String(r.price_threshold >= 999999999 ? 999999999 : r.price_threshold));
+    setEditMultiplier(String(Math.round((r.multiplier - 1) * 100)));
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditThreshold('');
+    setEditMultiplier('');
+  };
+
+  const saveEdit = async (r: Rule) => {
+    const threshold = parseInt(editThreshold, 10);
+    const pct = parseFloat(editMultiplier);
+    if (isNaN(threshold) || isNaN(pct) || threshold <= 0 || pct < 0) {
+      toast.push('error', 'Введіть коректні значення');
+      return;
+    }
+    const multiplier = pct / 100 + 1;
+    setSavingEdit(true);
+    try {
+      await api.put('/pricing/rules/' + r.id, { price_threshold: threshold, multiplier });
+      toast.push('success', 'Правило оновлено');
+      cancelEdit();
+      loadConfig();
+    } catch (e: unknown) {
+      toast.push('error', (e as Error).message);
+    } finally { setSavingEdit(false); }
+  };
+
   const runPreview = async () => {
     const price = parseFloat(previewPrice);
     if (isNaN(price) || price <= 0) return;
@@ -116,21 +151,53 @@ return (
           Перше правило, де базова ціна ≤ порогу, застосовується.
         </p>
         <Table head={<tr><Th>До ціни (₴)</Th><Th>Націнка</Th><Th>Множник</Th><Th>Активне</Th><Th></Th></tr>}>
-          {sorted.map((r) => (
-            <tr key={r.id} className="hover:bg-gray-50">
+          {sorted.map((r) => {
+            const isEditing = editingId === r.id;
+            return (
+            <tr key={r.id} className={r.is_active ? "hover:bg-gray-50" : "hover:bg-gray-50 bg-gray-50 text-gray-400"}>
               <Td className="text-sm tabular-nums">
-                {r.price_threshold >= 999999999 ? 'Без обмеження' : r.price_threshold.toLocaleString('uk-UA')}
+                {isEditing ? (
+                  <input type="number" min="0" value={editThreshold}
+                    onChange={(e) => setEditThreshold(e.target.value)}
+                    className="w-24 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                ) : (
+                  r.price_threshold >= 999999999 ? 'Без обмеження' : r.price_threshold.toLocaleString('uk-UA')
+                )}
               </Td>
-              <Td className="text-sm tabular-nums">{Math.round((r.multiplier - 1) * 100)}%</Td>
+              <Td className="text-sm tabular-nums">
+                {isEditing ? (
+                  <div className="flex items-center gap-1">
+                    <input type="number" min="0" step="1" value={editMultiplier}
+                      onChange={(e) => setEditMultiplier(e.target.value)}
+                      className="w-16 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    <span className="text-xs text-gray-500">%</span>
+                  </div>
+                ) : (
+                  Math.round((r.multiplier - 1) * 100) + '%'
+                )}
+              </Td>
               <Td className="text-sm tabular-nums font-mono">×{r.multiplier}</Td>
               <Td>
                 <input type="checkbox" checked={r.is_active}
                   onChange={() => toggleRule(r)}
                   className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
               </Td>
-              <Td><Button size="sm" variant="ghost" onClick={() => deleteRule(r.id)}>🗑</Button></Td>
+              <Td>
+                {isEditing ? (
+                  <div className="flex gap-1">
+                    <Button size="sm" variant="primary" onClick={() => saveEdit(r)} loading={savingEdit}>✓</Button>
+                    <Button size="sm" variant="ghost" onClick={cancelEdit}>✕</Button>
+                  </div>
+                ) : (
+                  <div className="flex gap-1">
+                    <Button size="sm" variant="ghost" onClick={() => startEdit(r)}>✎</Button>
+                    {r.price_threshold >= 999999999 ? null : <Button size="sm" variant="ghost" onClick={() => deleteRule(r.id)}>🗑</Button>}
+                  </div>
+                )}
+              </Td>
             </tr>
-          ))}
+            );
+          })}
         </Table>
 
         <div className="mt-4 flex items-end gap-3 max-w-lg">

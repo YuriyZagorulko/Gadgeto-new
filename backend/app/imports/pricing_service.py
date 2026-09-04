@@ -74,7 +74,7 @@ def set_usd_rate(rate: float) -> None:
 
 
 def _load_rules() -> List[dict]:
-    """Load all active markup rules from the DB."""
+    """Load all markup rules from the DB (both active and inactive)."""
     conn = psycopg2.connect(DB)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
@@ -82,8 +82,8 @@ def _load_rules() -> List[dict]:
             """SELECT id, supplier_code, category_id, price_threshold,
                       multiplier, sort_order, is_active
                FROM markup_rules
-               WHERE is_active = TRUE
-               ORDER BY supplier_code NULLS LAST,
+               ORDER BY is_active DESC,
+                        supplier_code NULLS LAST,
                         category_id NULLS LAST,
                         price_threshold ASC"""
         )

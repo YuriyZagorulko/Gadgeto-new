@@ -179,12 +179,16 @@ export default function CheckoutPage() {
       if (deliveryMethod === 'warehouse' && !branch) { setError(t('selectCityAndBranch')); setSubmitting(false); return; }
       if (deliveryMethod === 'courier' && (!street || !building.trim())) { setError(t('selectCityAndStreet')); setSubmitting(false); return; }
 
+      // Phone validation: must be exactly 9 digits (without +380 prefix)
+      const phoneDigits = form.phone.replace(/\D/g, '');
+      if (phoneDigits.length !== 9) { setError(t('invalidPhone')); setSubmitting(false); return; }
+
       const res = await fetch('/api/checkout', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
           session_token: sessionToken||'',
           first_name: form.first_name, last_name: form.last_name,
-          phone: form.phone, email: form.email,
+          phone: '+380' + phoneDigits, email: form.email,
           city_ref: city.ref, city_name: city.name,
           warehouse_ref: branch?.ref || '', warehouse_number: branch?.number || '',
           delivery_method: deliveryMethod,
@@ -228,7 +232,7 @@ export default function CheckoutPage() {
   if (!items.length) return <div className="p-8 text-center">{t('emptyCart')}</div>;
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-8">
+    <div className="max-w-7xl mx-auto px-4 py-8">
       <h1 className="text-2xl font-bold mb-6">{t('title')}</h1>
       <form onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Left column: customer info + delivery */}
@@ -240,7 +244,7 @@ export default function CheckoutPage() {
               <div><label className="block text-sm font-medium mb-1">{t('firstName')}</label><input type="text" value={form.first_name} onChange={e=>setForm({...form,first_name:e.target.value})} className="input-field" required /></div>
               <div><label className="block text-sm font-medium mb-1">{t('lastName')}</label><input type="text" value={form.last_name} onChange={e=>setForm({...form,last_name:e.target.value})} className="input-field" required /></div>
             </div>
-            <div><label className="block text-sm font-medium mb-1">{t('phone')}</label><input type="tel" value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} className="input-field" required /></div>
+            <div><label className="block text-sm font-medium mb-1">{t('phone')}</label><div className="flex"><span className="inline-flex items-center px-3 text-sm text-gray-600 bg-gray-100 border border-r-0 border-gray-300 rounded-l-md">+380</span><input type="tel" placeholder="XXXXXXXXX" maxLength={9} value={form.phone} onChange={e=>setForm({...form,phone:e.target.value.replace(/\D/g,'').slice(0,9)})} className="input-field rounded-l-none flex-1" required /></div></div>
             <div><label className="block text-sm font-medium mb-1">{t('email')}</label><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} className="input-field" required /></div>
           </div>
 
