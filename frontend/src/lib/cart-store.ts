@@ -25,6 +25,8 @@ export interface CartState {
   items: CartItem[];
   sessionToken: string;
   syncing: boolean;
+  /** True once refreshFromAPI has completed at least once */
+  initialized: boolean;
   error: string | null;
   cartModalOpen: boolean;
   openCartModal: () => void;
@@ -76,6 +78,7 @@ export const useCartStore = create<CartState>()(
       items: [],
       sessionToken: '',
       syncing: false,
+      initialized: false,
       error: null,
       cartModalOpen: false,
 
@@ -197,9 +200,9 @@ export const useCartStore = create<CartState>()(
             qty: i.qty,
             stock_status: i.stock_status || 'in_stock',
           }));
-          set({ items: mapped, sessionToken: data.session_token || get().sessionToken, syncing: false, error: null });
+          set({ items: mapped, sessionToken: data.session_token || get().sessionToken, syncing: false, initialized: true, error: null });
         } catch (e: any) {
-          set({ syncing: false, error: e.message });
+          set({ syncing: false, initialized: true, error: e.message });
         }
       },
     }),
@@ -228,4 +231,14 @@ export function useCartSubtotal(): number {
 /** Check if a given product is already in the cart (by product_id). */
 export function useIsInCart(productId: number): boolean {
   return useCartStore((s) => s.items.some((i) => i.product_id === productId));
+}
+
+/** True while the cart is syncing with the backend (prevents button flicker). */
+export function useCartSyncing(): boolean {
+  return useCartStore((s) => s.syncing);
+}
+
+/** True once the cart has been fully initialized (hydrated + refreshed from API). */
+export function useCartInitialized(): boolean {
+  return useCartStore((s) => s.initialized);
 }

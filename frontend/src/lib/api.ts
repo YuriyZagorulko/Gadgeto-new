@@ -8,10 +8,10 @@ interface FetchOptions extends RequestInit {
   params?: Record<string, string | number | boolean | undefined>;
 }
 
-async function fetchAPI(path: string, options: FetchOptions = {}) {
+async function request(path: string, base: string, options: FetchOptions = {}) {
   const { params, ...fetchOpts } = options;
-  let url = `${API_BASE}${path}`;
-  
+  let url = `${base}${path}`;
+
   if (params) {
     const searchParams = new URLSearchParams();
     Object.entries(params).forEach(([key, val]) => {
@@ -35,13 +35,29 @@ async function fetchAPI(path: string, options: FetchOptions = {}) {
   }
 
   const res = await fetch(url, { ...fetchOpts, headers });
-  
+
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(error.detail || `HTTP ${res.status}`);
   }
-  
+
   return res.json();
+}
+
+async function fetchAPI(path: string, options: FetchOptions = {}) {
+  return request(path, API_BASE, options);
+}
+
+/**
+ * Same contract as fetchAPI, but always uses a relative `/api/...` URL that
+ * goes through the Next.js rewrite (`/api/:path*` →
+ * `${NEXT_PUBLIC_API_URL}/api/v1/:path*`). The rewrite target is resolved
+ * server-side, inside the docker network, where the backend hostname is
+ * reachable — so this works in the browser even when NEXT_PUBLIC_API_URL
+ * points at a docker-internal hostname. cart-store uses the same pattern.
+ */
+async function fetchAPIViaRewrite(path: string, options: FetchOptions = {}) {
+  return request(path, "/api", options);
 }
 
 // ── Catalog ──
@@ -124,10 +140,51 @@ export async function getOrder(id: number) {
 
 // ── Shipping ──
 
-export async function getCities() {
-  return fetchAPI("/shipping/cities");
+export interface NPCity {
+  ref: string;
+  name: string;
+  area?: string;
+  region?: string;
 }
 
-export async function getWarehouses(cityRef: string) {
-  return fetchAPI(`/shipping/branches`, { params: { city_ref: cityRef } });
+export interface NPWarehouse {
+  ref: string;
+  number: string;
+  address: string;
+  short_address: string;
+  phone: string;
+  max_weight: string;
+}
+
+export interface NPCitiesResponse {
+  items: NPCity[];
+  error?: string;
+}
+
+export interface NPBranchesResponse {
+  items: NPWarehouse[];
+  error?: string;
+}
+
+export async function getCities(search: string = ""): Promise<NPCitiesResponse> {
+  return fetchAPIViaRewrite("/shipping/cities", { params: { search, limit: 50 } });
+}
+
+export async function getWarehouses(cityRef: string, search: string = ""): Promise<NPBranchesResponse> {
+  return fetchAPIViaRewrite(`/shipping/branches`, { params: { city_ref: cityRef, search } });
+}
+
+export interface NPStreet {
+  ref: string;
+  name: string;
+  street_type: string;
+}
+
+export interface NPStreetsResponse {
+  items: NPStreet[];
+  error?: string;
+}
+
+export async function getStreets(cityRef: string, search: string = ""): Promise<NPStreetsResponse> {
+  return fetchAPIViaRewrite(`/shipping/streets`, { params: { city_ref: cityRef, search } });
 }

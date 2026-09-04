@@ -27,11 +27,17 @@ class LiqPayClient:
             else settings.LIQPAY_PRIVATE_KEY
         )
 
-    def _sign(self, data: dict) -> str:
-        """Sign request data."""
-        str_to_sign = self.private_key + json.dumps(data, separators=(',', ':'))
-        signature = b64encode(hashlib.sha1(str_to_sign.encode('utf-8')).digest()).decode('ascii')
-        return signature
+    def _to_base64(self, data: dict) -> str:
+        """Base64-encode JSON payload (LiqPay data field)."""
+        raw = json.dumps(data, separators=(',', ':'), ensure_ascii=False)
+        return b64encode(raw.encode('utf-8')).decode('ascii')
+
+    def _sign(self, base64_data: str) -> str:
+        """Build LiqPay signature: base64(sha1(private_key + data + private_key))."""
+        str_to_sign = self.private_key + base64_data + self.private_key
+        return b64encode(
+            hashlib.sha1(str_to_sign.encode('utf-8')).digest()
+        ).decode('ascii')
 
     async def create_payment(
         self,
@@ -72,20 +78,23 @@ class LiqPayClient:
         if server_url:
             data["server_url"] = server_url
 
-        data["signature"] = self._sign(data)
+        data_b64 = self._to_base64(data)
+        payload = {
+            "data": data_b64,
+            "signature": self._sign(data_b64),
+        }
 
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             async with session.post(
                 "https://www.liqpay.ua/api/3/checkout",
-                json=data,
+                json=payload,
             ) as response:
                 result = await response.json()
                 return result
 
-    async def verify_callback(self, data: dict, signature: str) -> bool:
+    def verify_callback(self, data_b64: str, signature: str) -> bool:
         """Verify LiqPay callback signature."""
-        expected_signature = self._sign(data)
-        return signature == expected_signature
+        return signature == self._sign(data_b64)
 
     async def get_payment_status(self, order_id: str) -> dict:
         """Get payment status."""
@@ -95,12 +104,16 @@ class LiqPayClient:
             "order_id": order_id,
             "version": "3",
         }
-        data["signature"] = self._sign(data)
+        data_b64 = self._to_base64(data)
+        payload = {
+            "data": data_b64,
+            "signature": self._sign(data_b64),
+        }
 
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             async with session.post(
                 "https://www.liqpay.ua/api/3/request",
-                json=data,
+                json=payload,
             ) as response:
                 result = await response.json()
                 return result

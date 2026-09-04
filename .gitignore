@@ -64,5 +64,5 @@ data/
 .helper
 audit_reports/
 # Celery Beat scheduler state
-celerybeat-schedule
-celerybeat-schedule.*
+backend/celerybeat-schedule.*
+backend/celerybeat-schedule
