@@ -3,7 +3,7 @@ from app.models.user import User, UserRole, UserStatus
 from app.models.session import UserSession
 from app.models.category import Category
 from app.models.attribute import Attribute, AttributeValue
-from app.models.product import Product, ProductImage, ProductCategory, ProductAttribute, ProductStatus
+from app.models.product import Product, ProductImage, ProductCategory, ProductAttribute, ProductStatus, ProductReview, ReviewStatus
 from app.models.brand import Brand
 from app.models.supplier import Supplier, SupplierCategory, SupplierAttribute, SupplierAttributeValue, SupplierProduct
 from app.models.mapping import CategoryMapping, AttributeMapping, AttributeValueMapping, MappingSource
@@ -55,6 +55,7 @@ __all__ = [
     "Base", "User", "UserRole", "UserStatus", "UserSession",
     "Attribute", "AttributeValue",
     "Product", "ProductImage", "ProductCategory", "ProductAttribute", "ProductStatus",
+    "ProductReview", "ReviewStatus",
     "Brand",
     "Supplier", "SupplierCategory", "SupplierAttribute", "SupplierAttributeValue", "SupplierProduct",
     "CategoryMapping", "AttributeMapping", "AttributeValueMapping", "MappingSource",

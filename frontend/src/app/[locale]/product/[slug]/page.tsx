@@ -4,6 +4,7 @@ import ProductCard from '@/components/ProductCard';
 import PriceDisplay from '@/components/PriceDisplay';
 import AddToCartButton from '@/components/AddToCartButton';
 import TrackViewedProduct from '@/components/TrackViewedProduct';
+import ProductReviews from '@/components/ProductReviews';
 import { routing, type Locale } from '@/i18n/routing';
 import { notFound } from 'next/navigation';
 import { getTranslations, setRequestLocale } from 'next-intl/server';
@@ -103,6 +104,9 @@ function ProductView({
               ))}
             </div>
           )}
+
+          {/* Product Reviews */}
+          {product.id && <ProductReviews productId={product.id} />}
         </div>
 
         <div>

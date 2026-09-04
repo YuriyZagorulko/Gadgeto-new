@@ -43,7 +43,8 @@ const navItems: NavItem[] = [
       { href: '/imports/suppliers', label: 'Постачальники' },
     ],
   },
-  { href: '/orders', label: 'Замовлення', icon: '🧾' },
+    { href: '/orders', label: 'Замовлення', icon: '🧾' },
+  { href: '/reviews', label: 'Відгуки', icon: '⭐' },
   { href: '/users', label: 'Користувачі', icon: '👤' },
   {
     label: 'Налаштування',

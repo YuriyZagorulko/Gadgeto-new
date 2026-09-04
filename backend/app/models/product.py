@@ -74,16 +74,32 @@ class ProductAttribute(Base):
     __table_args__ = (UniqueConstraint('product_id', 'attribute_id', name='uq_product_attribute'),)
 
 
+class ReviewStatus(str, Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
 class ProductReview(Base):
-    """Customer review managed from the admin panel (migration 007)."""
+    """Customer review for a product.
+
+    Supports two creation paths:
+    - Admin-created reviews (author_name/author_email, no user_id)
+    - Customer storefront submissions (user_id populated, status starts PENDING)
+    """
     __tablename__ = "product_reviews"
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     author_name = Column(String(255), nullable=False)
     author_email = Column(String(255), nullable=True)
     rating = Column(Integer, nullable=False, default=5)
     content = Column(Text, nullable=True)
-    status = Column(String(20), nullable=False, default='published')
-    product = relationship("Product", backref="reviews")
+    status = Column(String(20), nullable=False, default='PENDING')
+    moderated_at = Column(DateTime, nullable=True)
+    moderated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    product = relationship("Product", backref="reviews", foreign_keys=[product_id])
+    user = relationship("User", foreign_keys=[user_id])
+    moderator = relationship("User", foreign_keys=[moderated_by])
 
 
 class ProductVariation(Base):
