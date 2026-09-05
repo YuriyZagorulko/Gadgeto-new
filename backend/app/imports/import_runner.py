@@ -18,6 +18,13 @@ import psycopg2.extras
 
 from app.core.db_connect import DB
 
+from app.imports.brand_normalizer import normalize_brand
+from app.imports.brand_resolver import BrandResolver, BrandSource, BrandConfidence
+
+import logging
+logger = logging.getLogger("imports.import_runner")
+
+
 # Safety threshold: if the current feed contains fewer products than this
 # fraction of the previously active product count, skip missing-product
 # reconciliation.  This prevents a truncated/incomplete feed from hiding
@@ -76,12 +83,27 @@ class ImportRunner:
         self.new_skus: set = set()
         self.warnings: list = []
         self.errors: list = []
+        # Brand resolution tracking
+        self.brands_resolved = 0
+        self.brands_preserved = 0
+        self.brands_unresolved = 0
+        self.unresolved_brands: dict = {}  # brand_name -> count
+        # Reusable brand resolver (loads cache once)
+        self._brand_resolver = None
 
     def _progress(self, stage: str, message: str = ''):
         if self.progress_cb:
             self.progress_cb(stage, self.total, self.processed,
                              self.created, self.updated, self.skipped,
                              self.failed, message)
+
+
+    @property
+    def brand_resolver(self) -> BrandResolver:
+        """Lazy-load brand resolver."""
+        if self._brand_resolver is None:
+            self._brand_resolver = BrandResolver(auto_create_brands=False)
+        return self._brand_resolver
 
     def initialize(self):
         self._progress('initializing', '\u0406\u043d\u0456\u0446\u0456\u0430\u043b\u0456\u0437\u0430\u0446\u0456\u044f \u0456\u043c\u043f\u043e\u0440\u0442\u0443')
@@ -218,6 +240,70 @@ class ImportRunner:
         finally:
             conn.close()
 
+    # ----------------------------------------------------------------
+    # Brand resolution helpers
+    # ----------------------------------------------------------------
+
+    def _resolve_brand(self, cur, prod, existing_brand_id: int = None) -> int:
+        """Resolve brand for a product using BrandResolver.
+        
+        Logic:
+        1. If prod.brand exists -> resolve via normalizer + resolver
+        2. If resolved successfully -> use resolved brand_id
+        3. If resolution fails but existing_brand_id exists -> PRESERVE existing
+        4. If no brand and no existing -> NULL
+        
+        Returns: brand_id (int) or None
+        """
+        raw_brand = prod.brand.strip() if prod.brand else ''
+        
+        if raw_brand:
+            # Normalize the brand name first
+            normalized = normalize_brand(raw_brand)
+            if normalized:
+                # Use BrandResolver to find the canonical brand
+                resolved = self.brand_resolver.resolve(
+                    raw_brand=normalized,
+                    source=BrandSource.VENDOR_FIELD,
+                    confidence=BrandConfidence.HIGH,
+                )
+                if resolved:
+                    self.brands_resolved += 1
+                    return resolved.id
+                else:
+                    # Brand normalized but not in brands table
+                    self.brands_unresolved += 1
+                    if normalized not in self.unresolved_brands:
+                        self.unresolved_brands[normalized] = 0
+                    self.unresolved_brands[normalized] += 1
+                    logger.debug(
+                        f"Brand '{raw_brand}' normalized to '{normalized}' "
+                        f"but not found in brands table"
+                    )
+            else:
+                # Brand normalized to None (generic term, too short, etc.)
+                self.brands_unresolved += 1
+                if raw_brand not in self.unresolved_brands:
+                    self.unresolved_brands[raw_brand] = 0
+                self.unresolved_brands[raw_brand] += 1
+                logger.debug(f"Brand '{raw_brand}' was rejected by normalizer")
+        
+        # Fallback: preserve existing brand if available
+        if existing_brand_id:
+            self.brands_preserved += 1
+            return existing_brand_id
+        
+        return None
+
+    def get_brand_stats(self) -> dict:
+        """Return brand resolution statistics."""
+        return {
+            'resolved': self.brands_resolved,
+            'preserved': self.brands_preserved,
+            'unresolved': self.brands_unresolved,
+            'unresolved_brands': dict(self.unresolved_brands),
+        }
+
     def persist_product(self, prod):
         """Persist one NormalizedProduct. Returns ('created'|'updated'|'error', id)."""
         conn = psycopg2.connect(DB)
@@ -240,30 +326,23 @@ class ImportRunner:
                     if cid:
                         category_ids.append(cid)
 
-            # Resolve brand (case-insensitive match)
-            brand_id = None
-            if prod.brand:
-                brand_name = prod.brand.strip()
-                if brand_name:
-                    cur.execute(
-                        'SELECT id FROM brands WHERE LOWER(name) = LOWER(%s)',
-                        (brand_name,)
-                    )
-                    row = cur.fetchone()
-                    if row:
-                        brand_id = row['id']
-
-            slug = _unique_slug(cur, _slugify(prod.name or 'product'), 'products')
-
+            # Check for existing product and its current brand
+            existing_brand_id = None
             existing_id = None
             if prod.supplier_sku:
                 cur.execute(
-                    'SELECT id FROM products WHERE supplier_id=%s AND supplier_sku=%s',
+                    'SELECT id, brand_id FROM products WHERE supplier_id=%s AND supplier_sku=%s',
                     (self.supplier_id, prod.supplier_sku),
                 )
                 row = cur.fetchone()
                 if row:
                     existing_id = row['id']
+                    existing_brand_id = row['brand_id']
+
+            # Resolve brand using BrandResolver (preserves existing if needed)
+            brand_id = self._resolve_brand(cur, prod, existing_brand_id)
+
+            slug = _unique_slug(cur, _slugify(prod.name or 'product'), 'products')
 
             stock_status = 'in_stock' if prod.in_stock else 'out_of_stock'
             short_desc = getattr(prod, 'short_description', '') or ''

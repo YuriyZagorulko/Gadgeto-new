@@ -15,8 +15,46 @@ from pydantic import BaseModel
 
 from app.api.admin.deps import require_admin
 from app.core.db_connect import admin_cursor
+import psycopg2
+import psycopg2.extras
 
 router = APIRouter()
+
+def _validate_leaf_category(cur, channel_id: int, external_category_id: str) -> tuple[bool, str | None]:
+    """Check if the Rozetka category is a leaf (has no children).
+    
+    Returns: (is_valid, error_message)
+    """
+    if not external_category_id:
+        return True, None  # No category specified, skip validation
+    
+    # Check if category exists
+    cur.execute(
+        "SELECT name FROM channel_external_categories "
+        "WHERE channel_id=%s AND external_id=%s",
+        (channel_id, external_category_id),
+    )
+    cat_row = cur.fetchone()
+    if not cat_row:
+        return True, None  # Category does not exist - will be caught by other validation
+    
+    # Check if category has children
+    cur.execute(
+        "SELECT count(*) AS children FROM channel_external_categories "
+        "WHERE channel_id=%s AND parent_external_id=%s",
+        (channel_id, external_category_id),
+    )
+    has_children = cur.fetchone()["children"] > 0
+    
+    if has_children:
+        cat_name = cat_row["name"]
+        return False, (
+            'Rozetka category "' + cat_name + '" (' + str(external_category_id) + ') is not a leaf category. '
+            'Only leaf categories (without subcategories) can be used for export. '
+            'Please select a child category.'
+        )
+    
+    return True, None
 
 
 def db():
@@ -562,6 +600,16 @@ def create_mapping(code: str, kind: str, body: MappingCreate, user=Depends(requi
         if status not in ("proposed", "accepted", "excluded"):
             raise HTTPException(status_code=400, detail="Невірний статус відповідності")
 
+        # Phase 6.5: Validate leaf category for Rozetka category mappings
+        # Only validate for 'categories' kind (not attributes/values)
+        if kind == "categories" and body.external_id:
+            is_valid, error_msg = _validate_leaf_category(cur, cid, body.external_id)
+            if not is_valid:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Validation error: " + error_msg
+                )
+
         # Idempotent upsert: (channel, internal, external_category) identifies a row.
         cur.execute(
             (f"SELECT id FROM {cfg['table']} "
@@ -638,6 +686,22 @@ def update_mapping(code: str, kind: str, mid: int, body: MappingUpdate, user=Dep
     conn, cur = admin_cursor()
     try:
         cfg = _resolve_kind(kind)
+        cur.execute("SELECT id FROM channels WHERE code = %s", (code,))
+        ch = cur.fetchone()
+        if not ch:
+            raise HTTPException(status_code=404, detail="Канал не знайдено")
+        cid = ch["id"]
+
+        # Phase 6.5: Validate leaf category for Rozetka category mappings
+        # Only validate for 'categories' kind (not attributes/values)
+        if kind == "categories" and body.external_id is not None:
+            is_valid, error_msg = _validate_leaf_category(cur, cid, body.external_id)
+            if not is_valid:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Validation error: " + error_msg
+                )
+
         sets, params = [], []
         if body.external_id is not None:
             sets.append(f"{cfg['external_id_col']} = %s"); params.append(body.external_id)

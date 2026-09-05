@@ -34,6 +34,9 @@ ISSUE_MISSING_BRAND = "MISSING_BRAND"
 ISSUE_MISSING_STOCK = "MISSING_STOCK"
 ISSUE_NO_TAXONOMY = "NO_TAXONOMY"
 ISSUE_MISSING_REQUIRED_ATTR_MAPPING = "MISSING_REQUIRED_ATTR_MAPPING"
+# Phase 6.5: strict leaf category validation for Rozetka export
+# Non-leaf / parent Rozetka categories can NEVER be used for export.
+ROZETKA_CATEGORY_NOT_LEAF = "ROZETKA_CATEGORY_NOT_LEAF"
 # Phase 6.3: export-settings driven exclusion (stock rules).  Only reported
 # when an ExportSettings dict is passed; keeps validate_product() backwards
 # compatible.
@@ -287,32 +290,56 @@ def _validate(cur, product_id: int, channel_code: str = "rozetka",
                             for c in product.get("categories", [])]}})
         ready = False
 
-# Pre-load required external attributes and parent-category check
+# Phase 6.5: Strict leaf category validation
+    # A Rozetka category can only be exported if it is a LEAF (has no children).
     required_attr_ids: set[str] = set()
     taxonomy_ok = True
     if ext_cat_id:
+        # Get category name for error messages
+        cur.execute(
+            "SELECT name FROM channel_external_categories "
+            "WHERE channel_id=%s AND external_id=%s",
+            (channel_id, ext_cat_id),
+        )
+        ext_cat_row = cur.fetchone()
+        cat_name = ext_cat_row["name"] if ext_cat_row else str(ext_cat_id)
+        
+        # Check if category has children (is a parent / non-leaf)
         cur.execute(
             "SELECT count(*) AS children FROM channel_external_categories "
             "WHERE channel_id=%s AND parent_external_id=%s",
             (channel_id, ext_cat_id),
         )
         has_children = cur.fetchone()["children"] > 0
-        cur.execute(
-            "SELECT count(*) AS attrs FROM channel_external_attributes "
-            "WHERE channel_id=%s AND category_external_id=%s",
-            (channel_id, ext_cat_id),
-        )
-        has_attrs = cur.fetchone()["attrs"] > 0
-        if has_children and not has_attrs:
+        
+        # STRICT: Non-leaf / parent categories can NEVER be exported
+        if has_children:
             issues.append({
-                "code": ISSUE_NO_TAXONOMY,
+                "code": ROZETKA_CATEGORY_NOT_LEAF,
                 "severity": SEVERITY_ERROR,
-                "message": f"Обрана категорія Rozetka ({ext_cat_id}) є батьківською ({has_children} дочірніх) та не має характеристик. Виберіть дочірню категорію.",
-                "details": {"external_category_id": ext_cat_id, "children_count": has_children, "attribute_count": 0},
+                "message": 'Rozetka category "' + cat_name + '" (' + str(ext_cat_id) + ') is not a leaf category and cannot be exported.',
+                "details": {"external_category_id": ext_cat_id, "is_leaf": False},
             })
             ready = False
             taxonomy_ok = False
         else:
+            # Leaf category: check if it has attributes for taxonomy completeness
+            cur.execute(
+                "SELECT count(*) AS attrs FROM channel_external_attributes "
+                "WHERE channel_id=%s AND category_external_id=%s",
+                (channel_id, ext_cat_id),
+            )
+            has_attrs = cur.fetchone()["attrs"] > 0
+            if not has_attrs:
+                # Leaf category but no attributes in taxonomy - incomplete data
+                issues.append({
+                    "code": ISSUE_NO_TAXONOMY,
+                    "severity": SEVERITY_ERROR,
+                    "message": f"Rozetka category ({ext_cat_id}) exists but has no attributes in taxonomy.",
+                    "details": {"external_category_id": ext_cat_id, "children_count": 0, "attribute_count": 0},
+                })
+                ready = False
+                taxonomy_ok = False
             required_rows = _get_required_attributes(cur, channel_id, ext_cat_id)
             required_attr_ids = {r["external_id"] for r in required_rows}
 

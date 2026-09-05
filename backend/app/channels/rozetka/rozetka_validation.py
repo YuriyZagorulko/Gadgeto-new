@@ -67,7 +67,7 @@ def _validate_rozetka(cur, product_id, channel_code, channel_id,
     product = _load_product_data(cur, product_id)
     if product is None:
         return {"ready": False, "category": None,
-                "required_attributes": {"total": 0, "mapped": 0, "missing": 0},
+                "main_filters": {"total": 0, "mapped": 0, "unmapped": 0},
                 "attributes": [],
                 "issues": [{"code": "PRODUCT_NOT_FOUND", "severity": SEVERITY_ERROR,
                              "message": f"Product {product_id} not found"}]}
@@ -97,13 +97,17 @@ def _validate_rozetka(cur, product_id, channel_code, channel_id,
     if not payload_valid:
         ready = False
 
+    # NOTE: The "main_filters" counts are based on the legacy database field
+    # `is_required`, which was historically populated from Rozetka's
+    # `filter_type="main"`. This is a UI grouping indicator, NOT a requirement.
+    # These counts are provided for informational purposes only.
     return {
         "ready": ready,
         "category": category_info,
-        "required_attributes": {
+        "main_filters": {
             "total": attr_audit["total_required"],
             "mapped": attr_audit["mapped_required"],
-            "missing": attr_audit["missing_required"],
+            "unmapped": attr_audit["missing_required"],
         },
         "attributes": attr_audit.get("details", []),
         "issues": issues,
@@ -152,6 +156,9 @@ def _validate_category(cur, channel_id, resolver, product, ext_cat_id, issues):
 
 
 def _audit_attributes(cur, channel_id, ext_cat_id, resolver, product, issues, attr_specs):
+    # NOTE: These counts are based on the legacy `is_required` field which was
+    # historically populated from `filter_type="main"`. This is a UI grouping
+    # indicator, NOT a Rozetka API requirement. The counts are informational only.
     total_required = 0
     mapped_required = 0
     missing_required = 0
@@ -217,7 +224,7 @@ def _audit_attributes(cur, channel_id, ext_cat_id, resolver, product, issues, at
             if is_required:
                 missing_required += 1
                 entry["issues"].append({"code": ROZETKA_REQUIRED_ATTR_MISSING,
-                    "message": f"Required attribute '{attr_name}' has no mapping"})
+                    "message": f"Main filter '{attr_name}' has no attribute mapping"})
 
         for iss in entry["issues"]:
             issues.append({**iss, "severity": SEVERITY_ERROR if is_required else SEVERITY_WARNING,

@@ -491,19 +491,22 @@ function renderCategories(rows: any[], openEdit: (r: any) => void) {
   );
 }
 
-function RequiredBadge({ isRequired, showLabel }: { isRequired: boolean | null | undefined; showLabel?: boolean }) {
-  if (isRequired === null || isRequired === undefined) return <span className="text-xs text-gray-300">—</span>;
+// MainFilterBadge: displays whether this attribute is a Rozetka main filter (filter_type="main").
+// IMPORTANT: "Main filter" does NOT mean "required attribute". Rozetka has no required attributes.
+// filter_type="main" is a UI grouping indicator showing attributes that appear in the main filter panel.
+function MainFilterBadge({ isMainFilter, showLabel }: { isMainFilter: boolean | null | undefined; showLabel?: boolean }) {
+  if (isMainFilter === null || isMainFilter === undefined) return <span className="text-xs text-gray-300">—</span>;
   return (
-    <span className={`inline-flex items-center gap-1 text-xs font-medium ${isRequired ? 'text-red-600' : 'text-green-600'}`}>
-      <span className="w-1.5 h-1.5 rounded-full inline-block flex-shrink-0 ${isRequired ? 'bg-red-500' : 'bg-green-500'}"></span>
-      {isRequired ? (showLabel ? 'Обов\'язковий' : 'Так') : (showLabel ? 'Необов\'язковий' : 'Ні')}
+    <span className={`inline-flex items-center gap-1 text-xs font-medium ${isMainFilter ? 'text-blue-600' : 'text-gray-500'}`}>
+      <span className={`w-1.5 h-1.5 rounded-full inline-block flex-shrink-0 ${isMainFilter ? 'bg-blue-500' : 'bg-gray-400'}`}></span>
+      {isMainFilter ? (showLabel ? 'Основний фільтр' : 'Так') : (showLabel ? 'Додатковий' : 'Ні')}
     </span>
   );
 }
 
 function renderAttributes(rows: any[], openEdit: (r: any) => void) {
   return (
-    <Table head={<><Th>Внутрішній атрибут</Th><Th>Rozetka категорія</Th><Th>→ Rozetka атрибут</Th><Th>Обов'язковість</Th><Th>Статус</Th><Th>Confidence</Th><Th className="w-24">Дії</Th></>}>
+    <Table head={<><Th>Внутрішній атрибут</Th><Th>Rozetka категорія</Th><Th>→ Rozetka атрибут</Th><Th>Основний фільтр</Th><Th>Статус</Th><Th>Confidence</Th><Th className="w-24">Дії</Th></>}>
       {rows.length === 0 ? (
         <tr><td colSpan={7} className="p-6 text-center text-gray-400">Немає відповідностей</td></tr>
       ) : rows.map((r: any) => {
@@ -513,7 +516,7 @@ function renderAttributes(rows: any[], openEdit: (r: any) => void) {
             <Td className="max-w-48 truncate font-medium"><span title={r.internal_name}>{r.internal_name}</span></Td>
             <Td className="text-xs">{r.external_category_name || r.external_category_id || '—'}</Td>
             <Td className="max-w-40 truncate text-gray-600"><span title={r.external_name || ''}>{r.external_name || '—'}</span></Td>
-            <Td><RequiredBadge isRequired={r.is_required} /></Td>
+            <Td><MainFilterBadge isMainFilter={r.is_required} /></Td>
             <Td><Badge tone={sb.tone}>{sb.label}</Badge></Td>
             <Td className="text-xs">{r.confidence != null ? `${Math.round(r.confidence * 100)}%` : '—'}</Td>
             <Td>
@@ -873,7 +876,7 @@ function AttributeMappingModal({
         />
         {editing?.is_required !== undefined && (
           <div className="mt-1">
-            <RequiredBadge isRequired={editing.is_required} showLabel />
+            <MainFilterBadge isMainFilter={editing.is_required} showLabel />
           </div>
         )}
 

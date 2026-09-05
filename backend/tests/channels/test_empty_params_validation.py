@@ -373,9 +373,14 @@ def _cleanup(conn, ids):
 
 @pytest.mark.integration
 def test_required_attrs_with_zero_mappings_block_product():
-    """Regression: a category that requires characteristics but has zero
-    attribute mappings must yield ready=False + EMPTY_PARAMS (previously
-    ready stayed True and the product was pushed with empty params)."""
+    """Regression: a category with zero attribute mappings must yield
+    ready=False + EMPTY_PARAMS (previously ready stayed True and the product
+    was pushed with empty params to Rozetka).
+
+    IMPORTANT: With Phase 39 fix, MISSING_REQUIRED_ATTR_MAPPING is NO LONGER
+    generated because _get_required_attributes returns []. The only blocking
+    issue is EMPTY_PARAMS, which correctly blocks products with zero usable params.
+    """
     import psycopg2.extras
     conn = _connect()
     suffix = uuid.uuid4().hex[:8]
@@ -385,19 +390,18 @@ def test_required_attrs_with_zero_mappings_block_product():
             result = _validate(cur, ids["product_id"])
         codes = {i["code"] for i in result["issues"]}
         assert result["ready"] is False, (
-            "product in a required-characteristics category with 0 mappings "
-            "must NOT be ready"
+            "product in a category with 0 attribute mappings must NOT be ready"
         )
         assert ISSUE_EMPTY_PARAMS in codes, (
             f"EMPTY_PARAMS missing from {sorted(codes)}"
         )
-        assert ISSUE_MISSING_REQUIRED_ATTR_MAPPING in codes, (
-            "MISSING_REQUIRED_ATTR_MAPPING must still be reported per "
-            "required attribute"
+        # Phase 39 fix: MISSING_REQUIRED_ATTR_MAPPING is no longer generated
+        # because _get_required_attributes returns [] (Rozetka has no required attrs)
+        assert ISSUE_MISSING_REQUIRED_ATTR_MAPPING not in codes, (
+            "MISSING_REQUIRED_ATTR_MAPPING should NOT be generated after Phase 39 fix"
         )
         ep = next(i for i in result["issues"] if i["code"] == ISSUE_EMPTY_PARAMS)
         assert ep["details"]["external_category_id"] == CATEGORY
-        assert ep["details"]["required_attribute_count"] == 2
     finally:
         _cleanup(conn, ids)
         conn.close()

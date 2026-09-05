@@ -628,175 +628,133 @@ class TestCommercialHash:
 
 
 class TestGetRequiredAttributes:
-    """Tests for _get_required_attributes using a mock cursor."""
+    """Tests for _get_required_attributes.
 
-    def test_returns_required_attrs_for_category(self):
-        """Returns attributes with is_required=1 for the specific category."""
+IMPORTANT: Rozetka has no required attributes concept. _get_required_attributes
+returns [] to reflect this. These tests verify the function behaves correctly.
+"""
+
+    def test_returns_empty_list(self):
+        """_get_required_attributes returns empty list because Rozetka has no
+        required attributes concept. filter_type=main is a UI grouping indicator,
+        not a product-creation requirement."""
         from app.channels.validation import _get_required_attributes
         from unittest.mock import MagicMock
 
         mock_cur = MagicMock()
-        mock_cur.execute.return_value = mock_cur  # cursor.execute() returns self
-        mock_cur.fetchall.return_value = [
-            {"external_id": "23130", "name": "Інтерфейс", "param_type": "ComboBox"},
-            {"external_id": "21738", "name": "Колір", "param_type": "ComboBox"},
-        ]
         result = _get_required_attributes(mock_cur, channel_id=1, external_category_id="80045")
-        mock_cur.execute.assert_called_once()
-        call_args = mock_cur.execute.call_args
-        assert "is_required=1" in call_args[0][0]
-        assert "category_external_id" in call_args[0][0]
-        assert len(result) == 2
-        assert result[0]["external_id"] == "23130"
+        # Function should return empty list regardless of database contents
+        assert result == []
+        # execute should NOT be called - function returns early
+        mock_cur.execute.assert_not_called()
 
-    def test_returns_empty_when_no_required_attrs(self):
-        """Returns empty list when category has no required attributes."""
+    def test_returns_empty_for_any_category(self):
+        """Always returns empty list regardless of category."""
         from app.channels.validation import _get_required_attributes
         from unittest.mock import MagicMock
 
         mock_cur = MagicMock()
-        mock_cur.execute.return_value = mock_cur
-        mock_cur.fetchall.return_value = []
-        result = _get_required_attributes(mock_cur, channel_id=1, external_category_id="99999")
+        # Test multiple categories
+        result1 = _get_required_attributes(mock_cur, channel_id=1, external_category_id="80045")
+        result2 = _get_required_attributes(mock_cur, channel_id=1, external_category_id="80073")
+        result3 = _get_required_attributes(mock_cur, channel_id=1, external_category_id="99999")
+        assert result1 == []
+        assert result2 == []
+        assert result3 == []
+
+    def test_returns_empty_regardless_of_category(self):
+        """_get_required_attributes always returns [] regardless of category.
+
+        Rozetka has no required attributes concept. The filter_type=main field
+        indicates a UI grouping indicator, not a product-creation requirement.
+        """
+        from app.channels.validation import _get_required_attributes
+        from unittest.mock import MagicMock
+
+        mock_cur = MagicMock()
+
+        # Function should return empty list for any category
+        result = _get_required_attributes(mock_cur, channel_id=1, external_category_id="80045")
         assert result == []
 
-    def test_required_attrs_are_category_specific(self):
-        """Different categories return different required attributes."""
-        from app.channels.validation import _get_required_attributes
-        from unittest.mock import MagicMock
-
-        call_results = {
-            "80045": [
-                {"external_id": "23130", "name": "Інтерфейс", "param_type": "ComboBox"},
-                {"external_id": "21738", "name": "Колір", "param_type": "ComboBox"},
-            ],
-            "80073": [
-                {"external_id": "11111", "name": "Бренд", "param_type": "ComboBox"},
-            ],
-        }
-
-        def fake_execute(sql, params):
-            key = str(params[1])
-            mock_cur.fetchall.return_value = call_results.get(key, [])
-
-        mock_cur = MagicMock()
-        mock_cur.execute.return_value = mock_cur  # cursor.execute() returns self
-        mock_cur.execute.side_effect = fake_execute
-
-        usb_flash = _get_required_attributes(mock_cur, channel_id=1, external_category_id="80045")
-        adapters = _get_required_attributes(mock_cur, channel_id=1, external_category_id="80073")
-
-        assert len(usb_flash) == 2
-        assert len(adapters) == 1
-        assert usb_flash[0]["external_id"] != adapters[0]["external_id"]
+        # No database query should be made
+        mock_cur.execute.assert_not_called()
 
 
 class TestRequiredAttributeValidation:
-    """Tests that products with missing required attributes fail validation."""
+    """Tests for required attribute semantics.
 
-    def test_missing_required_attr_maps_to_error_severity(self):
-        """MISSING_REQUIRED_ATTR_MAPPING should have ERROR severity (blocking)."""
-        from app.channels.validation import (
-            ISSUE_MISSING_REQUIRED_ATTR_MAPPING,
-            SEVERITY_ERROR,
-        )
-        # This is a code-level assertion: the constant should be ERROR
-        # (the value is set in validation.py Concern B block)
-        assert SEVERITY_ERROR == "error", "SEVERITY_ERROR must be 'error'"
+    IMPORTANT: Rozetka has NO required attributes concept. filter_type=main
+    indicates a UI grouping indicator, not a product-creation requirement.
 
-    def test_product_with_unmapped_required_attr_fails_validation(self):
-        """Product missing a required attribute should fail validation.
+    The validation system no longer generates MISSING_REQUIRED_ATTR_MAPPING
+    because _get_required_attributes returns []. Products are not blocked
+    merely for having unmapped main filters.
 
-        Scenario: Category 80045 requires Колір (21738) and Інтерфейс (23130).
-        Product has no attributes mapped to those external IDs.
-        Validation should report MISSING_REQUIRED_ATTR_MAPPING with ERROR severity.
+    The real validation guard is EMPTY_PARAMS, which blocks products that
+    would produce zero usable params.
+    """
+
+    def test_missing_required_attr_constant_exists(self):
+        """ISSUE_MISSING_REQUIRED_ATTR_MAPPING constant still exists for compatibility.
+
+        However, it is no longer generated by the validator since _get_required_attributes
+        returns [] (Phase 39 fix).
         """
-        from app.channels.validation import (
-            _get_required_attributes,
-            ISSUE_MISSING_REQUIRED_ATTR_MAPPING,
-            SEVERITY_ERROR,
-        )
-        from unittest.mock import MagicMock
+        from app.channels.validation import ISSUE_MISSING_REQUIRED_ATTR_MAPPING
+        assert ISSUE_MISSING_REQUIRED_ATTR_MAPPING == "MISSING_REQUIRED_ATTR_MAPPING"
 
-        # Mock cursor returns the required attrs for cat 80045
-        mock_cur = MagicMock()
-        mock_cur.fetchall.return_value = [
-            {"external_id": "21738", "name": "Колір", "param_type": "ComboBox"},
-            {"external_id": "23130", "name": "Інтерфейс", "param_type": "ComboBox"},
-        ]
-
-        # The function should return those two required attrs
-        required = _get_required_attributes(mock_cur, channel_id=1, external_category_id="80045")
-        required_ids = {r["external_id"] for r in required}
-
-        assert "21738" in required_ids
-        assert "23130" in required_ids
-
-        # Product has NO mapped attributes for these required external IDs
-        product_attrs = []  # empty attributes list
-        mapped_found = False
-        for req_ext_id in required_ids:
-            for pa in product_attrs:
-                # FakeResolver would return None here (no mapping)
-                pass  # No attributes, so no mapping possible
-        # With empty product attributes, none of the required IDs are found
-        # → MISSING_REQUIRED_ATTR_MAPPING should be raised (ERROR)
-
-    def test_product_with_mapped_required_attr_passes_validation(self):
-        """Product that HAS the required attributes should not get the error."""
+    def test_get_required_attributes_returns_empty_list(self):
+        """_get_required_attributes always returns [] - no required attributes."""
         from app.channels.validation import _get_required_attributes
         from unittest.mock import MagicMock
 
         mock_cur = MagicMock()
-        mock_cur.fetchall.return_value = [
-            {"external_id": "21738", "name": "Колір", "param_type": "ComboBox"},
-        ]
 
-        required = _get_required_attributes(mock_cur, channel_id=1, external_category_id="80045")
-        required_ids = {r["external_id"] for r in required}
+        # Should return empty list regardless of what DB contains
+        result = _get_required_attributes(mock_cur, channel_id=1, external_category_id="80045")
+        assert result == []
+        mock_cur.execute.assert_not_called()
 
-        # Product has attr 10 mapped to external 21738 (Колір)
-        # (FakeResolver maps (10, "1001") → {"external_attribute_id": "21738", ...})
-        product_attrs_ext_ids = {"21738"}  # product has Колір mapped
+    def test_one_mapped_param_is_valid_despite_unmapped_main_filters(self):
+        """A product with 1 valid mapped param is NOT rejected because other
+        main filters (filter_type=main) are unmapped.
 
-        missing = required_ids - product_attrs_ext_ids
-        # No missing required attributes
-        assert len(missing) == 0
-
-    def test_required_attr_not_shared_between_categories(self):
-        """Required attribute in Category A is NOT required in Category B.
-
-        This prevents global attribute validation from incorrectly failing
-        products in categories where the attribute is optional.
+        This is the key semantic distinction: having unmapped UI filters
+        does not block export. Only EMPTY_PARAMS (zero usable params) blocks.
         """
         from app.channels.validation import _get_required_attributes
-        from unittest.mock import MagicMock
 
-        # psycopg2 cursor.execute() returns the cursor itself (self).
-        # So cur.execute(sql).fetchall() works on the same cursor object.
-        # We must set fetchall.return_value on the SAME mock cursor,
-        # AND make execute() return the same cursor (self).
-        def make_mock_cursor(rows):
-            mock_cur = MagicMock()
-            mock_cur.execute.return_value = mock_cur  # cursor.execute() returns self
-            mock_cur.fetchall.return_value = rows
-            return mock_cur
+        # _get_required_attributes returns [] because Rozetka has no required attrs
+        # Therefore required_attr_ids is always empty in Concern B
+        # Products with 1+ mapped param proceed to EMPTY_PARAMS check
 
-        usb_cur = make_mock_cursor([
-            {"external_id": "21738", "name": "Колір", "param_type": "ComboBox"},
-        ])
-        empty_cur = make_mock_cursor([])
+        # This test documents the correct behavior:
+        # - Having unmapped main filters is NOT a blocking error
+        # - Having zero usable params IS a blocking error (EMPTY_PARAMS)
+        required = _get_required_attributes(None, channel_id=1, external_category_id="80045")
+        assert required == []  # No "required" attributes
 
-        usb_flash_req = _get_required_attributes(usb_cur, channel_id=1, external_category_id="80045")
-        adapter_req = _get_required_attributes(empty_cur, channel_id=1, external_category_id="80073")
+        # A product with 1 mapped param would pass validation
+        # (assuming the param is usable - not blocked by EMPTY_PARAMS)
+        # This is correct: we don't require all main filters to be mapped
 
-        # Category 80045 has required attrs; 80073 does not
-        assert len(usb_flash_req) > 0, "USB Flash should have required attributes"
-        assert len(adapter_req) == 0, "Adapters category should have no required attributes"
-        # The required attrs from 80045 must NOT appear in 80073
-        usb_ids = {r["external_id"] for r in usb_flash_req}
-        adapter_ids = {r["external_id"] for r in adapter_req}
-        assert usb_ids != adapter_ids
+    def test_required_attr_concept_does_not_exist(self):
+        """Document that Rozetka has no required attributes concept.
+
+        This test serves as regression protection against someone mistakenly
+        restoring the old behavior of treating filter_type=main as required.
+        """
+        from app.channels.validation import _get_required_attributes
+
+        # Phase 39 fix: function returns [] for all categories
+        # This must NOT change back to querying is_required=1
+        for cat_id in ["80045", "80073", "80172", "99999"]:
+            result = _get_required_attributes(None, channel_id=1, external_category_id=cat_id)
+            assert result == [], f"_get_required_attributes should return [] for all categories"
+
+        # If this test fails, someone restored the old is_required=1 query
+        # which incorrectly treats filter_type=main as a required attribute
 
 
 class TestEmptyParamsRootCause:

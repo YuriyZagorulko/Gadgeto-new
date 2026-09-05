@@ -17,7 +17,7 @@ const TABS: { key: TabName; label: string }[] = [
   { key: 'history', label: 'Історія оновлень' },
 ];
 
-type TaxonomyStats = { categories: number; attributes: number; required_attributes: number; values: number };
+type TaxonomyStats = { categories: number; attributes: number; main_filters: number; values: number };
 type RunStatus = {
   run_id: number | null;
   status: string;
@@ -321,7 +321,7 @@ export default function RozetkaTaxonomyPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatCard label="Категорій" value={tax.categories} />
         <StatCard label="Атрибутів" value={tax.attributes} />
-        <StatCard label="Обов'язкових атрибутів" value={tax.required_attributes} />
+        <StatCard label="Основних фільтрів (main)" value={tax.main_filters} />
         <StatCard label="Значень" value={tax.values} />
         <StatCard label="Останнє оновлення"
           value={status.finished_at ? formatDateTime(status.finished_at) : '—'} />

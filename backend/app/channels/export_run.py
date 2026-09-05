@@ -530,9 +530,41 @@ def _push_product_ops(ctx: dict, adapter: RozetkaAdapter, operation: str,
     created_now = False
     remote_status = None
     external_id = ""
+
+    # ── HARD GUARD: Block products with empty params ─────────────────────────
+    # This guard runs AFTER payload building and BEFORE any HTTP request.
+    # It is the final safety net that prevents params=[] from reaching Rozetka.
+    # ─────────────────────────────────────────────────────────────────────────
+    if operation == "create":
+        payload = build_payload_create(transformed, attr_specs)
+    else:
+        include_category = refs.get("rz_item_id") is None
+        payload = build_payload_update(refs, transformed, attr_specs, include_category)
+
+    if not payload.get("params"):
+        ext_cat_id = (transformed.get("category") or {}).get("external_id")
+        logger.warning(
+            "EMPTY_PARAMS hard guard triggered: product_id=%s sku=%s "
+            "category=%s operation=%s — skipping API request",
+            result["product_id"], sku, ext_cat_id, operation)
+        store_validation_issues(ctx["cur"], listing["id"], [{
+            "code": "EMPTY_PARAMS",
+            "severity": "error",
+            "message": "Для товару не формується жодного Rozetka параметра (params). "
+                       "Товар пропущено.",
+            "details": {"external_category_id": ext_cat_id,
+                        "operation": operation},
+        }])
+        finish_listing_error(ctx["cur"], listing["id"], "validation",
+                            "EMPTY_PARAMS: товар має порожні params")
+        return {"product_id": result["product_id"], "sku": sku,
+                "status": "skipped",
+                "reason": "EMPTY_PARAMS: товар має порожні params",
+                "operation": operation}
+
     try:
         if operation == "create":
-            payload = build_payload_create(transformed, attr_specs)
+            # payload already built above
             pushed = adapter.push_product({
                 "operation": "create", "sku": sku, "payload": payload,
             })
@@ -549,9 +581,7 @@ def _push_product_ops(ctx: dict, adapter: RozetkaAdapter, operation: str,
             external_id = str(rz_item_id) if rz_item_id else str(item_id)
             created_now = True
         else:
-            include_category = refs.get("rz_item_id") is None
-            payload = build_payload_update(refs, transformed, attr_specs,
-                                           include_category)
+            # payload already built above in the hard guard section
             pushed = adapter.push_product({
                 "operation": "update", "sku": sku, "payload": payload,
                 "external_ref": {

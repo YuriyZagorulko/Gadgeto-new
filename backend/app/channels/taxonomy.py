@@ -70,12 +70,15 @@ def get_taxonomy_stats(cur, channel_id: int) -> dict:
     )
     attributes = cur.fetchone()["c"]
 
+    # NOTE: `is_required` in the database was historically populated from
+    # Rozetka's `filter_type="main"`, which is a UI grouping indicator, NOT a
+    # required field. We report this count as "main_filters" to avoid confusion.
     cur.execute(
         "SELECT count(*) AS c FROM channel_external_attributes"
         " WHERE channel_id = %s AND is_required = 1",
         (channel_id,),
     )
-    required_attributes = cur.fetchone()["c"]
+    main_filters = cur.fetchone()["c"]
 
     cur.execute(
         "SELECT count(*) AS c FROM channel_external_values WHERE channel_id = %s",
@@ -85,5 +88,5 @@ def get_taxonomy_stats(cur, channel_id: int) -> dict:
 
     return {
         "categories": categories, "attributes": attributes,
-        "required_attributes": required_attributes, "values": values,
+        "main_filters": main_filters, "values": values,
     }
