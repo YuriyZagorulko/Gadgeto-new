@@ -7,6 +7,7 @@ parses it, and returns normalized products for persistence.
 import hashlib
 import json
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict
@@ -28,8 +29,9 @@ from app.imports.import_stats import ImportStats as SharedImportStats
 from app.core.config import settings
 from app.services.seo import generate_product_seo
 
+# Brand extraction from product names (DC-Link has no brand/vendor field)
+from app.imports.brand_extractor import find_brand_in_name as _find_brand_in_name
 
-# Core product fields that must NEVER be overwritten by supplier attributes
 PROTECTED_CORE_FIELDS = frozenset({
     "name", "sku", "supplier_sku", "slug", "brand", "brand_id",
     "price", "old_price", "sale_price", "cost", "purchase_cost",
@@ -437,9 +439,13 @@ class DCLinkImporter:
             brief = item.get("brief") or item.get("brief_description") or item.get("short_description") or item.get("ShortDescription") or ""
             description = item.get("description") or item.get("Description") or brief or ""
 
-            seo = generate_product_seo({"Name": name, "Regular price": price, "Brand": ""})
+            # Extract brand from product name (DC-Link API has no brand/vendor field)
+            brand = _find_brand_in_name(name)
+
+            seo = generate_product_seo({"Name": name, "Regular price": price, "Brand": brand})
 
             product = NormalizedProduct(
+                brand=brand,
                 supplier_sku=articul,
                 sku=sku,
                 name=name,

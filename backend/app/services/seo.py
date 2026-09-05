@@ -29,6 +29,25 @@ _KNOWN_BRANDS: List[str] = sorted([
     "Yamaha", "Pioneer", "LG", "Sony", "Panasonic",
     "Epson", "Canon", "Brother", "Kyocera", "Xerox",
     "ViewSonic", "BenQ", "AOC", "Philips", "Iiyama",
+    # Additional brands found in DC-Link catalog
+    "A4Tech", "Anycubic", "Baseus", "BeCover", "Canyon",
+    "Dahua", "Edimax", "Elegoo", "Elecom", "Grandstream",
+    "HOCO", "ZTE", "Bloody", "Edifier", "Lapara",
+    "Maiwo", "Manli", "STLab", "PcCOOLER", "PowerColor",
+    "GamerStorm", "Chieftec", "Borofone", "Amazon",
+    "Apacer", "Dynamode", "Sapphire",
+    "3DMakerpro", "Axtel", "Hator", "Targus",
+    "ColorWay", "Sumdex", "2E", "XO", "AgeStar",
+    "Cablexpert", "Atcom", "Ruijie", "Proarch", "Brauberg",
+    # Additional DC-Link brands
+    "ID-Cooling", "Delux", "ZYXEL", "AeroCool", "REAL-EL",
+    "1stPlayer", "GameMax", "Spaceriver", "Powercom",
+    # More brands from DC-Link
+    "Continent", "Dengos", "Tenda", "PrintPro", "Titan",
+    "Luxe Cube", "Dream Machines", "Motorola", "Adata",
+    "ColorWay", "Sumdex", "2E", "XO", "AgeStar",
+    "Ugreen", "Baseus", "Hoco", "POCO",
+    "3DMakerpro", "Axtel", "Hator", "Targus",
 ], key=lambda s: (-len(s), s))
 
 # ── Patterns ──────────────────────────────────────────────────────────────
@@ -105,9 +124,12 @@ def generate_product_seo(product: dict) -> Dict[str, str]:
     )
     
     # Focus keyphrase
+    # Use the explicitly-passed Brand value (e.g. from DC-Link name extraction)
+    # when parsed.brand is empty (DC-Link names start with product type, not brand).
+    focus_brand = parsed.brand or product.get("Brand", "")
     kp_parts = []
-    if parsed.brand:
-        kp_parts.append(parsed.brand)
+    if focus_brand:
+        kp_parts.append(focus_brand)
     if parsed.model:
         kp_parts.append(parsed.model)
     elif cleaned:

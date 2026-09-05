@@ -240,13 +240,18 @@ class ImportRunner:
                     if cid:
                         category_ids.append(cid)
 
-            # Resolve brand
+            # Resolve brand (case-insensitive match)
             brand_id = None
             if prod.brand:
-                cur.execute('SELECT id FROM brands WHERE name = %s', (prod.brand,))
-                row = cur.fetchone()
-                if row:
-                    brand_id = row['id']
+                brand_name = prod.brand.strip()
+                if brand_name:
+                    cur.execute(
+                        'SELECT id FROM brands WHERE LOWER(name) = LOWER(%s)',
+                        (brand_name,)
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        brand_id = row['id']
 
             slug = _unique_slug(cur, _slugify(prod.name or 'product'), 'products')
 

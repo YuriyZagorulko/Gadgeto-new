@@ -29,9 +29,7 @@ export default function HomepageViewedProducts() {
       const unique = [...new Set(ids)].slice(0, MAX_IDS);
       if (unique.length < MIN_SHOW) { setProducts([]); return; }
 
-      const apiBase = (window as any).NEXT_PUBLIC_API_URL || 'http://backend:8000';
-      const url = new URL('/api/v1/home', apiBase.replace(/\/+$/, ''));
-      fetch(url.toString())
+      fetch(new URL('/api/home', window.location.origin).toString())
         .then((r) => r.json())
         .then((d) => {
           const all = [...(d.recommended || []), ...(d.new_arrivals || [])];

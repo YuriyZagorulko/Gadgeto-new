@@ -20,6 +20,7 @@ ISSUE_MISSING_CATEGORY_MAPPING = "MISSING_CATEGORY_MAPPING"
 ISSUE_MISSING_ATTRIBUTE_MAPPING = "MISSING_ATTRIBUTE_MAPPING"
 ISSUE_MISSING_ATTRIBUTE_VALUE_MAPPING = "MISSING_ATTRIBUTE_VALUE_MAPPING"
 ISSUE_MISSING_REQUIRED_ATTRIBUTE = "MISSING_REQUIRED_ATTRIBUTE"
+ISSUE_EMPTY_PARAMS = "EMPTY_PARAMS"
 ISSUE_INVALID_ATTRIBUTE_VALUE = "INVALID_ATTRIBUTE_VALUE"
 ISSUE_MISSING_TITLE = "MISSING_TITLE"
 ISSUE_MISSING_DESCRIPTION = "MISSING_DESCRIPTION"
@@ -103,13 +104,76 @@ def _get_external_category_id(resolver: ChannelMappingResolver, product: dict) -
 
 
 def _get_required_attributes(cur, channel_id: int, external_category_id: str) -> list[dict]:
-    # Rozetka API does not provide a `required`/`mandatory` flag for attributes.
-    # The `filter_type: "main"` field indicates primary filter characteristics,
-    # NOT "required for product creation". Therefore no attributes are treated
-    # as required for export validation.
-    return []
+    """Return required (is_required=1) external attributes for the given category.
+
+    These are fetched from the Rozetka taxonomy stored in
+    ``channel_external_attributes`` where ``is_required = 1``.
+    Attributes are scoped to the specific Rozetka category — a required
+    attribute in one category is NOT required in another.
+    """
+    cur.execute(
+        """SELECT external_id, name, param_type
+           FROM channel_external_attributes
+           WHERE channel_id=%s AND category_external_id=%s AND is_required=1
+           ORDER BY name""",
+        (channel_id, str(external_category_id)),
+    )
+    return [dict(row) for row in cur.fetchall()]
 
 
+# List/select characteristics require an external value ID in the payload;
+# text/decimal/integer characteristics pass through the raw value instead.
+_SELECT_PARAM_TYPES = frozenset({
+    "list", "listvalues", "combobox", "checkboxgroup", "checkboxgroupvalues",
+})
+
+
+def _would_produce_empty_params(cur, channel_id: int, ext_cat_id: str,
+                                resolver: ChannelMappingResolver,
+                                product: dict) -> bool:
+    """True when the Rozetka ``params`` list for this product would be empty.
+
+    Mirrors ``rozetka.payload._build_params``: a product attribute contributes a
+    param only when it has an accepted category mapping AND the resulting
+    characteristic is buildable.  List/select characteristics require an
+    external value ID (missing value mappings are skipped); text/decimal/integer
+    characteristics pass through the raw value string.  When every mapped
+    attribute is skipped, the payload's ``params`` is ``[]`` and the Rozetka API
+    rejects the item.
+    """
+    specs: dict[str, str] = {}
+    cur.execute(
+        "SELECT external_id, param_type FROM channel_external_attributes "
+        "WHERE channel_id=%s AND category_external_id=%s",
+        (channel_id, str(ext_cat_id)),
+    )
+    for row in cur.fetchall():
+        specs[str(row["external_id"])] = (row["param_type"] or "").strip().lower()
+    for pa in product.get("attributes") or []:
+        attr_mapping = resolver.resolve_attribute(pa["attribute_id"], ext_cat_id)
+        if attr_mapping is None:
+            continue
+        ext_attr_id = str(attr_mapping.get("external_attribute_id") or "")
+        if not ext_attr_id:
+            continue
+        ptype = specs.get(ext_attr_id, "")
+        external_value_id = None
+        if pa.get("attribute_value_id"):
+            val_mapping = resolver.resolve_value(pa["attribute_value_id"], ext_cat_id)
+            if val_mapping:
+                external_value_id = val_mapping.get("external_value_id")
+        elif pa.get("value_text"):
+            val_mapping = resolver.resolve_value_by_text(
+                pa["attribute_id"], pa["value_text"], ext_cat_id,
+            )
+            if val_mapping:
+                external_value_id = val_mapping.get("external_value_id")
+        if ptype in _SELECT_PARAM_TYPES and external_value_id is None:
+            # Select/list characteristic without a value mapping is omitted
+            # from the payload — contributes nothing.
+            continue
+        return False
+    return True
 def validate_product(product_id: int, channel_code: str = "rozetka",
                      public_base_url: str | None = None,
                      export_settings: dict | None = None) -> dict:
@@ -285,7 +349,11 @@ def _validate(cur, product_id: int, channel_code: str = "rozetka",
                                                "attribute_value_id": pa["attribute_value_id"],
                                                "value_name": val_name}})
 
-    # Concern B: Required Rozetka attributes without any internal mapping
+    # Concern B: Required Rozetka attributes without any internal mapping.
+    # A missing required attribute MUST block the export (ready=False); otherwise
+    # _process_product would push an item whose params are incomplete/empty and
+    # the Rozetka API would reject it after a wasted round-trip.
+    missing_required = False
     if ext_cat_id and taxonomy_ok and required_attr_ids:
         for req_ext_id in required_attr_ids:
             mapped_found = False
@@ -295,11 +363,38 @@ def _validate(cur, product_id: int, channel_code: str = "rozetka",
                     mapped_found = True
                     break
             if not mapped_found:
+                missing_required = True
                 issues.append({"code": ISSUE_MISSING_REQUIRED_ATTR_MAPPING,
-                                "severity": SEVERITY_WARNING,
+                                "severity": SEVERITY_ERROR,
                                 "message": f"Відсутній обов'язковий атрибут {req_ext_id}",
                                 "details": {"external_attribute_id": req_ext_id,
                                             "external_category_id": ext_cat_id}})
+                ready = False
+
+    # Concern C: EMPTY_PARAMS.  The Rozetka API rejects items whose
+    # characteristics list (params) is empty.  This fires when the category
+    # REQUIRES characteristics but the product would contribute zero usable
+    # params — either the category has no accepted attribute mappings at all
+    # (e.g. categories 80089/80036/1593467/80099/80090/80007/146341), or every
+    # mapped characteristic is a list/select with a missing value mapping.
+    # Blocking here prevents the pointless API round-trip that ends in
+    # "empty params" rejection.
+    if ext_cat_id and taxonomy_ok and required_attr_ids:
+        if _would_produce_empty_params(cur, channel_id, ext_cat_id, resolver,
+                                       product):
+            issues.append({
+                "code": ISSUE_EMPTY_PARAMS,
+                "severity": SEVERITY_ERROR,
+                "message": (f"Категорія Rozetka ({ext_cat_id}) вимагає характеристики, "
+                            "але для товару не формується жодного параметра (params) — "
+                            "перевірте відповідності атрибутів і їх значень для цієї категорії"),
+                "details": {
+                    "external_category_id": ext_cat_id,
+                    "required_attribute_count": len(required_attr_ids),
+                    "product_attribute_count": len(product.get("attributes") or []),
+                },
+            })
+            ready = False
     return {"ready": ready, "issues": issues,
             "sku": product.get("sku") or product.get("supplier_sku") or "",
             "name": title,

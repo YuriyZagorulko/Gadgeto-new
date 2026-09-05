@@ -15,6 +15,19 @@ ROZETKA_IN_STOCK_QUANTITY = 10
 
 logger = logging.getLogger("channels.rozetka.payload")
 
+
+def _sanitize_name(name: str) -> str:
+    """Strip HTML tag characters from a product name.
+
+    Rozetka rejects names containing ``<`` or ``>`` characters with
+    "Атрибут name має неприпустимі теги!" (invalid tags in name).
+    Simple non-alphanumeric characters are preserved; only ``<`` and ``>``
+    are stripped as they are unambiguously HTML delimiter characters.
+    ``&lt;`` / ``&gt;`` entities are NOT encoded because Rozetka may not
+    decode them in the title field.
+    """
+    return name.replace("<", "").replace(">", "").strip()
+
 SELECT_TYPES = {"list", "listvalues", "combobox", "checkboxgroup","checkboxgroupvalues"}
 INT_TYPES = {"integer"}
 DECIMAL_TYPES = {"decimal"}
@@ -109,7 +122,7 @@ def _pictures(transformed):
 
 def build_create_payload(transformed, attr_specs):
     warnings = []
-    title = (transformed.get("title") or "").strip()
+    title = _sanitize_name(transformed.get("title") or "")
     if not title:
         raise PayloadBuildError("Missing product title")
     description = (transformed.get("description") or "").strip()
@@ -149,7 +162,7 @@ def build_create_payload(transformed, attr_specs):
 
 def build_basic_data_item(external_ref, transformed, attr_specs, include_category=False):
     warnings = []
-    title = (transformed.get("title") or "").strip()
+    title = _sanitize_name(transformed.get("title") or "")
     if not title:
         raise PayloadBuildError("Missing product title")
     ref_key = None
