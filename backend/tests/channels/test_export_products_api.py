@@ -171,6 +171,23 @@ def test_products_category_filter(client):
     assert res.status_code == 200
 
 
+def test_products_category_ids_filter(client):
+    """Filter by multiple internal category ids (comma-separated, OR semantics)."""
+    conn = FakeConn(FakeCursor([_product_row(category_id=5)]))
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)):
+        res = client.get("/api/v1/admin/export/channels/rozetka/products",
+                         params={"category_ids": "5,7,9"})
+    assert res.status_code == 200
+    # The multi-category filter must be emitted as a single ANY() predicate.
+    any_queries = [q for q in conn.cursor_obj.queries if "ANY" in q]
+    assert any_queries, "expected category_ids filter to use ANY() predicate"
+    assert "category_id = ANY(%s)" in any_queries[0]
+    # The ids must be passed as a PostgreSQL array (list of ints).
+    any_params = [p for q, p in zip(conn.cursor_obj.queries, conn.cursor_obj.params)
+                  if "ANY" in q]
+    assert any_params and [5, 7, 9] in any_params[0]
+
+
 def test_products_publication_status_filter(client):
     """Filter by publication status."""
     conn = FakeConn(FakeCursor([_product_row(publication_status="published")]))
@@ -372,6 +389,51 @@ def test_preview_all_matching_filters(client):
     assert res.status_code == 200
     body = res.json()
     assert len(body["products"]) >= 1
+
+
+def test_preview_all_matching_category_ids_filter(client):
+    """Preview resolves all_matching_filters with multiple category ids."""
+    row = RealDictRow({"id": 7})
+    cursor = FakeCursor([row])
+    conn = FakeConn(cursor)
+    with patch("app.api.admin.export.admin_cursor", return_value=(conn, conn.cursor_obj)), \
+         patch("app.channels.mapping_resolver.ChannelMappingResolver") as MockResolver, \
+         patch("app.channels.validation.validate_product") as MockValidate, \
+         patch("app.channels.validation._load_product_data") as MockLoad, \
+         patch("app.channels.validation._build_transform_payload") as MockBuild:
+
+        MockResolver.return_value.resolve_category.return_value = {
+            "external_category_id": "1001", "external_category_name": "Ноутбуки",
+        }
+        MockResolver.return_value.resolve_attribute.return_value = None
+        MockLoad.return_value = {
+            "id": 7, "sku": "CAT-7", "name": "Cat Match",
+            "price": 100, "currency": "UAH",
+            "stock_qty": 5, "stock_status": "in_stock",
+            "status": "PUBLISHED", "description": "desc",
+            "brand": {"id": 1, "name": "Brand"},
+            "categories": [{"category_id": 5, "category_name": "Ноутбуки"}],
+            "attributes": [], "images": [], "brand_id": 1,
+        }
+        MockValidate.return_value = {"ready": True, "issues": []}
+
+        res = client.post(
+            "/api/v1/admin/export/channels/rozetka/export/preview",
+            json={
+                "selection": {
+                    "all_matching_filters": True,
+                    "filters": {"category_ids": [5, 7, 9]},
+                },
+            },
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body["products"]) >= 1
+    # The multi-category filter must be emitted as a single ANY() predicate.
+    any_queries = [q for q in cursor.queries if "ANY" in q]
+    assert any_queries, "expected category_ids filter to use ANY() predicate"
+    any_params = [p for q, p in zip(cursor.queries, cursor.params) if "ANY" in q]
+    assert any_params and [5, 7, 9] in any_params[0]
 
 
 def test_preview_with_exclude_ids(client):

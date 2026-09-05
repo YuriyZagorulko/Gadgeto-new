@@ -7,6 +7,7 @@ import {
   PageHeader, Table, Th, Td, Badge, Button, Input, Select,
   LoadingState, ErrorState, Pagination, ConfirmDialog, useToast,
 } from '@/components/ui';
+import SearchableMultiSelect from '@/components/SearchableMultiSelect';
 
 type ProductRow = { id: number; sku: string; name: string;
   category_name: string | null; category_id: number | null;
@@ -43,7 +44,7 @@ export default function RozetkaExportPage() {
   const [error, setError] = useState('');
   const [q, setQ] = useState('');
   const [appliedQ, setAppliedQ] = useState('');
-  const [catFilter, setCatFilter] = useState('');
+  const [catFilters, setCatFilters] = useState<(string | number)[]>([]);
   const [statusFilter, setStatusFilter] = useState('');
   const [stockFilter, setStockFilter] = useState('');
   const [mapFilter, setMapFilter] = useState('');
@@ -81,14 +82,14 @@ export default function RozetkaExportPage() {
   const filterParams = useMemo(() => {
     const p: Record<string, string | number | undefined> = { page, per_page: perPage };
     if (appliedQ) p.q = appliedQ;
-    if (catFilter) p.category_id = Number(catFilter);
+    if (catFilters.length) p.category_ids = catFilters.join(',');
     if (stockFilter) p.stock_status = stockFilter;
     if (statusFilter) p.status = statusFilter;
     if (pubStatusFilter) p.publication_status = pubStatusFilter;
     if (mapFilter === 'yes') p.has_mapping = 'true';
     else if (mapFilter === 'no') p.has_mapping = 'false';
     return p;
-  }, [page, perPage, appliedQ, catFilter, stockFilter, statusFilter, pubStatusFilter, mapFilter]);
+  }, [page, perPage, appliedQ, catFilters, stockFilter, statusFilter, pubStatusFilter, mapFilter]);
 
   const load = useCallback(() => {
     setLoading(true); setError(''); setPreview(null);
@@ -124,7 +125,7 @@ export default function RozetkaExportPage() {
       const body: any = {};
       if (selectAllMatching) {
         body.selection = { all_matching_filters: true,
-          filters: { q: appliedQ || undefined, category_id: catFilter ? Number(catFilter) : undefined,
+          filters: { q: appliedQ || undefined, category_ids: catFilters.length ? catFilters.map(Number) : undefined,
             publication_status: pubStatusFilter || undefined,
             stock_status: stockFilter || undefined,
             has_mapping: mapFilter === 'yes' ? true : mapFilter === 'no' ? false : undefined } };
@@ -153,7 +154,7 @@ export default function RozetkaExportPage() {
       const body: any = {};
       if (confirmMode === 'all') {
         body.selection = { all_matching_filters: true,
-          filters: { q: appliedQ || undefined, category_id: catFilter ? Number(catFilter) : undefined,
+          filters: { q: appliedQ || undefined, category_ids: catFilters.length ? catFilters.map(Number) : undefined,
             publication_status: pubStatusFilter || undefined,
             stock_status: stockFilter || undefined,
             has_mapping: mapFilter === 'yes' ? true : mapFilter === 'no' ? false : undefined } };
@@ -201,10 +202,12 @@ export default function RozetkaExportPage() {
             onKeyDown={(e) => { if (e.key === 'Enter') { setAppliedQ(q); setPage(1); } }}
             placeholder="SKU / назва" className="w-48" /></div>
         <div><label className="block text-xs text-gray-500 mb-1">Категорія</label>
-          <Select value={catFilter} onChange={(e) => { setCatFilter(e.target.value); setPage(1); }}>
-            <option value="">Всі</option>
-            {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </Select></div>
+          <SearchableMultiSelect
+            options={categories}
+            selected={catFilters}
+            onChange={(ids) => { setCatFilters(ids); setPage(1); }}
+            placeholder="Пошук категорії..."
+          /></div>
         <div><label className="block text-xs text-gray-500 mb-1">Статус</label>
           <Select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}>
             <option value="">Всі</option><option value="PUBLISHED">Опубліковано</option>

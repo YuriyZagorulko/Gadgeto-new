@@ -550,6 +550,7 @@ def channel_products(
         per_page: int = Query(20, ge=1, le=500),
         q: Optional[str] = Query(None),
         category_id: Optional[int] = Query(None),
+        category_ids: Optional[str] = Query(None, description="Comma-separated category IDs (OR within filter)"),
         publication_status: Optional[str] = Query(None),
         sync_status: Optional[str] = Query(None),
         stock_status: Optional[str] = Query(None),
@@ -579,6 +580,13 @@ def channel_products(
                 "EXISTS (SELECT 1 FROM product_categories pc "
                 "WHERE pc.product_id = p.id AND pc.category_id = %s)")
             params.append(category_id)
+        if category_ids:
+            ids = [int(x.strip()) for x in category_ids.split(",") if x.strip()]
+            if ids:
+                filters.append(
+                    "EXISTS (SELECT 1 FROM product_categories pc "
+                    "WHERE pc.product_id = p.id AND pc.category_id = ANY(%s))")
+                params.append(ids)
         if stock_status:
             filters.append("p.stock_status = %s")
             params.append(stock_status)
@@ -733,6 +741,7 @@ MAX_PREVIEW_PRODUCTS = 50
 class PreviewSelectionFilters(BaseModel):
     q: Optional[str] = None
     category_id: Optional[int] = None
+    category_ids: Optional[list[int]] = None
     publication_status: Optional[str] = None
     sync_status: Optional[str] = None
     stock_status: Optional[str] = None
@@ -773,6 +782,11 @@ def _resolve_preview_product_ids(
             "EXISTS (SELECT 1 FROM product_categories pc "
             "WHERE pc.product_id = p.id AND pc.category_id = %s)")
         params.append(sf.category_id)
+    if sf.category_ids:
+        filters.append(
+            "EXISTS (SELECT 1 FROM product_categories pc "
+            "WHERE pc.product_id = p.id AND pc.category_id = ANY(%s))")
+        params.append(list(sf.category_ids))
     if sf.stock_status:
         filters.append("p.stock_status = %s")
         params.append(sf.stock_status)
@@ -1030,6 +1044,11 @@ def _resolve_export_product_ids(cur, cid: int, selection: PreviewSelection) -> l
             "EXISTS (SELECT 1 FROM product_categories pc "
             "WHERE pc.product_id = p.id AND pc.category_id = %s)")
         params.append(sf.category_id)
+    if sf.category_ids:
+        filters.append(
+            "EXISTS (SELECT 1 FROM product_categories pc "
+            "WHERE pc.product_id = p.id AND pc.category_id = ANY(%s))")
+        params.append(list(sf.category_ids))
     if sf.stock_status:
         filters.append("p.stock_status = %s")
         params.append(sf.stock_status)
