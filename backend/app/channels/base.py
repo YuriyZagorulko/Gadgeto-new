@@ -249,8 +249,11 @@ def get_adapter(channel_code: str) -> ChannelAdapter:
     Raises LookupError while a concrete integration does not exist
     (callers must treat channels without adapters as not-yet-syncable).
     """
+    from app.channels.prom.api import PromAdapter
+
     registry: dict[str, type[ChannelAdapter]] = {
         RozetkaAdapter.channel_code: RozetkaAdapter,
+        PromAdapter.channel_code: PromAdapter,
     }
     cls = registry.get(channel_code)
     if cls is None:
@@ -266,8 +269,11 @@ def get_adapter(channel_code: str) -> ChannelAdapter:
     Raises LookupError while the concrete integration is not implemented
     (callers must treat channels without adapters as not-yet-syncable).
     """
+    from app.channels.prom.api import PromAdapter
+
     registry: dict[str, type[ChannelAdapter]] = {
         RozetkaAdapter.channel_code: RozetkaAdapter,
+        PromAdapter.channel_code: PromAdapter,
     }
     cls = registry.get(channel_code)
     if cls is None:

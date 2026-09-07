@@ -233,6 +233,21 @@ async def refresh_taxonomy(code: str, user=Depends(require_admin)):
     The long-running fetch/upsert never blocks the HTTP request.  Progress and
     logs are available via GET /export/channels/{code}/taxonomy/status.
     """
+    # Channel guard — Rozetka is implemented; other channels (Prom.ua) are
+    # prepared but have no credentials yet, so refresh fails cleanly.
+    if code != "rozetka":
+        from app.channels.prom.client import (
+            PROM_NOT_CONFIGURED_MESSAGE,
+            is_prom_configured,
+        )
+        if not is_prom_configured():
+            raise HTTPException(status_code=409, detail=PROM_NOT_CONFIGURED_MESSAGE)
+        raise HTTPException(
+            status_code=409,
+            detail="Prom.ua taxonomy sync will be implemented when API "
+                   "credentials are available.",
+        )
+
     conn, cur = admin_cursor()
     try:
         channel = _resolve_channel(cur, code)
@@ -1102,6 +1117,22 @@ async def start_export(
     Selection is resolved SERVER-SIDE.  Returns immediately with a run_id;
     progress/status is polled via GET .../export/status/{run_id}.
     """
+    # Channel guard — only Rozetka export is implemented.  Prom.ua is prepared
+    # as a second channel but has no credentials yet, so attempting to export
+    # fails cleanly with an application-level error and NO real HTTP request.
+    if code != "rozetka":
+        from app.channels.prom.client import (
+            PROM_NOT_CONFIGURED_MESSAGE,
+            is_prom_configured,
+        )
+        if not is_prom_configured():
+            raise HTTPException(status_code=409, detail=PROM_NOT_CONFIGURED_MESSAGE)
+        raise HTTPException(
+            status_code=409,
+            detail="Prom.ua export will be implemented when API documentation "
+                   "becomes available.",
+        )
+
     from app.channels.export_run import (
         ExportRunBusy,
         start_export_run,

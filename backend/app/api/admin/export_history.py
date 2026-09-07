@@ -15,11 +15,11 @@ VALID_STATUSES = {"QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "PARTIAL", "CANCEL
 PER_PAGE_DEFAULT = 25
 
 
-def _resolve_rozetka_channel(cur) -> dict:
-    cur.execute("SELECT id, code, name FROM channels WHERE code='rozetka'")
+def _resolve_channel(cur, code: str) -> dict:
+    cur.execute("SELECT id, code, name FROM channels WHERE code=%s", (code,))
     ch = cur.fetchone()
     if not ch:
-        raise HTTPException(status_code=404, detail="Канал Rozetka не знайдено")
+        raise HTTPException(status_code=404, detail=f"Канал '{code}' не знайдено")
     return ch
 
 
@@ -55,7 +55,7 @@ def export_history_list(
     """Paginated list of export runs for the given channel."""
     conn, cur = admin_cursor()
     try:
-        ch = _resolve_rozetka_channel(cur)
+        ch = _resolve_channel(cur, code)
         cid = ch["id"]
 
         conds = ["sr.channel_id=%s", "sr.run_type=%s"]
@@ -110,7 +110,7 @@ def export_history_detail(
     """Full detail of one export run, including progress/logs and per-product results."""
     conn, cur = admin_cursor()
     try:
-        ch = _resolve_rozetka_channel(cur)
+        ch = _resolve_channel(cur, code)
         cid = ch["id"]
 
         cur.execute("""
@@ -154,7 +154,7 @@ def cancel_export_run(code: str, run_id: int, user=Depends(require_admin)):
     """
     conn, cur = admin_cursor()
     try:
-        ch = _resolve_rozetka_channel(cur)
+        ch = _resolve_channel(cur, code)
         cid = ch["id"]
 
         cur.execute("""
@@ -211,7 +211,7 @@ def export_history_delete(
     """Delete an export history record. Does NOT modify products or listings."""
     conn, cur = admin_cursor()
     try:
-        ch = _resolve_rozetka_channel(cur)
+        ch = _resolve_channel(cur, code)
         cid = ch["id"]
 
         cur.execute("""

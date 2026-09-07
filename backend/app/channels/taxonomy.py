@@ -48,8 +48,11 @@ class RozetkaTaxonomyService(TaxonomyService):
 
 
 def get_taxonomy_service(channel_code: str) -> TaxonomyService:
+    from app.channels.prom.taxonomy import PromTaxonomyService
+
     registry = {
         "rozetka": RozetkaTaxonomyService,
+        "prom": PromTaxonomyService,
     }
     cls = registry.get(channel_code)
     if cls is None:

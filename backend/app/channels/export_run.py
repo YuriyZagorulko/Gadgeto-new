@@ -856,6 +856,22 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
 
     final_status = "FAILED"
     try:
+        # Channel guard — this Rozetka-specific engine must only ever run for
+        # the rozetka channel.  Prom.ua (prepared but not configured) and any
+        # other channel fail the whole run with a clear application error and
+        # never reach the Rozetka transport.
+        if channel_code != "rozetka":
+            from app.channels.prom.client import (
+                PROM_NOT_CONFIGURED_MESSAGE,
+                is_prom_configured,
+            )
+            if not is_prom_configured():
+                raise RuntimeError(
+                    f"Канал '{channel_code}' не готовий до експорту: "
+                    f"{PROM_NOT_CONFIGURED_MESSAGE}")
+            raise RuntimeError(
+                f"Експорт для каналу '{channel_code}' буде реалізовано пізніше.")
+
         # Fatal preparation phase — any failure here fails the whole run.
         settings = load_export_settings(cur, channel_id)
         resolver = ChannelMappingResolver(channel_id=channel_id,

@@ -83,6 +83,18 @@ class Settings(BaseSettings):
     ROZETKA_SELLER_USERNAME: str = Field(default="")
     ROZETKA_SELLER_PASSWORD: str = Field(default="")
 
+    # ── Prom.ua Marketplace API (placeholder — NOT yet implemented) ──────────
+    # Prom.ua is prepared as a second export channel but has no credentials or
+    # API documentation in the project yet.  All of the below default to the
+    # "disabled / not configured" state so the application starts and runs
+    # normally.  The real API client/authentication will be implemented in a
+    # later task using `PROM_API_URL` + `PROM_CREDENTIALS_JSON`.
+    PROM_ENABLED: bool = Field(default=False)
+    PROM_API_URL: str = Field(default="")
+    # Free-form JSON blob for future Prom.ua credentials (token/login).  Never
+    # read by the current code; purely a future implementation point.
+    PROM_CREDENTIALS_JSON: str = Field(default="")
+
     # Supplier feeds (temporary working storage path)
     SUPPLIER_FEEDS_DIR: str = Field(default="/data/feeds")
 

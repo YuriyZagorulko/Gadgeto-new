@@ -70,6 +70,17 @@ const navItems: NavItem[] = [
           { href: '/export/rozetka/history', label: 'Історія експортів' },
         ],
       },
+      {
+        label: 'Prom.ua',
+        children: [
+          { href: '/export/prom', label: 'Огляд' },
+          { href: '/export/prom/products', label: 'Товари Prom.ua' },
+          { href: '/export/prom/mapping', label: 'Мапінг' },
+          { href: '/export/prom/taxonomy', label: 'Таксономія' },
+          { href: '/export/prom/settings', label: 'Налаштування' },
+          { href: '/export/prom/history', label: 'Історія експортів' },
+        ],
+      },
     ],
   },
 ];

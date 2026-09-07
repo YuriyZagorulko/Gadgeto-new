@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from . import auth, products, categories, attributes, filters, brands
 from . import suppliers, mappings, imports, orders, users, dashboard, settings
 from . import media, pricing, export, export_mapping, category_attributes, content, rozetka_pricing, export_history
+from . import prom_pricing
 from . import automation, reviews
 
 router = APIRouter(prefix="/admin")
@@ -28,6 +29,7 @@ router.include_router(export.router, prefix="", tags=["admin-export"])
 router.include_router(export_mapping.router, prefix="", tags=["admin-export-mapping"])
 router.include_router(content.router, prefix="", tags=["admin-content"])
 router.include_router(rozetka_pricing.router, prefix="", tags=["admin-rozetka-pricing"])
+router.include_router(prom_pricing.router, prefix="", tags=["admin-prom-pricing"])
 router.include_router(export_history.router, prefix="", tags=["admin-export-history"])
 router.include_router(automation.router, prefix="", tags=["admin-automation"])
 router.include_router(reviews.router, prefix="", tags=["admin-reviews"])
