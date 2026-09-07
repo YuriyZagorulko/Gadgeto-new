@@ -13,6 +13,11 @@ from app.channels.export_settings import parse_bool, parse_float
 # unknown (DC-Link does not provide exact stock counts).
 ROZETKA_IN_STOCK_QUANTITY = 10
 
+# Rozetka producer ID for products without a brand — the canonical
+# "Без бренда" entry in the Rozetka producers dictionary.
+ROZETKA_NO_BRAND_PRODUCER_ID = 581286
+ROZETKA_NO_BRAND_PRODUCER_TITLE = "Без бренда"
+
 logger = logging.getLogger("channels.rozetka.payload")
 
 
@@ -120,7 +125,7 @@ def _pictures(transformed):
         raise PayloadBuildError("No public images (need http/https URL)")
     return pictures
 
-def build_create_payload(transformed, attr_specs):
+def build_create_payload(transformed, attr_specs, producer_id: int = 0):
     warnings = []
     title = _sanitize_name(transformed.get("title") or "")
     if not title:
@@ -136,10 +141,10 @@ def build_create_payload(transformed, attr_specs):
     price = int(round(parse_float(price_value)))
     if price <= 0:
         raise PayloadBuildError(f"Invalid export price: {price}")
-    producer = None
-    brand = (transformed.get("brand") or "").strip()
-    if brand:
-        producer = {"id": 0, "title": brand}
+    producer_title = (transformed.get("brand") or "").strip()
+    if not producer_title:
+        producer_title = ROZETKA_NO_BRAND_PRODUCER_TITLE
+    producer = {"id": producer_id, "title": producer_title}
     payload = {
         "name": title, "name_ua": title,
         "category_id": _require_category(transformed),
@@ -152,15 +157,15 @@ def build_create_payload(transformed, attr_specs):
     if description:
         payload["description"] = description
         payload["description_ua"] = description
-    if producer:
-        payload["producer"] = producer
+    payload["producer"] = producer
     payload["available"] = stock_qty > 0
     params = _build_params(transformed, attr_specs, warnings)
     # Rozetka requires the params field to exist even if empty
     payload["params"] = params
     return payload, warnings
 
-def build_basic_data_item(external_ref, transformed, attr_specs, include_category=False):
+def build_basic_data_item(external_ref, transformed, attr_specs, include_category=False,
+                          producer_id: int = 0):
     warnings = []
     title = _sanitize_name(transformed.get("title") or "")
     if not title:
@@ -177,9 +182,10 @@ def build_basic_data_item(external_ref, transformed, attr_specs, include_categor
     if description:
         item["description"] = description
         item["description_ua"] = description
-    brand = (transformed.get("brand") or "").strip()
-    if brand:
-        item["producer"] = {"id": 0, "title": brand}
+    producer_title = (transformed.get("brand") or "").strip()
+    if not producer_title:
+        producer_title = ROZETKA_NO_BRAND_PRODUCER_TITLE
+    item["producer"] = {"id": producer_id, "title": producer_title}
     sku = (transformed.get("sku") or "").strip()
     if sku:
         item["article"] = sku

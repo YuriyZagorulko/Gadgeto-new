@@ -107,21 +107,22 @@ def _get_external_category_id(resolver: ChannelMappingResolver, product: dict) -
 
 
 def _get_required_attributes(cur, channel_id: int, external_category_id: str) -> list[dict]:
-    """Return required (is_required=1) external attributes for the given category.
+    """Return the characteristics that genuinely block export for a category.
 
-    These are fetched from the Rozetka taxonomy stored in
-    ``channel_external_attributes`` where ``is_required = 1``.
-    Attributes are scoped to the specific Rozetka category — a required
-    attribute in one category is NOT required in another.
+    The Rozetka API exposes NO "required" field for category characteristics
+    (verified across all cached taxonomy responses).  The historical
+    ``is_required=1`` rows came from a sync bug that treated
+    ``filter_type="main"`` — a UI filter-grouping flag — as obligatoriness.
+    The sync no longer sets the flag and the cached value is informational
+    only, so this provider deliberately returns [] WITHOUT querying the
+    database: optional characteristics can never block an export.
+
+    The blocking logic in ``_validate`` (MISSING_REQUIRED_ATTR_MAPPING,
+    ERROR-severity value mapping, EMPTY_PARAMS) still honours a non-empty
+    result, which keeps the semantics correct for future channels that do
+    expose a real required flag (see regression tests).
     """
-    cur.execute(
-        """SELECT external_id, name, param_type
-           FROM channel_external_attributes
-           WHERE channel_id=%s AND category_external_id=%s AND is_required=1
-           ORDER BY name""",
-        (channel_id, str(external_category_id)),
-    )
-    return [dict(row) for row in cur.fetchall()]
+    return []
 
 
 # List/select characteristics require an external value ID in the payload;
@@ -399,26 +400,57 @@ def _validate(cur, product_id: int, channel_code: str = "rozetka",
                 ready = False
 
     # Concern C: EMPTY_PARAMS.  The Rozetka API rejects items whose
-    # characteristics list (params) is empty.  This fires when the category
-    # REQUIRES characteristics but the product would contribute zero usable
-    # params — either the category has no accepted attribute mappings at all
-    # (e.g. categories 80089/80036/1593467/80099/80090/80007/146341), or every
-    # mapped characteristic is a list/select with a missing value mapping.
+    # characteristics list (params) is empty.  This fires when the product
+    # would contribute zero usable params — either because no accepted attribute
+    # mappings exist for the category, or every mapped characteristic is a
+    # list/select with a missing value mapping.
     # Blocking here prevents the pointless API round-trip that ends in
     # "empty params" rejection.
-    if ext_cat_id and taxonomy_ok and required_attr_ids:
+    if ext_cat_id and taxonomy_ok:
         if _would_produce_empty_params(cur, channel_id, ext_cat_id, resolver,
                                        product):
+            # Count internal attributes for richer diagnostics
+            pa_count = len(product.get("attributes") or [])
+            mapped_count = 0
+            only_brand = True
+            for pa in product.get("attributes") or []:
+                if pa["attribute_id"] != 353:
+                    only_brand = False
+                if resolver.resolve_attribute(pa["attribute_id"], ext_cat_id):
+                    mapped_count += 1
+            unmapped = pa_count - mapped_count
+
+            # Build an actionable diagnostic message
+            if pa_count == 1 and only_brand:
+                detail_msg = (
+                    f"товар має лише атрибут \"Бренд\", який передається через поле "
+                    f"producer, а не як характеристика (params) — "
+                    f"категорія Rozetka ({ext_cat_id}) не містить атрибута \"Бренд\" "
+                    f"для params. Додайте інші характеристики товару для експорту"
+                )
+            elif unmapped > 0 and mapped_count == 0:
+                detail_msg = (
+                    f"товар має {pa_count} атрибут(ів), "
+                    f"жоден з них не має прийнятого відповідності до категорії Rozetka "
+                    f"({ext_cat_id}) — перевірте attribute mappings"
+                )
+            else:
+                detail_msg = (
+                    f"товар має {pa_count} атрибут(ів), "
+                    f"з них {mapped_count} мапповано, {unmapped} не мапповано"
+                )
+
             issues.append({
                 "code": ISSUE_EMPTY_PARAMS,
                 "severity": SEVERITY_ERROR,
-                "message": (f"Категорія Rozetka ({ext_cat_id}) вимагає характеристики, "
-                            "але для товару не формується жодного параметра (params) — "
-                            "перевірте відповідності атрибутів і їх значень для цієї категорії"),
+                "message": (f"Категорія Rozetka ({ext_cat_id}) відхиляє товари з порожніми "
+                            f"характеристиками (params) — {detail_msg}"),
                 "details": {
                     "external_category_id": ext_cat_id,
-                    "required_attribute_count": len(required_attr_ids),
-                    "product_attribute_count": len(product.get("attributes") or []),
+                    "product_attribute_count": pa_count,
+                    "mapped_attribute_count": mapped_count,
+                    "unmapped_attribute_count": unmapped,
+                    "has_only_brand_attribute": bool(pa_count == 1 and only_brand),
                 },
             })
             ready = False

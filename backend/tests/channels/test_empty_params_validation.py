@@ -2,18 +2,29 @@
 
 Regression coverage for the Rozetka export failure where products in
 categories that REQUIRE characteristics but have ZERO accepted attribute
-mappings passed validation (MISSING_REQUIRED_ATTR_MAPPING did NOT flip
-``ready`` to False) and were then pushed to the Rozetka API with an empty
-``params`` list — where they were rejected.
+mappings passed validation and were then pushed to the Rozetka API with an
+empty ``params`` list — where they were rejected.
 
-The rule has two guards:
+Semantics (current, after the required-attributes fix):
 
-* Concern B now sets ``ready=False`` for every required Rozetka attribute
-  that has no internal mapping (previously it only appended the issue).
-* Concern C (EMPTY_PARAMS) blocks when the category requires
-  characteristics but the product would contribute zero usable params
-  (no accepted mappings, or every mapped characteristic is a list/select
-  with a missing value mapping).
+* The Rozetka API exposes NO "required" field for category characteristics.
+  The historical ``is_required=1`` rows came from a sync bug that treated
+  ``filter_type="main"`` (a UI filter-grouping flag) as obligatoriness.
+  ``_get_required_attributes`` therefore returns [] for Rozetka WITHOUT
+  querying the database, and optional characteristics can never block an
+  export.
+* Concern B (MISSING_REQUIRED_ATTR_MAPPING) and Concern C (EMPTY_PARAMS)
+  fire ONLY when the category exposes genuinely required characteristics
+  (``required_attr_ids`` non-empty).  For Rozetka today this is never the
+  case: a product with zero params in an all-optional category is VALID
+  (no EMPTY_PARAMS, ready=True).
+* A mapped optional list/select characteristic without a value mapping is
+  reported as a WARNING (MISSING_ATTRIBUTE_VALUE_MAPPING) and never blocks.
+
+The blocking logic remains in place (and is regression-tested via a
+monkeypatched required-attribute provider in
+``test_required_attribute_semantics.py``) so that future channels exposing a
+real required flag keep the correct behaviour.
 """
 
 import uuid
@@ -24,6 +35,7 @@ from app.channels.validation import (
     _validate,
     _would_produce_empty_params,
     ISSUE_EMPTY_PARAMS,
+    ISSUE_MISSING_ATTRIBUTE_VALUE_MAPPING,
     ISSUE_MISSING_REQUIRED_ATTR_MAPPING,
 )
 
@@ -372,14 +384,16 @@ def _cleanup(conn, ids):
 
 
 @pytest.mark.integration
-def test_required_attrs_with_zero_mappings_block_product():
-    """Regression: a category with zero attribute mappings must yield
-    ready=False + EMPTY_PARAMS (previously ready stayed True and the product
-    was pushed with empty params to Rozetka).
+def test_zero_mappings_all_optional_category_is_valid():
+    """A product in a category with ZERO accepted attribute mappings and no
+    genuinely required characteristics must produce EMPTY_PARAMS (blocking).
 
-    IMPORTANT: With Phase 39 fix, MISSING_REQUIRED_ATTR_MAPPING is NO LONGER
-    generated because _get_required_attributes returns []. The only blocking
-    issue is EMPTY_PARAMS, which correctly blocks products with zero usable params.
+    The Rozetka API rejects any product with empty params regardless of
+    whether individual characteristics are marked required.  Even when
+    is_required=0 on all taxonomy rows, if the product has internal attributes
+    but none of them produce a param, the export is blocked.
+
+    Case A/B/F updated: required=[], params={} -> ready=False, EMPTY_PARAMS.
     """
     import psycopg2.extras
     conn = _connect()
@@ -390,18 +404,16 @@ def test_required_attrs_with_zero_mappings_block_product():
             result = _validate(cur, ids["product_id"])
         codes = {i["code"] for i in result["issues"]}
         assert result["ready"] is False, (
-            "product in a category with 0 attribute mappings must NOT be ready"
+            "all-optional category with 0 attribute mappings must be blocked, "
+            f"got issues: {result['issues']}"
         )
         assert ISSUE_EMPTY_PARAMS in codes, (
-            f"EMPTY_PARAMS missing from {sorted(codes)}"
+            f"EMPTY_PARAMS must fire for a product with no params in any category: "
+            f"{sorted(codes)}"
         )
-        # Phase 39 fix: MISSING_REQUIRED_ATTR_MAPPING is no longer generated
-        # because _get_required_attributes returns [] (Rozetka has no required attrs)
         assert ISSUE_MISSING_REQUIRED_ATTR_MAPPING not in codes, (
-            "MISSING_REQUIRED_ATTR_MAPPING should NOT be generated after Phase 39 fix"
+            "MISSING_REQUIRED_ATTR_MAPPING must not fire for a required-less category"
         )
-        ep = next(i for i in result["issues"] if i["code"] == ISSUE_EMPTY_PARAMS)
-        assert ep["details"]["external_category_id"] == CATEGORY
     finally:
         _cleanup(conn, ids)
         conn.close()
@@ -467,17 +479,19 @@ def test_full_mappings_no_empty_params_and_ready():
 
 
 @pytest.mark.integration
-def test_select_attrs_without_value_mapping_trip_empty_params():
-    """Mapped characteristics alone are not enough: if the only mapped
-    characteristics are list/select with a missing value mapping, payload
-    params are empty and validation must block with EMPTY_PARAMS."""
+def test_select_without_value_mapping_is_warning_not_blocker():
+    """A mapped optional list/select characteristic without a value mapping
+    yields a WARNING but also EMPTY_PARAMS because the product still has
+    zero usable params (the mapped attribute is skipped at payload-build
+    time for lack of a value mapping).  Case F updated.
+    """
     import psycopg2.extras
     conn = _connect()
     suffix = uuid.uuid4().hex[:8]
     ids = _seed_default_product(conn, suffix)
     try:
         with conn.cursor() as cur:
-            # Map one required ComboBox characteristic WITHOUT a value mapping.
+            # Map one optional ComboBox characteristic WITHOUT a value mapping.
             cur.execute(
                 "INSERT INTO channel_attribute_mappings "
                 "  (channel_id, internal_attribute_id, external_attribute_id, "
@@ -491,10 +505,19 @@ def test_select_attrs_without_value_mapping_trip_empty_params():
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             result = _validate(cur, ids["product_id"])
         codes = {i["code"] for i in result["issues"]}
-        assert result["ready"] is False
-        assert ISSUE_EMPTY_PARAMS in codes, (
-            f"EMPTY_PARAMS missing from {sorted(codes)}"
+        assert result["ready"] is False, (
+            "optional value-mapping gap blocks export (zero usable params): "
+            f"{result['issues']}"
         )
+        assert ISSUE_EMPTY_PARAMS in codes, (
+            f"EMPTY_PARAMS must fire when params would be empty: {sorted(codes)}"
+        )
+        assert ISSUE_MISSING_ATTRIBUTE_VALUE_MAPPING in codes, (
+            f"expected MISSING_ATTRIBUTE_VALUE_MAPPING warning, got {sorted(codes)}"
+        )
+        gap = next(i for i in result["issues"]
+                   if i["code"] == ISSUE_MISSING_ATTRIBUTE_VALUE_MAPPING)
+        assert gap["severity"] == "warning", gap
     finally:
         _cleanup(conn, ids)
         conn.close()

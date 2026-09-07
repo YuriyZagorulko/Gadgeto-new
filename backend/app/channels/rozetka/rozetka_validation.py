@@ -91,7 +91,8 @@ def _validate_rozetka(cur, product_id, channel_code, channel_id,
                                     issues, attr_specs)
 
     payload_valid, payload_issues, payload_warnings = _validate_payload(
-        product, resolver, ext_cat_id, attr_specs, public_base_url, export_settings)
+        product, resolver, ext_cat_id, attr_specs, public_base_url, export_settings,
+        required_count=attr_audit["total_required"])
     for pi in payload_issues:
         issues.append(pi)
     if not payload_valid:
@@ -237,7 +238,16 @@ def _audit_attributes(cur, channel_id, ext_cat_id, resolver, product, issues, at
 
 
 def _validate_payload(product, resolver, ext_cat_id, attr_specs,
-                      public_base_url, export_settings):
+                      public_base_url, export_settings,
+                      required_count: int = 0):
+    """Payload-format checks shared with the real export run.
+
+    The Rozetka API rejects items with empty params regardless of whether
+    individual characteristics are marked required.  This check fires when
+    the product would contribute zero usable params — either because no
+    accepted attribute mappings exist, or every mapped characteristic is
+    a list/select with a missing value mapping.
+    """
     issues = []
     warnings = []
 
@@ -255,11 +265,28 @@ def _validate_payload(product, resolver, ext_cat_id, attr_specs,
 
         has_params = any(a.get("external_attribute_id")
                         for a in (transformed.get("attributes") or []))
+        # Rozetka API rejects items with empty params even when no individual
+        # characteristic is mandatory.  Block here to avoid wasted round-trips.
         if not has_params:
             issues.append({"code": ROZETKA_PARAMS_EMPTY, "severity": SEVERITY_ERROR,
-                           "message": "No mapped attributes - Rozetka requires at least one param"})
+                           "message": "No mapped attributes — Rozetka API rejects "
+                                      "items with empty params"})
 
-        build_create_payload(transformed, attr_specs)
+        # Producer validation: Rozetka requires a non-empty producer in every
+        # payload.  The payload builder (build_create_payload) always sets
+        # producer with "Без бренду" fallback, but this guard catches any
+        # edge case where producer might be missing.
+        payload, _ = build_create_payload(transformed, attr_specs)
+        producer = payload.get("producer")
+        if not producer:
+            issues.append({"code": ROZETKA_BRAND_REQUIRED, "severity": SEVERITY_ERROR,
+                           "message": "Producer (brand) is required — payload has no producer"})
+        else:
+            title = (producer.get("title") or "").strip()
+            if not title:
+                issues.append({"code": ROZETKA_BRAND_REQUIRED, "severity": SEVERITY_ERROR,
+                               "message": "Producer title is required — "
+                                          "producer.title is empty"})
         return len(issues) == 0, issues, warnings
 
     except PayloadBuildError as exc:

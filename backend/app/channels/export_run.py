@@ -153,6 +153,10 @@ def compute_listing_hashes(resolver, product: dict, transformed: dict,
     flipping in_stock → out_of_stock (or back) changes the hash even when
     stock_qty stays 0 — this drives the Rozetka stock_quantity update
     (10 → 0 → 10) on subsequent exports.
+
+    The resolved ``producer_id`` from ``transformed`` is folded into the
+    content hash so that a brand change (or a producer-resolver change)
+    triggers a content update in Rozetka.
     """
     from app.channels.validation import (
         _get_external_category_id,
@@ -162,6 +166,13 @@ def compute_listing_hashes(resolver, product: dict, transformed: dict,
     ext_cat_id = _get_external_category_id(resolver, product)
     content_hash = compute_content_hash(product, resolver, ext_cat_id,
                                         public_base_url)
+    # Fold the resolved producer ID into the hash so that producer changes
+    # (including the fix from id=0 to a real ID) trigger a content update.
+    producer_id = transformed.get("producer_id", 0)
+    producer_id_str = str(producer_id) if producer_id else ""
+    content_hash = hashlib.sha256(
+        (content_hash + producer_id_str).encode("utf-8")
+    ).hexdigest()
     commercial_raw = json.dumps({
         "price": transformed.get("export_price"),
         "stock_qty": transformed.get("stock_qty"),
@@ -362,20 +373,24 @@ def _load_attr_specs(cur, channel_id: int, ext_cat_id,
     return specs
 
 
-def build_payload_create(transformed: dict, attr_specs: dict) -> dict:
+def build_payload_create(transformed: dict, attr_specs: dict,
+                         producer_id: int = 0) -> dict:
     """Wrapper around rozetka.payload.build_create_payload."""
     from app.channels.rozetka.payload import build_create_payload
-    payload, _warnings = build_create_payload(transformed, attr_specs)
+    payload, _warnings = build_create_payload(transformed, attr_specs,
+                                              producer_id=producer_id)
     return payload
 
 
 def build_payload_update(refs: dict, transformed: dict, attr_specs: dict,
-                         include_category: bool = False) -> dict:
+                         include_category: bool = False,
+                         producer_id: int = 0) -> dict:
     """One item for PUT /items-create/mass-update-basic-data."""
     from app.channels.rozetka.payload import build_basic_data_item
     item, _warnings = build_basic_data_item(
         {"item_id": refs.get("item_id"), "rz_item_id": refs.get("rz_item_id")},
-        transformed, attr_specs, include_category=include_category)
+        transformed, attr_specs, include_category=include_category,
+        producer_id=producer_id)
     return item
 
 
@@ -440,6 +455,42 @@ def _process_product(ctx: dict, product_id: int) -> dict:
                                            ext_cat_id, ctx["public_base_url"])
     apply_settings(transformed, ctx["settings"])
 
+    # ── Resolve producer ID (Rozetka producer dictionary) ─────────────────
+    # Look up the producer ID for the product's brand.  The resolved ID is
+    # stored in transformed["producer_id"] so that:
+    #   a) the content hash includes it → brand changes trigger updates;
+    #   b) _push_product_ops can use it directly.
+    # The producer_map cache avoids repeated API calls in the same run.
+    from app.channels.rozetka.payload import (
+        ROZETKA_NO_BRAND_PRODUCER_ID,
+        ROZETKA_NO_BRAND_PRODUCER_TITLE,
+    )
+    adapter: RozetkaAdapter = ctx["adapter"]
+    brand_name = (transformed.get("brand") or "").strip()
+    if not brand_name:
+        brand_name = ROZETKA_NO_BRAND_PRODUCER_TITLE
+        producer_id = ROZETKA_NO_BRAND_PRODUCER_ID
+    else:
+        producer_map = ctx.get("_producer_map", {})
+        if brand_name in producer_map:
+            producer_id = producer_map[brand_name]
+        else:
+            producer_id = 0
+            try:
+                found = adapter._client.search_producers(title=brand_name)
+                if found:
+                    pid = found[0].get("id")
+                    if pid:
+                        producer_id = int(pid)
+                        if "_producer_map" not in ctx:
+                            ctx["_producer_map"] = {}
+                        ctx["_producer_map"][brand_name] = producer_id
+            except Exception as exc:
+                logger.info("Producer lookup failed for '%s': %s",
+                            brand_name, exc)
+    transformed["producer_id"] = producer_id
+    transformed["producer_title"] = brand_name
+
     # Apply Rozetka commission pricing — adjusts the export price upward
     # so that after Rozetka deducts its commission, the seller receives
     # the intended net price.  The commission is category-dependent and
@@ -466,6 +517,28 @@ def _process_product(ctx: dict, product_id: int) -> dict:
             and listing["commercial_hash"] == commercial_hash
             and bool(listing["content_hash"])
             and bool(listing.get("external_id"))):
+        # ── Re-resolve rz_item_id if external_id is still an item_id ──
+        # After CREATE, Rozetka may not have assigned an rz_item_id yet.
+        # Once moderation finishes, rz_item_id becomes available.  If we
+        # only have item_id, try to discover rz_item_id here so that
+        # subsequent stock/price updates can use the correct reference.
+        # This is non-fatal: on failure we keep the existing state.
+        try:
+            refs = ctx["adapter"].resolve_external_ref(
+                {"external_id": listing.get("external_id")})
+            if refs and refs.get("rz_item_id"):
+                new_rz = str(refs["rz_item_id"])
+                if new_rz != listing.get("external_id"):
+                    finish_listing_ok(ctx["cur"], listing, new_rz,
+                                      content_hash, commercial_hash, None)
+                    store_validation_issues(ctx["cur"], listing["id"], [])
+                    return {"product_id": product_id, "sku": sku,
+                            "status": "unchanged",
+                            "operation": "none",
+                            "rz_item_id_updated": True}
+        except Exception as exc:
+            logger.info("rz_item_id re-resolution failed for product %s: %s",
+                        product_id, exc)
         finish_listing_ok(ctx["cur"], listing, listing.get("external_id"),
                           content_hash, commercial_hash, None)
         store_validation_issues(ctx["cur"], listing["id"], [])
@@ -519,6 +592,40 @@ def _resolve_and_push(ctx: dict, listing: dict, product_id: int, sku: str,
                              stock_qty, sku, result)
 
 
+def _build_empty_params_reason(result: dict, transformed: dict,
+                                operation: str) -> str:
+    """Build a detailed error message explaining why `params` is empty.
+
+    Analyses transformed attributes to identify the root cause:
+    - Attributes with no accepted mapping at all
+    - Mapped attributes missing value mapping (for select/list types)
+    - No internal attributes on product
+    """
+    ext_cat_id = (transformed.get("category") or {}).get("external_id", "?")
+    internal_attrs = transformed.get("attributes", [])
+    mapped_attrs = [
+        a for a in internal_attrs if a.get("external_attribute_id")
+    ]
+    reasons = []
+
+    if not internal_attrs:
+        reasons.append("товар не має внутрішніх атрибутів")
+    else:
+        # Attributes with accepted mapping but missing value mapping
+        for attr in mapped_attrs:
+            if not attr.get("external_value_id"):
+                name = (attr.get("external_attribute_name")
+                        or str(attr.get("external_attribute_id", "?")))
+                reasons.append(f"'{name}' без відповідності значення")
+        # Attributes without any accepted mapping
+        unmapped_count = len(internal_attrs) - len(mapped_attrs)
+        if unmapped_count > 0:
+            reasons.append(f"{unmapped_count} атрибут(ів) без відповідності")
+
+    if not reasons:
+        reasons.append("невідома причина")
+    return (f"Категорія Rozetka ({ext_cat_id}) вимагає характеристики, але "
+            f"товар має порожні params. Причини: {'; '.join(reasons)}")
 def _push_product_ops(ctx: dict, adapter: RozetkaAdapter, operation: str,
                       transformed: dict, attr_specs: dict, refs: dict,
                       adopted: bool, listing: dict, content_hash: str,
@@ -531,35 +638,73 @@ def _push_product_ops(ctx: dict, adapter: RozetkaAdapter, operation: str,
     remote_status = None
     external_id = ""
 
-    # ── HARD GUARD: Block products with empty params ─────────────────────────
-    # This guard runs AFTER payload building and BEFORE any HTTP request.
-    # It is the final safety net that prevents params=[] from reaching Rozetka.
+    # ── Resolve the producer ID from transformed (resolved in _process_product) ──
+    # The producer ID was already looked up in _process_product and stored in
+    # transformed["producer_id"] / transformed["producer_title"].
+    producer_title = transformed.get("producer_title", "").strip()
+    producer_id = int(transformed.get("producer_id", 0) or 0)
+
+    # ── Pre-API guard: Real producer ID required for UPDATE ─────────────
+    # For UPDATE (mass-update-basic-data), `id: 0` is silently ignored by
+    # Rozetka — the producer field is not updated.  If we can't resolve a
+    # real producer ID and this is an UPDATE, block the product with a
+    # clear error.  CREATE accepts `id: 0` (Rozetka creates on the fly).
+    if operation != "create" and producer_id == 0:
+        reason = f"Producer '{producer_title}' not found in Rozetka dictionary"
+        store_validation_issues(ctx["cur"], listing["id"], [{
+            "code": "PRODUCER_NOT_FOUND",
+            "severity": "error",
+            "message": f"Не знайдено виробника '{producer_title}' у словнику "
+                       f"Rozetka — оновлення producer неможливе з id=0",
+            "details": {"operation": operation, "producer_title": producer_title},
+        }])
+        finish_listing_error(ctx["cur"], listing["id"], "validation", reason)
+        return {"product_id": result["product_id"], "sku": sku,
+                "status": "skipped", "reason": reason, "operation": operation}
+
+    # ── Payload building ─────────────────────────────────────────────────────
+    # The payload ALWAYS carries the `params` field (possibly `[]`); both
+    # builders below guarantee that contract.
     # ─────────────────────────────────────────────────────────────────────────
     if operation == "create":
-        payload = build_payload_create(transformed, attr_specs)
+        payload = build_payload_create(transformed, attr_specs,
+                                       producer_id=producer_id)
     else:
         include_category = refs.get("rz_item_id") is None
-        payload = build_payload_update(refs, transformed, attr_specs, include_category)
+        payload = build_payload_update(refs, transformed, attr_specs,
+                                       include_category,
+                                       producer_id=producer_id)
 
+    # ── Pre-API guard: Producer (brand) must be present and non-empty ──────
+    producer = payload.get("producer") if isinstance(payload, dict) else None
+    if not producer or not (producer.get("title") or "").strip():
+        store_validation_issues(ctx["cur"], listing["id"], [{
+            "code": "PRODUCER_MISSING",
+            "severity": "error",
+            "message": "Producer (brand) is required for Rozetka export — "
+                       "товар не має виробника",
+            "details": {"operation": operation},
+        }])
+        finish_listing_error(ctx["cur"], listing["id"], "validation",
+                            "PRODUCER_MISSING")
+        return {"product_id": result["product_id"], "sku": sku,
+                "status": "skipped",
+                "reason": "PRODUCER_MISSING: producer required",
+                "operation": operation}
+
+    # ── Pre-API guard: Empty params MUST NOT reach Rozetka API ──────────────
     if not payload.get("params"):
-        ext_cat_id = (transformed.get("category") or {}).get("external_id")
-        logger.warning(
-            "EMPTY_PARAMS hard guard triggered: product_id=%s sku=%s "
-            "category=%s operation=%s — skipping API request",
-            result["product_id"], sku, ext_cat_id, operation)
         store_validation_issues(ctx["cur"], listing["id"], [{
             "code": "EMPTY_PARAMS",
             "severity": "error",
-            "message": "Для товару не формується жодного Rozetka параметра (params). "
-                       "Товар пропущено.",
-            "details": {"external_category_id": ext_cat_id,
-                        "operation": operation},
+            "message": _build_empty_params_reason(result, transformed, operation),
+            "details": {"operation": operation},
         }])
         finish_listing_error(ctx["cur"], listing["id"], "validation",
-                            "EMPTY_PARAMS: товар має порожні params")
+                            f"EMPTY_PARAMS: params=[]")
         return {"product_id": result["product_id"], "sku": sku,
                 "status": "skipped",
-                "reason": "EMPTY_PARAMS: товар має порожні params",
+                "reason": "EMPTY_PARAMS: params=[]",
                 "operation": operation}
 
     try:
@@ -581,7 +726,7 @@ def _push_product_ops(ctx: dict, adapter: RozetkaAdapter, operation: str,
             external_id = str(rz_item_id) if rz_item_id else str(item_id)
             created_now = True
         else:
-            # payload already built above in the hard guard section
+            # payload already built above
             pushed = adapter.push_product({
                 "operation": "update", "sku": sku, "payload": payload,
                 "external_ref": {
@@ -741,7 +886,17 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
                 _log("WARNING", "Отримано запит на скасування — зупиняємо")
                 final_status = "CANCELLED"
                 break
-            result_row = _process_product(ctx, product_id)
+            try:
+                result_row = _process_product(ctx, product_id)
+            except Exception as exc:
+                logger.warning(
+                    "Per-product exception: product_id=%s error=%s",
+                    product_id, exc)
+                result_row = {
+                    "product_id": product_id, "sku": "",
+                    "status": "skipped",
+                    "reason": f"Unexpected error: {exc}",
+                }
             progress["processed"] += 1
             status = result_row.get("status")
             op_word = apply_product_result(progress, status)

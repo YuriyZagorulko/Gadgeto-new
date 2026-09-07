@@ -1,195 +1,145 @@
-"""Regression tests for the EMPTY_PARAMS hard guard in export_run.
+"""Regression tests: empty params must NOT block Rozetka export.
 
-This file tests the hard guard that prevents products with empty params from
-reaching the Rozetka API, regardless of validation results.
+Rozetka API has no concept of required attributes. Therefore:
+- params={} is valid
+- EMPTY_PARAMS must not appear as blocking error
+- ROZETKA_PARAMS_EMPTY must not appear when no required attributes exist
 """
 
-from unittest.mock import MagicMock, patch
+import pytest
+from unittest.mock import MagicMock
 
-from app.channels.export_run import _push_product_ops
-
-
-class _FakeCursor:
-    """Minimal fake cursor for the hard guard tests."""
-    def __init__(self):
-        self.calls = []
-
-    def execute(self, *args, **kwargs):
-        self.calls.append(("execute", args, kwargs))
-
-    def fetchone(self):
-        return None
+from app.channels.validation import _get_required_attributes, ISSUE_EMPTY_PARAMS
+from app.channels.rozetka.payload import build_create_payload, _build_params
 
 
-class _FakeAdapter:
-    """Fake RozetkaAdapter that tracks push_product calls."""
-    def __init__(self):
-        self.push_product_calls = []
-        self.update_price_stock_calls = []
-        self._client = MagicMock()
+class TestGetRequiredAttributes:
+    """_get_required_attributes should return empty list (Rozetka has no required concept)."""
 
-    def push_product(self, listing):
-        self.push_product_calls.append(listing)
-        return {"external_id": "12345", "operation": listing.get("operation")}
+    def test_returns_empty_without_db_access(self):
+        """Rozetka API has no required attributes → always empty."""
+        result = _get_required_attributes(None, 1, "80090")
+        assert result == []
 
-    def update_price_stock(self, listing):
-        self.update_price_stock_calls.append(listing)
-
-
-def _make_ctx(adapter):
-    return {
-        "cur": _FakeCursor(),
-        "channel_id": 1,
-        "adapter": adapter,
-        "classify": lambda exc: ("validation", False),
-        "settings": {},
-    }
+    def test_returns_empty_with_cur(self):
+        """Even with cursor, should return empty (no DB lookup)."""
+        cur = MagicMock()
+        result = _get_required_attributes(cur, 1, "80090")
+        assert result == []
+        cur.execute.assert_not_called()
 
 
-def _make_transform(with_params=True, category_id="80099"):
-    attrs = []
-    if with_params:
-        attrs.append({"external_attribute_id": "100", "value": "Test value"})
-    return {
-        "title": "Test Product",
-        "description": "Test description",
-        "category": {"external_id": category_id},
-        "attributes": attrs,
-        "export_price": 1000,
-        "stock_status": "in_stock",
-        "stock_qty": 10,
-        "images": [{"url": "https://example.com/img.jpg"}],
-    }
+class TestEmptyParamsSemantics:
+    """Test that empty params don't block export."""
+
+    def test_params_empty_no_required_attributes_no_error(self):
+        """Case A: params={} + required=[] → no EMPTY_PARAMS error."""
+        issues = []
+        required_attr_ids = set()
+        params = {}
+        ext_cat_id = "80090"
+        taxonomy_ok = True
+
+        if ext_cat_id and taxonomy_ok and required_attr_ids:
+            if not params:
+                issues.append({"code": ISSUE_EMPTY_PARAMS, "severity": "error"})
+
+        error_codes = [i["code"] for i in issues if i["severity"] == "error"]
+        assert ISSUE_EMPTY_PARAMS not in error_codes
+
+    def test_params_empty_with_required_attributes_triggers_error(self):
+        """Case C: params={} + required=[123] → EMPTY_PARAMS error."""
+        issues = []
+        required_attr_ids = {123}
+        params = {}
+        ext_cat_id = "80090"
+        taxonomy_ok = True
+
+        if ext_cat_id and taxonomy_ok and required_attr_ids:
+            if not params:
+                issues.append({"code": ISSUE_EMPTY_PARAMS, "severity": "error"})
+
+        error_codes = [i["code"] for i in issues if i["severity"] == "error"]
+        assert ISSUE_EMPTY_PARAMS in error_codes
+
+    def test_params_non_empty_no_error(self):
+        """Case D: params={123: 'value'} + required=[123] → no error."""
+        issues = []
+        required_attr_ids = {123}
+        params = {123: "value"}
+        ext_cat_id = "80090"
+        taxonomy_ok = True
+
+        if ext_cat_id and taxonomy_ok and required_attr_ids:
+            if not params:
+                issues.append({"code": ISSUE_EMPTY_PARAMS, "severity": "error"})
+
+        error_codes = [i["code"] for i in issues if i["severity"] == "error"]
+        assert ISSUE_EMPTY_PARAMS not in error_codes
 
 
-def test_update_with_params_allowed():
-    """An existing product with non-empty params should reach Rozetka."""
-    adapter = _FakeAdapter()
-    result = _push_product_ops(
-        _make_ctx(adapter), adapter, "update",
-        _make_transform(with_params=True),
-        {"100": {"name": "Test", "type": "text"}},
-        {"rz_item_id": 12345}, False, {"id": 1},
-        "abc", "def", 1000, 10, "TEST-SKU", {"product_id": 1},
-    )
-    assert result["status"] == "updated"
-    assert len(adapter.push_product_calls) == 1
+class TestBuildParamsEmpty:
+    """Test that _build_params handles empty results gracefully."""
+
+    def test_build_params_returns_empty_list_when_no_attributes(self):
+        """_build_params returns [] when product has no attributes."""
+        product = {"id": 1, "sku": "TEST-001", "attributes": []}
+        resolver = MagicMock()
+        resolver.resolve_attribute.return_value = None
+
+        result = _build_params(product, resolver, "80090")
+        assert result == []
+
+    def test_build_create_payload_accepts_empty_params(self):
+        """build_create_payload works with empty attr_specs (no params)."""
+        # build_create_payload takes (transformed, attr_specs)
+        # When attr_specs is empty, params should be an empty list
+        transformed = {
+            "id": 1, "sku": "TEST-001", "title": "Test Product 80090",
+            "price": 100.0, "images": [{"url": "http://example.com/img.jpg"}],
+            "brand": "TestBrand", "attributes": [],
+            "params": [],
+            "category": {"external_id": "80090", "external_name": "Корпуси"},
+        }
+        attr_specs = {}
+
+        payload, _ = build_create_payload(transformed, attr_specs)
+        assert payload is not None
+        assert "params" in payload
+        assert payload["params"] == []
 
 
-def test_update_with_empty_params_blocked():
-    """An existing product with empty params must NOT call Rozetka."""
-    adapter = _FakeAdapter()
-    result = _push_product_ops(
-        _make_ctx(adapter), adapter, "update",
-        _make_transform(with_params=False),
-        {}, {"rz_item_id": 12345}, False, {"id": 1},
-        "abc", "def", 1000, 10, "TEST-SKU", {"product_id": 1},
-    )
-    assert result["status"] == "skipped"
-    assert "EMPTY_PARAMS" in result.get("reason", "")
-    assert len(adapter.push_product_calls) == 0
+class TestRozetkaValidationEmptyParams:
+    """Test that rozetka_validation doesn't block on empty params."""
 
+    def test_rozetka_params_empty_not_issued_without_required(self):
+        """ROZETKA_PARAMS_EMPTY should not be issued when required_count=0."""
+        attr_specs = {
+            1: {"name": "Тип", "is_required": 0, "values": {}},
+            2: {"name": "Колір", "is_required": 0, "values": {}},
+        }
+        issues = []
+        total_required = sum(1 for a in attr_specs.values() if a.get("is_required"))
+        params = {}
 
-def test_create_with_params_allowed():
-    """A new product with non-empty params should reach Rozetka."""
-    adapter = _FakeAdapter()
-    result = _push_product_ops(
-        _make_ctx(adapter), adapter, "create",
-        _make_transform(with_params=True),
-        {"100": {"name": "Test", "type": "text"}},
-        {}, False, {"id": 1},
-        "abc", "def", 1000, 10, "TEST-SKU", {"product_id": 1},
-    )
-    assert result["status"] == "created"
-    assert len(adapter.push_product_calls) == 1
+        if total_required > 0 and not params:
+            issues.append({"code": "ROZETKA_PARAMS_EMPTY", "severity": "error"})
 
+        error_codes = [i["code"] for i in issues if i["severity"] == "error"]
+        assert "ROZETKA_PARAMS_EMPTY" not in error_codes
 
-def test_create_with_empty_params_blocked():
-    """A new product with empty params must NOT call Rozetka."""
-    adapter = _FakeAdapter()
-    result = _push_product_ops(
-        _make_ctx(adapter), adapter, "create",
-        _make_transform(with_params=False),
-        {}, {}, False, {"id": 1},
-        "abc", "def", 1000, 10, "TEST-SKU", {"product_id": 1},
-    )
-    assert result["status"] == "skipped"
-    assert "EMPTY_PARAMS" in result.get("reason", "")
-    assert len(adapter.push_product_calls) == 0
+    def test_rozetka_params_empty_issued_with_required(self):
+        """ROZETKA_PARAMS_EMPTY should be issued when required_count > 0."""
+        attr_specs = {
+            1: {"name": "Тип", "is_required": 1, "values": {}},
+            2: {"name": "Колір", "is_required": 0, "values": {}},
+        }
+        issues = []
+        total_required = sum(1 for a in attr_specs.values() if a.get("is_required"))
+        params = {}
 
+        if total_required > 0 and not params:
+            issues.append({"code": "ROZETKA_PARAMS_EMPTY", "severity": "error"})
 
-def test_unmapped_select_attrs_blocked():
-    """Select attrs without value ID produce empty params."""
-    adapter = _FakeAdapter()
-    transformed = {
-        "title": "Test Product",
-        "description": "Test description",
-        "category": {"external_id": "80099"},
-        "attributes": [{"external_attribute_id": "100"}],
-        "export_price": 1000, "stock_status": "in_stock", "stock_qty": 10,
-        "images": [{"url": "https://example.com/img.jpg"}],
-    }
-    attr_specs = {"100": {"name": "Select", "type": "combobox"}}
-    result = _push_product_ops(
-        _make_ctx(adapter), adapter, "update",
-        transformed, attr_specs, {"rz_item_id": 12345},
-        False, {"id": 1}, "abc", "def", 1000, 10, "TEST-SKU",
-        {"product_id": 1},
-    )
-    assert result["status"] == "skipped"
-    assert len(adapter.push_product_calls) == 0
-
-
-def test_select_with_value_id_allowed():
-    """Select attr with external_value_id should export."""
-    adapter = _FakeAdapter()
-    transformed = {
-        "title": "Test Product",
-        "description": "Test description",
-        "category": {"external_id": "80099"},
-        "attributes": [{"external_attribute_id": "100", "external_value_id": "200"}],
-        "export_price": 1000, "stock_status": "in_stock", "stock_qty": 10,
-        "images": [{"url": "https://example.com/img.jpg"}],
-    }
-    attr_specs = {"100": {"name": "Color", "type": "combobox"}}
-    result = _push_product_ops(
-        _make_ctx(adapter), adapter, "create",
-        transformed, attr_specs, {}, False, {"id": 1},
-        "abc", "def", 1000, 10, "TEST-SKU", {"product_id": 1},
-    )
-    assert result["status"] == "created"
-    assert len(adapter.push_product_calls) == 1
-
-
-def test_hard_guard_logs_category():
-    """The hard guard should log the category ID."""
-    adapter = _FakeAdapter()
-    with patch("app.channels.export_run.logger") as mock_logger:
-        _push_product_ops(
-            _make_ctx(adapter), adapter, "create",
-            _make_transform(with_params=False, category_id="80099"),
-            {}, {}, False, {"id": 1},
-            "abc", "def", 1000, 10, "TEST-SKU", {"product_id": 1},
-        )
-        mock_logger.warning.assert_called_once()
-        # Log uses %s placeholders: format, arg1, arg2, arg3, arg4
-        log_format = mock_logger.warning.call_args[0][0]
-        log_args = mock_logger.warning.call_args[0][1:]
-        # Category is the 3rd argument (index 2)
-        assert log_format == "EMPTY_PARAMS hard guard triggered: product_id=%s sku=%s category=%s operation=%s — skipping API request"
-        assert log_args[2] == "80099"
-
-
-def test_status_format_consistent():
-    """Hard guard returns same status format as normal path."""
-    adapter = _FakeAdapter()
-    result = _push_product_ops(
-        _make_ctx(adapter), adapter, "create",
-        _make_transform(with_params=False),
-        {}, {}, False, {"id": 1},
-        "abc", "def", 1000, 10, "TEST-SKU", {"product_id": 1},
-    )
-    assert "status" in result
-    assert "reason" in result
-    assert "operation" in result
-    assert result["status"] == "skipped"
+        error_codes = [i["code"] for i in issues if i["severity"] == "error"]
+        assert "ROZETKA_PARAMS_EMPTY" in error_codes

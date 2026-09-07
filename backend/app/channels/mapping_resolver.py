@@ -1,3 +1,18 @@
+# NOTE: Brand → Rozetka semantics
+# ---------------------------------
+# Rozetka does NOT have a "Brand" characteristic in its category taxonomy.
+# Brand is passed via the `producer` field in the main payload body
+# ({"id": 0, "title": brand_name}), NOT through `params`.
+#
+# The historical mapping of internal attribute 353 (Бренд) → 87790
+# is semantically incorrect: 87790 = "Країна реєстрації бренду"
+# (Country of brand registration), NOT "Brand".  This mapping has been
+# rejected (status='rejected').
+#
+# Products whose ONLY internal attribute is "Бренд" (353) will produce
+# params=[] and cannot be exported to Rozetka.  They require additional
+# category-specific characteristics to populate params.
+#
 """Channel mapping resolver — Internal → External Channel.
 
 This resolver is the counterpart of the supplier-importer MappingResolver but
