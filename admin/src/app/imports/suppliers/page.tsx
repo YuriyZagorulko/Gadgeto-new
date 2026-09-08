@@ -31,6 +31,7 @@ type ImportProgress = {
 const FIXED_SUPPLIERS = [
   { code: 'itlink', name: 'IT-Link' },
   { code: 'dclink', name: 'DC-Link' },
+  { code: 'brain', name: 'BRAIN' },
 ] as const;
 
 const TYPE_LABELS: Record<string, string> = { full: 'Повний', prices: 'Ціни', stock: 'Залишки' };

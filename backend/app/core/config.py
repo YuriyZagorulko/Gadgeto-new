@@ -78,6 +78,19 @@ class Settings(BaseSettings):
     SUPPLIER_DCLINK_LOGIN: str = Field(default="")
     SUPPLIER_DCLINK_PASSWORD: str = Field(default="")
 
+    # BRAIN (brain.com.ua) supplier API. The password is MD5-hashed by the
+    # client before sending; it is never logged or exposed.
+    SUPPLIER_BRAIN_LOGIN: str = Field(default="")
+    SUPPLIER_BRAIN_PASSWORD: str = Field(default="")
+    # Legacy variable names already present in some deployments' .env —
+    # supported as read-only fallbacks by app.imports.brain.
+    BRAIN_LOGIN: str = Field(default="")
+    BRAIN_PASSWORD: str = Field(default="")
+    BRAIN_API_URL: str = Field(default="https://api.brain.com.ua")
+    # Products per /products page: 100 for regular accounts, up to 1000
+    # for OWN_MODE accounts (the client lowers it automatically on error 20).
+    BRAIN_PAGE_LIMIT: int = Field(default=100, ge=1, le=1000)
+
     # Rozetka Marketplace API
     ROZETKA_API_URL: str = Field(default="https://api-seller.rozetka.com.ua")
     ROZETKA_SELLER_USERNAME: str = Field(default="")

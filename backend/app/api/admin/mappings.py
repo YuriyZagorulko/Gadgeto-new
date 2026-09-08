@@ -1572,7 +1572,7 @@ def create_mapping(kind: str, body: MappingCreate, user: dict = Depends(require_
             if code is not None:
                 if code not in SYSTEM_SUPPLIERS:
                     raise HTTPException(status_code=400,
-                                        detail="Невірний постачальник. Доступні: IT-Link, DC-Link")
+                                        detail="Невірний постачальник. Доступні: IT-Link, DC-Link, BRAIN")
                 cur.execute("SELECT id FROM suppliers WHERE code = %s", (code,))
                 srow = cur.fetchone()
                 if not srow:

@@ -9,10 +9,12 @@ idempotent seed migration (012_system_suppliers).
 
 from app.imports.itlink import ITLinkImporter
 from app.imports.dclink import DCLinkImporter
+from app.imports.brain import BrainImporter
 
 SUPPLIERS: dict[str, dict] = {
     "itlink": {"name": "IT-Link", "importer": ITLinkImporter},
     "dclink": {"name": "DC-Link", "importer": DCLinkImporter},
+    "brain": {"name": "BRAIN", "importer": BrainImporter},
 }
 
 
