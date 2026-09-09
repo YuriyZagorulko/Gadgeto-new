@@ -31,12 +31,18 @@ ATTR_UNKNOWN_VALUE = "UNKNOWN_VALUE"
 
 
 def process_attribute(supplier_name: str, supplier_value: str,
-                      category_id: int | None = None):
+                      category_id: int | None = None,
+                      supplier_attr_external_id: str | None = None,
+                      supplier_value_external_id: str | None = None):
     """
     Process a supplier attribute through the mapping pipeline.
 
     When category_id is provided, category-specific mappings take
     precedence over global mappings.
+
+    When supplier_attr_external_id / supplier_value_external_id are provided
+    (Brain / DC-Link feed IDs), the DB-backed resolver resolves by external ID
+    first and does NOT fall back to names for ID-capable suppliers.
 
     Returns:
         (mapped_name, mapped_value)  — successful mapping
@@ -48,8 +54,12 @@ def process_attribute(supplier_name: str, supplier_value: str,
     supplier_value = str(supplier_value).strip()
 
     if _db_resolver is not None:
-        return _db_resolver.process_attribute(supplier_name, supplier_value,
-                                              category_id=category_id)
+        return _db_resolver.process_attribute(
+            supplier_name, supplier_value,
+            category_id=category_id,
+            supplier_attr_external_id=supplier_attr_external_id,
+            supplier_value_external_id=supplier_value_external_id,
+        )
 
     if not supplier_name or not supplier_value:
         return ATTR_SKIP

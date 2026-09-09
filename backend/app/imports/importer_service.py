@@ -199,7 +199,36 @@ def run_full_import(supplier_code, job_id, supplier_id, import_type="full",
 
         progress("authenticating", 0, 0, 0, 0, 0, 0, "Авторизація...")
         progress("downloading", 0, 0, 0, 0, 0, 0, "Завантаження каталогу...")
-        importer = entry["importer"](category_map=db_category_map)
+        importer_kwargs = {"category_map": db_category_map}
+        importer = entry["importer"](**importer_kwargs)
+
+        # ── Step 1: Synchronize supplier dictionaries ───────────────────────
+        # Download/parse the feed and upsert supplier_categories /
+        # supplier_attributes / supplier_attribute_values with external IDs.
+        # This happens BEFORE the resolver is built so the resolver sees the
+        # current dictionary state.  The downloaded feed is cached on the
+        # importer and reused by run() to avoid a second download.
+        try:
+            sync_method = getattr(importer, "sync_dictionaries", None)
+            if sync_method is not None:
+                dict_stats = sync_method(import_type)
+                progress("downloading", 0, 0, 0, 0, 0, 0,
+                         f"Словники постачальника синхронізовано "
+                         f"(категорії: {dict_stats.get('categories_synced', 0)}, "
+                         f"атрибути: {dict_stats.get('attributes_synced', 0)})")
+        except Exception:
+            # Dictionary sync is best-effort — a failure must not abort imports.
+            pass
+
+        # ── Step 2: Build the resolver AFTER dictionary sync ────────────────
+        resolver = None
+        try:
+            from app.imports.mapping_resolver import MappingResolver as _MappingResolver
+            resolver = _MappingResolver(supplier_code)
+        except Exception:
+            resolver = None
+        if resolver is not None:
+            importer.resolver = resolver
         try:
             stats = importer.run(import_type)
         finally:

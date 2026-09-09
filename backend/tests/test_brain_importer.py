@@ -260,7 +260,9 @@ def test_attribute_mapping_through_resolver(brain, fake_pricing, monkeypatch):
     from app.imports.attribute_processor import set_db_resolver
 
     class StubResolver:
-        def process_attribute(self, name, value, category_id=None):
+        def process_attribute(self, name, value, category_id=None,
+                              supplier_attr_external_id=None,
+                              supplier_value_external_id=None):
             if name == "Діагональ дисплея":
                 return ("Діагональ екрану", value)
             return "UNKNOWN_NAME"

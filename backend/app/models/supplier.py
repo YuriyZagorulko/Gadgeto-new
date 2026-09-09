@@ -29,6 +29,7 @@ class SupplierAttribute(Base):
     __tablename__ = "supplier_attributes"
     # NULL supplier_id => GLOBAL dictionary entry (see SupplierCategory).
     supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
+    external_id = Column(String(255), nullable=True, index=True)
     supplier_name = Column(String(500), nullable=False, index=True)
     is_removed = Column(Boolean, default=False, nullable=False)
     supplier = relationship("Supplier", back_populates="supplier_attributes")
@@ -38,6 +39,7 @@ class SupplierAttribute(Base):
 class SupplierAttributeValue(Base):
     __tablename__ = "supplier_attribute_values"
     supplier_attribute_id = Column(Integer, ForeignKey("supplier_attributes.id"), nullable=False)
+    external_id = Column(String(255), nullable=True, index=True)
     supplier_value = Column(String(500), nullable=False, index=True)
     is_removed = Column(Boolean, default=False, nullable=False)
     supplier_attribute = relationship("SupplierAttribute", back_populates="supplier_attribute_values")

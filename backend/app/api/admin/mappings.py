@@ -21,6 +21,7 @@ class MappingCreate(BaseModel):
     catalog_item_id: Optional[int] = None
     category_id: Optional[int] = None
     is_active: bool = True
+    external_id: Optional[str] = None  # Supplier's stable ID (OptionID/ValueID/categoryId)
 
 
 class MappingUpdate(BaseModel):
@@ -36,7 +37,7 @@ _LIST_SQL = {
         "joins": """JOIN supplier_categories sc ON sc.id = m.supplier_category_id
                     LEFT JOIN suppliers s ON s.id = sc.supplier_id
                     LEFT JOIN categories c ON c.id = m.category_id""",
-        "select_names": "sc.supplier_name AS supplier_item_name, c.name AS catalog_name,\n                         (sc.supplier_id IS NULL) AS is_global",
+        "select_names": "sc.supplier_name AS supplier_item_name, c.name AS catalog_name,\n                         (sc.supplier_id IS NULL) AS is_global, sc.external_id AS supplier_external_id",
         "search": ["sc.supplier_name", "s.code", "c.name"],
         "sort": {
             "id": "m.id", "supplier": "s.name", "supplier_code": "s.code",
@@ -51,7 +52,7 @@ _LIST_SQL = {
                     LEFT JOIN suppliers s ON s.id = sa.supplier_id
                     LEFT JOIN attributes a ON a.id = m.attribute_id
                     LEFT JOIN categories cat ON cat.id = m.category_id""",
-        "select_names": "sa.supplier_name AS supplier_item_name, a.name AS catalog_name,\n                         (sa.supplier_id IS NULL) AS is_global,                         m.category_id, cat.name AS internal_category_name",
+        "select_names": "sa.supplier_name AS supplier_item_name, a.name AS catalog_name,\n                         (sa.supplier_id IS NULL) AS is_global,                         m.category_id, cat.name AS internal_category_name, sa.external_id AS supplier_external_id",
         "search": ["sa.supplier_name", "s.code", "a.name", "cat.name"],
         "sort": {
             "id": "m.id", "supplier": "s.name", "supplier_code": "s.code",
@@ -72,7 +73,8 @@ _LIST_SQL = {
         "select_names": """ha.supplier_name AS holder_name,
                            sav.supplier_value AS supplier_item_name, av.value AS catalog_name,
                            attr.name AS internal_attr_name,
-                           (ha.supplier_id IS NULL) AS is_global""",
+                           (ha.supplier_id IS NULL) AS is_global,
+                           sav.external_id AS supplier_external_id""",
         "search": ["ha.supplier_name", "sav.supplier_value", "av.value", "attr.name", "s.code"],
         "sort": {
             "id": "m.id", "supplier": "s.name", "supplier_code": "s.code",
@@ -1488,9 +1490,22 @@ def list_mappings(
 
 
 def _ensure_supplier_item(cur, kind: str, sid: int, name: str,
-                          parent_name: Optional[str]) -> int:
-    """Find or create the supplier-side dictionary row; returns its id."""
+                          parent_name: Optional[str],
+                          external_id: Optional[str] = None) -> int:
+    """Find or create the supplier-side dictionary row; returns its id.
+
+    When external_id is provided, it is used for lookup before falling
+    back to the name-based lookup.  This ensures that admin-created
+    mappings for ID-capable suppliers include the stable external ID.
+    """
     if kind == "categories":
+        if external_id:
+            cur.execute(
+                "SELECT id FROM supplier_categories WHERE supplier_id IS NOT DISTINCT FROM %s AND external_id=%s",
+                (sid, external_id))
+            row = cur.fetchone()
+            if row:
+                return row["id"]
         cur.execute(
             "SELECT id FROM supplier_categories WHERE supplier_id IS NOT DISTINCT FROM %s AND supplier_name=%s",
             (sid, name))
@@ -1498,12 +1513,19 @@ def _ensure_supplier_item(cur, kind: str, sid: int, name: str,
         if row:
             return row["id"]
         cur.execute(
-            """INSERT INTO supplier_categories (supplier_id, supplier_name, is_removed,
+            """INSERT INTO supplier_categories (supplier_id, external_id, supplier_name, is_removed,
                                                 created_at, updated_at)
-               VALUES (%s, %s, FALSE, NOW(), NOW()) RETURNING id""", (sid, name))
+               VALUES (%s, %s, %s, FALSE, NOW(), NOW()) RETURNING id""", (sid, external_id, name))
         return cur.fetchone()["id"]
 
     if kind == "attributes":
+        if external_id:
+            cur.execute(
+                "SELECT id FROM supplier_attributes WHERE supplier_id IS NOT DISTINCT FROM %s AND external_id=%s",
+                (sid, external_id))
+            row = cur.fetchone()
+            if row:
+                return row["id"]
         cur.execute(
             "SELECT id FROM supplier_attributes WHERE supplier_id IS NOT DISTINCT FROM %s AND supplier_name=%s",
             (sid, name))
@@ -1511,9 +1533,9 @@ def _ensure_supplier_item(cur, kind: str, sid: int, name: str,
         if row:
             return row["id"]
         cur.execute(
-            """INSERT INTO supplier_attributes (supplier_id, supplier_name, is_removed,
+            """INSERT INTO supplier_attributes (supplier_id, external_id, supplier_name, is_removed,
                                                 created_at, updated_at)
-               VALUES (%s, %s, FALSE, NOW(), NOW()) RETURNING id""", (sid, name))
+               VALUES (%s, %s, %s, FALSE, NOW(), NOW()) RETURNING id""", (sid, external_id, name))
         return cur.fetchone()["id"]
 
     # values — a value lives under a holder supplier attribute
@@ -1521,6 +1543,7 @@ def _ensure_supplier_item(cur, kind: str, sid: int, name: str,
     if not parent_name:
         raise HTTPException(status_code=422,
                             detail="Вкажіть атрибут постачальника для значення")
+    # Find or create the parent attribute first
     cur.execute(
         "SELECT id FROM supplier_attributes WHERE supplier_id IS NOT DISTINCT FROM %s AND supplier_name=%s",
         (sid, parent_name))
@@ -1529,10 +1552,21 @@ def _ensure_supplier_item(cur, kind: str, sid: int, name: str,
         parent_id = prow["id"]
     else:
         cur.execute(
-            """INSERT INTO supplier_attributes (supplier_id, supplier_name, is_removed,
+            """INSERT INTO supplier_attributes (supplier_id, external_id, supplier_name, is_removed,
                                                 created_at, updated_at)
-               VALUES (%s, %s, FALSE, NOW(), NOW()) RETURNING id""", (sid, parent_name))
+               VALUES (%s, NULL, %s, FALSE, NOW(), NOW()) RETURNING id""", (sid, parent_name))
         parent_id = cur.fetchone()["id"]
+
+    # Value lookup by external_id first (within parent attribute scope)
+    if external_id:
+        cur.execute(
+            "SELECT id FROM supplier_attribute_values WHERE supplier_attribute_id=%s AND external_id=%s",
+            (parent_id, external_id))
+        vrow = cur.fetchone()
+        if vrow:
+            return vrow["id"]
+
+    # Name-based lookup within parent attribute
     cur.execute(
         """SELECT id FROM supplier_attribute_values
            WHERE supplier_attribute_id=%s AND supplier_value=%s""",
@@ -1541,9 +1575,9 @@ def _ensure_supplier_item(cur, kind: str, sid: int, name: str,
     if vrow:
         return vrow["id"]
     cur.execute(
-        """INSERT INTO supplier_attribute_values (supplier_attribute_id, supplier_value,
+        """INSERT INTO supplier_attribute_values (supplier_attribute_id, external_id, supplier_value,
                                                   is_removed, created_at, updated_at)
-           VALUES (%s, %s, FALSE, NOW(), NOW()) RETURNING id""", (parent_id, name))
+           VALUES (%s, %s, %s, FALSE, NOW(), NOW()) RETURNING id""", (parent_id, external_id, name))
     return cur.fetchone()["id"]
 
 
@@ -1578,7 +1612,8 @@ def create_mapping(kind: str, body: MappingCreate, user: dict = Depends(require_
                 if not srow:
                     raise HTTPException(status_code=404, detail="Постачальника не знайдено")
                 sid = srow["id"]
-            s_item_id = _ensure_supplier_item(cur, kind, sid, name, body.supplier_parent_name)
+            s_item_id = _ensure_supplier_item(cur, kind, sid, name, body.supplier_parent_name,
+                                                 external_id=body.external_id)
 
         # ── resolve / validate the internal target ─────────────────────────
         target = body.catalog_item_id

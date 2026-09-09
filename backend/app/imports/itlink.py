@@ -88,10 +88,12 @@ class ITLinkImporter:
     SKU_PREFIX = "ITL-"
     SUPPLIER_CODE = "itlink"
 
-    def __init__(self, feed_path: str = None, category_map: dict = None):
+    def __init__(self, feed_path: str = None, category_map: dict = None,
+                 resolver=None):
         self.feed_path = feed_path
         self.stats = ImportStats()
         self.category_map = dict(category_map) if category_map else {}
+        self.resolver = resolver
 
     def download_feed(self) -> str:
         """Download the current IT-Link price list via OAuth2."""
@@ -159,9 +161,31 @@ class ITLinkImporter:
             # Unmapped categories are skipped (not failed).
             category_id = offer.findtext("categoryId", "")
             category_name = xml_categories.get(category_id, "")
+            # ID-first: resolver result (wins if present).
+            resolved_path = None
+            _cat_ext_id = str(category_id).strip() if category_id else ""
+            resolver = getattr(self, "resolver", None)
+            if resolver is not None and _cat_ext_id:
+                resolved_path = resolver.resolve_category(external_id=_cat_ext_id)
+            # Name-based fallback (assign category_path first).
             try:
                 category_path = resolve_category_path(category_name, self.category_map)
-                # Look up internal category_id for category-scoped attribute resolution
+            except (ValueError, KeyError):
+                category_path = None
+            if resolved_path:
+                category_path = resolved_path
+            if category_path is None:
+                self.stats.record_unmapped_category(
+                    name=category_name,
+                    supplier_category_id=category_id,
+                    sku=sku,
+                )
+                self.stats.skipped += 1
+                continue
+
+            # Look up internal category_id for category-scoped attribute resolution
+            _internal_cat_id = None
+            try:
                 import psycopg2
                 from app.core.db_connect import DB
                 _conn = psycopg2.connect(DB)
@@ -170,14 +194,8 @@ class ITLinkImporter:
                 _cat_row = _cur.fetchone()
                 _internal_cat_id = _cat_row["id"] if _cat_row else None
                 _conn.close()
-            except (ValueError, KeyError) as e:
-                self.stats.record_unmapped_category(
-                    name=category_name,
-                    supplier_category_id=category_id,
-                    sku=sku,
-                )
-                self.stats.skipped += 1
-                continue
+            except Exception:
+                _internal_cat_id = None
 
             price_uah = self._safe_price(offer.findtext("price", "0") or "0")
             rrp_uah_str = offer.findtext("rrp", "0") or "0"
@@ -250,11 +268,54 @@ class ITLinkImporter:
             )
             yield product
 
+    def sync_dictionaries(self, import_type: str = "full") -> dict:
+        """Download supplier data and synchronize supplier dictionary tables.
+
+        For IT-Link: syncs categories using the supplier's categoryId.
+        Attribute/value IDs are not available from the IT-Link XML feed,
+        so only categories are synchronized.
+
+        The downloaded XML path is cached on ``self._cached_xml_path`` and
+        reused by ``run()`` to avoid a second download.
+
+        Returns:
+            dict with sync stats (categories_synced, attributes_synced, values_synced).
+        """
+        from app.imports.supplier_dict_sync import SupplierDictSync
+        stats = {"categories_synced": 0, "attributes_synced": 0, "values_synced": 0}
+        sync = SupplierDictSync(self.SUPPLIER_CODE)
+
+        try:
+            xml_path = self.feed_path or self.download_feed()
+            self._cached_xml_path = xml_path
+            tree = self.parse_feed(xml_path)
+        except Exception:
+            # Credentials missing or feed unavailable — dict sync is best-effort.
+            self._cached_xml_path = None
+            return stats
+
+        root = tree.getroot()
+        xml_categories = {cat.attrib["id"]: cat.text for cat in root.findall(".//category") if cat.text}
+
+        # ── Categories: every category in the XML feed ──────────────────────
+        for cid, cname in xml_categories.items():
+            if cid and cname:
+                try:
+                    sync.sync_category(external_id=str(cid), name=cname)
+                    stats["categories_synced"] += 1
+                except Exception:
+                    pass
+
+        return stats
+
     def run(self, import_type: str = "full") -> ImportStats:
-        xml_path = self.feed_path or self.download_feed()
+        if hasattr(self, "_cached_xml_path") and self._cached_xml_path:
+            xml_path = self._cached_xml_path
+            self._cached_xml_path = None  # consume once
+        else:
+            xml_path = self.feed_path or self.download_feed()
         tree = self.parse_feed(xml_path)
         # Store the generator — the caller (importer_service) will iterate it
         # product-by-product, so only one NormalizedProduct is in memory at a time.
         self.stats.products = self.parse_offers(tree)
-        return self.stats
         return self.stats

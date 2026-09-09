@@ -118,11 +118,12 @@ class DCLinkImporter:
     SUPPLIER_CODE = "dclink"
 
     def __init__(self, feed_path: str = None, categories_path: str = None,
-                 category_map: dict = None):
+                 category_map: dict = None, resolver=None):
         self.feed_path = feed_path
         self.categories_path = categories_path
         self.stats = ImportStats()
         self.category_map = dict(category_map) if category_map else {}
+        self.resolver = resolver
 
     def _login(self) -> str:
         """Authenticate with DC-Link API and return session ID."""
@@ -373,9 +374,16 @@ class DCLinkImporter:
 
             # Resolve category BEFORE price calculation.
             # Unmapped categories are skipped (not failed).
-            try:
-                category_path = resolve_category_path(category_name, self.category_map, sku=sku)
-            except (ValueError, KeyError) as e:
+            category_path = None
+            resolver = getattr(self, "resolver", None)
+            if resolver is not None and category_id:
+                category_path = resolver.resolve_category(external_id=category_id)
+            if category_path is None:
+                try:
+                    category_path = resolve_category_path(category_name, self.category_map, sku=sku)
+                except (ValueError, KeyError):
+                    pass
+            if category_path is None:
                 self.stats.record_unmapped_category(
                     name=category_name,
                     supplier_category_id=category_id,
@@ -422,17 +430,19 @@ class DCLinkImporter:
             in_stock = _detect_in_stock(stocks)
 
             raw_options = item.get("options") or []
-            raw_attributes = []
+            raw_attrs_with_ids = []
             for opt in raw_options:
                 opt_name = (opt.get("OptionName") or opt.get("name") or "").strip()
                 opt_value = (opt.get("ValueName") or opt.get("value") or "").strip()
+                opt_filter_id = str(opt.get("OptionID") or opt.get("FilterID") or "").strip()
+                opt_value_id = str(opt.get("ValueID") or "").strip()
                 if opt_name and opt_value:
-                    raw_attributes.append((opt_name, opt_value))
-
+                    raw_attrs_with_ids.append((opt_name, opt_value, opt_filter_id, opt_value_id))
+            raw_attributes = [(n, v) for n, v, _, _ in raw_attrs_with_ids]
             raw_attributes = _validate_attributes(raw_attributes, self.stats, sku, "DC-Link")
 
             processed, unknown_names, unknown_values = self._process_attributes(
-                raw_attributes, sku=sku, category_id=_internal_cat_id)
+                raw_attrs_with_ids, sku=sku, category_id=_internal_cat_id)
 
             merged_list = list(merge_attributes(processed).items())
 
@@ -466,9 +476,19 @@ class DCLinkImporter:
     def _process_attributes(self, raw_attrs, sku: str = "",
                               category_id: int | None = None):
         processed = []
-        for attr_name, attr_value in raw_attrs:
-            result = process_attribute(attr_name, attr_value,
-                                      category_id=category_id)
+        for item in raw_attrs:
+            # Support both 4-tuples (name, value, filter_id, value_id) and 2-tuples
+            if isinstance(item, tuple) and len(item) >= 4:
+                attr_name, attr_value, attr_ext_id, val_ext_id = item[:4]
+            else:
+                attr_name, attr_value = item
+                attr_ext_id = val_ext_id = None
+            result = process_attribute(
+                attr_name, attr_value,
+                category_id=category_id,
+                supplier_attr_external_id=attr_ext_id or None,
+                supplier_value_external_id=val_ext_id or None,
+            )
             if isinstance(result, tuple) and len(result) == 2:
                 processed.append(result)
             elif result == ATTR_SKIP:
@@ -479,8 +499,79 @@ class DCLinkImporter:
                 self.stats.record_unknown_attribute_value(attr_name, attr_value, sku=sku)
         return processed, [], []
 
+    def sync_dictionaries(self, import_type: str = "full") -> dict:
+        """Download supplier data and synchronize supplier dictionary tables.
+
+        Called by importer_service BEFORE the MappingResolver is built so that
+        dictionary rows (categories, attributes, attribute values) with their
+        external IDs exist in the database before products are resolved.
+
+        The downloaded feed is cached on ``self._cached_feed`` and reused by
+        ``run()`` to avoid a second full download.
+
+        Returns:
+            dict with sync stats (categories_synced, attributes_synced, values_synced).
+        """
+        from app.imports.supplier_dict_sync import SupplierDictSync
+        stats = {"categories_synced": 0, "attributes_synced": 0, "values_synced": 0}
+        sync = SupplierDictSync(self.SUPPLIER_CODE)
+
+        try:
+            feed, dc_cat_map = self.download_feed()
+            self._cached_feed = (feed, dc_cat_map)
+        except Exception:
+            # Credentials missing or API unreachable — dictionary sync is best-effort.
+            self._cached_feed = None
+            return stats
+
+        # ── Categories: every category in the API response ─────────────────
+        for cid, cname in dc_cat_map.items():
+            if cid and cname:
+                try:
+                    sync.sync_category(external_id=str(cid), name=cname)
+                    stats["categories_synced"] += 1
+                except Exception:
+                    pass
+
+        # ── Attributes + values: extract unique (name, FilterID/OptionID,
+        #    value, ValueID) tuples from the product feed options.  This does
+        #    NOT create mappings — it only populates the source dictionary. ──
+        seen_attrs = set()
+        for item in (feed or []):
+            options = item.get("options") or []
+            for opt in options:
+                opt_name = (opt.get("OptionName") or opt.get("name") or "").strip()
+                opt_value = (opt.get("ValueName") or opt.get("value") or "").strip()
+                opt_filter_id = str(opt.get("OptionID") or opt.get("FilterID") or "").strip()
+                opt_value_id = str(opt.get("ValueID") or "").strip()
+                if not opt_name:
+                    continue
+                attr_key = (opt_filter_id or opt_name)  # dedupe by ID when present
+                if attr_key in seen_attrs:
+                    continue
+                seen_attrs.add(attr_key)
+                sa_id = sync.sync_attribute(
+                    external_id=opt_filter_id or None,
+                    name=opt_name,
+                )
+                if sa_id is not None:
+                    stats["attributes_synced"] += 1
+                if sa_id is not None and opt_value:
+                    sync.sync_value(
+                        supplier_attribute_id=sa_id,
+                        external_id=opt_value_id or None,
+                        value=opt_value,
+                    )
+                    stats["values_synced"] += 1
+
+        return stats
+
     def run(self, import_type: str = "full") -> ImportStats:
-        feed, dc_cat_map = self.download_feed()
+        if hasattr(self, "_cached_feed") and self._cached_feed is not None:
+            feed, dc_cat_map = self._cached_feed
+            self._cached_feed = None  # consume once
+        else:
+            feed, dc_cat_map = self.download_feed()
         # Store the generator — the caller (importer_service) will iterate it
         # product-by-product, so only one NormalizedProduct is in memory at a time.
         self.stats.products = self.parse_products(feed, dc_cat_map)

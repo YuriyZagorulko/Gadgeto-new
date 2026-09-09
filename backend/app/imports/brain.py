@@ -534,12 +534,14 @@ class BrainImporter:
     SUPPLIER_CODE = SUPPLIER_CODE
 
     def __init__(self, feed_path: str = None, categories_path: str = None,
-                 category_map: dict = None, client: Optional[BrainClient] = None):
+                 category_map: dict = None, client: Optional[BrainClient] = None,
+                 resolver=None):
         self.feed_path = feed_path
         self.categories_path = categories_path
         self.stats = ImportStats()
         self.category_map = dict(category_map) if category_map else {}
         self.client = client
+        self.resolver = resolver
         # categoryID -> category name
         self._cat_name_by_id: Dict[int, str] = {}
         # categoryID -> realcat reference (0 for real categories)
@@ -954,12 +956,40 @@ class BrainImporter:
                 pairs.append((name, value))
         return pairs
 
+    @staticmethod
+    def _extract_raw_attributes_with_ids(item: dict) -> List[Tuple[str, str, str, str]]:
+        """Options from the content endpoint as (name, value, option_id, value_id)."""
+        result: List[Tuple[str, str, str, str]] = []
+        options = item.get("options")
+        if not isinstance(options, list):
+            return result
+        for opt in options:
+            if not isinstance(opt, dict):
+                continue
+            name = str(opt.get("OptionName") or opt.get("name") or "").strip()
+            value = str(opt.get("ValueName") or opt.get("value") or "").strip()
+            opt_id = str(opt.get("OptionID") or opt.get("option_id") or "").strip()
+            val_id = str(opt.get("ValueID") or opt.get("value_id") or "").strip()
+            if name and value:
+                result.append((name, value, opt_id, val_id))
+        return result
+
     def _process_attributes(self, raw_attrs, sku: str = "",
                             category_id: Optional[int] = None) -> List[Tuple[str, str]]:
         processed = []
-        for attr_name, attr_value in raw_attrs:
-            result = process_attribute(attr_name, attr_value,
-                                       category_id=category_id)
+        for item in raw_attrs:
+            # Support both 4-tuples (name, value, opt_id, val_id) and 2-tuples (name, value)
+            if isinstance(item, tuple) and len(item) >= 4:
+                attr_name, attr_value, attr_ext_id, val_ext_id = item[:4]
+            else:
+                attr_name, attr_value = item
+                attr_ext_id = val_ext_id = None
+            result = process_attribute(
+                attr_name, attr_value,
+                category_id=category_id,
+                supplier_attr_external_id=attr_ext_id or None,
+                supplier_value_external_id=val_ext_id or None,
+            )
             if isinstance(result, tuple) and len(result) == 2:
                 processed.append(result)
             elif result == ATTR_SKIP:
@@ -1022,9 +1052,20 @@ class BrainImporter:
             raw_cat_int = None
         real_id = self._resolve_real_category(raw_cat_int)
         cat_name = self._cat_name_by_id.get(real_id, "") if real_id is not None else ""
-        try:
-            category_path = resolve_category_path(cat_name, self.category_map, sku=sku)
-        except (ValueError, KeyError):
+
+        # ID-first category resolution: use the resolver if available and it has
+        # ID-based mappings.  Falls back to the name-based category_map during
+        # the transition period (before ID mappings are populated).
+        category_path = None
+        resolver = getattr(self, "resolver", None)
+        if resolver is not None and real_id is not None:
+            category_path = resolver.resolve_category(external_id=str(real_id))
+        if category_path is None:
+            try:
+                category_path = resolve_category_path(cat_name, self.category_map, sku=sku)
+            except (ValueError, KeyError):
+                pass
+        if category_path is None:
             self.stats.record_unmapped_category(
                 name=cat_name,
                 supplier_category_id=str(raw_cat_id) if raw_cat_id is not None else None,
@@ -1041,10 +1082,11 @@ class BrainImporter:
 
         images = self._collect_images(item)
 
-        raw_attributes = self._extract_raw_attributes(item)
+        raw_attrs_all = self._extract_raw_attributes_with_ids(item)
+        raw_attributes = [(n, v) for n, v, _, _ in raw_attrs_all]
         raw_attributes = _validate_attributes(raw_attributes, self.stats, sku, "BRAIN")
         processed_attrs = self._process_attributes(
-            raw_attributes, sku=sku,
+            raw_attrs_all, sku=sku,
             category_id=self._internal_category_id(category_path),
         )
         merged_attrs = merge_attributes(processed_attrs)
@@ -1071,6 +1113,18 @@ class BrainImporter:
             seo_description=seo.get("meta_description", ""),
             focus_keyphrase=seo.get("focus_keyphrase", ""),
         )
+
+    # ------------------------------------------------------------------ sync dictionaries
+    def sync_dictionaries(self, import_type: str = "full") -> dict:
+        """Synchronize supplier dictionary tables.
+
+        BRAIN is OUT OF SCOPE for the current dictionary sync integration.
+        This method is a no-op placeholder for interface compatibility.
+
+        Returns:
+            dict with sync stats (all zeros).
+        """
+        return {"categories_synced": 0, "attributes_synced": 0, "values_synced": 0}
 
     # ------------------------------------------------------------------ run
     def run(self, import_type: str = "full") -> ImportStats:
