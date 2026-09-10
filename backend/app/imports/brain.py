@@ -958,7 +958,12 @@ class BrainImporter:
 
     @staticmethod
     def _extract_raw_attributes_with_ids(item: dict) -> List[Tuple[str, str, str, str]]:
-        """Options from the content endpoint as (name, value, option_id, value_id)."""
+        """Options from the content endpoint as (name, value, option_id, value_id).
+
+        Brain identity per taxonomy V2: OptionID = attribute identity,
+        ValueID = value identity. FilterID is NEVER attribute identity and
+        is deliberately ignored here.
+        """
         result: List[Tuple[str, str, str, str]] = []
         options = item.get("options")
         if not isinstance(options, list):
@@ -1045,6 +1050,9 @@ class BrainImporter:
 
         # Resolve category BEFORE price calculation (established convention).
         # Unmapped categories are skipped, not failed.
+        # V2 precedence: VIRTUAL resolves locally through realcat first;
+        # then ID-first resolver (supplier_id=3 + external_id, never name);
+        # unmapped/EXCLUDE -> record + skip (never silently import).
         raw_cat_id = item.get("categoryID")
         try:
             raw_cat_int = int(raw_cat_id) if raw_cat_id is not None else None
@@ -1059,12 +1067,15 @@ class BrainImporter:
         category_path = None
         resolver = getattr(self, "resolver", None)
         if resolver is not None and real_id is not None:
-            category_path = resolver.resolve_category(external_id=str(real_id))
-        if category_path is None:
+            try:
+                category_path = resolver.resolve_category(external_id=str(real_id))
+            except Exception:
+                category_path = None
+        if category_path is None and cat_name:
             try:
                 category_path = resolve_category_path(cat_name, self.category_map, sku=sku)
             except (ValueError, KeyError):
-                pass
+                category_path = None
         if category_path is None:
             self.stats.record_unmapped_category(
                 name=cat_name,
@@ -1116,15 +1127,58 @@ class BrainImporter:
 
     # ------------------------------------------------------------------ sync dictionaries
     def sync_dictionaries(self, import_type: str = "full") -> dict:
-        """Synchronize supplier dictionary tables.
+        """Synchronize the Brain taxonomy mirror + final mappings (idempotent).
 
-        BRAIN is OUT OF SCOPE for the current dictionary sync integration.
-        This method is a no-op placeholder for interface compatibility.
-
-        Returns:
-            dict with sync stats (all zeros).
+        Downloads the category tree (categoryID/parentID/realcat/name),
+        mirrors it into supplier_categories (supplier_id=3) preserving
+        external_id/parent/realcat, then seeds ONLY the four FINAL approved
+        category mappings (1366->126, 1402->60, 1209/1487->NEW media).
+        Attribute sync uses OptionID=attr / ValueID=value (FilterID ignored).
+        Best-effort: missing credentials/API failure -> zeros, never raises.
         """
-        return {"categories_synced": 0, "attributes_synced": 0, "values_synced": 0}
+        from app.imports import brain_taxonomy as _bt
+        stats = {"categories_synced": 0, "attributes_synced": 0, "values_synced": 0}
+        try:
+            client = self._get_client()
+        except Exception:
+            return stats
+        try:
+            categories = client.get_categories()
+        except Exception:
+            return stats
+        try:
+            import psycopg2
+            import psycopg2.extras
+            from app.core.db_connect import DB as _DB
+            conn = psycopg2.connect(_DB)
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            try:
+                tax = _bt.sync_brain_taxonomy(categories or [], cur)
+                stats["categories_synced"] = int(
+                    tax.get("categories_synced", 0) + tax.get("updated", 0)
+                )
+                _bt.ensure_final_mappings(cur)
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                return {"categories_synced": 0, "attributes_synced": 0, "values_synced": 0}
+            finally:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception:
+            return {"categories_synced": 0, "attributes_synced": 0, "values_synced": 0}
+        # Attribute/value dictionary sync is intentionally out of scope for
+        # the final-4 stage: attributes resolve at import time via OptionID.
+        return stats
 
     # ------------------------------------------------------------------ run
     def run(self, import_type: str = "full") -> ImportStats:
