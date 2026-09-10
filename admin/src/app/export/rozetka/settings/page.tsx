@@ -421,17 +421,24 @@ export default function RozetkaSettingsPage() {
       {tab === 'export' && (
         <div className="bg-white rounded-lg border border-gray-200 p-6">
           <h2 className="text-base font-semibold text-gray-900 mb-4">Налаштування експорту товарів</h2>
+          <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4">
+            <p className="text-xs text-blue-700">
+              <strong>Логіка ціноутворення:</strong> Ціна товару вже містить вашу бізнес-націнку.
+              Якщо для категорії Rozetka є правило комісії — застосовується тільки компенсація комісії.
+              Якщо правила немає — використовується fallback-націнка за замовчуванням.
+            </p>
+          </div>
           <p className="text-xs text-gray-500 mb-6">Ці налаштування застосовуються під час експорту товарів до Rozetka.</p>
           <div className="divide-y divide-gray-100">
-            <SettingRow skey="price_markup_type" label="Тип націнки" hint="Відсоток від ціни або фіксована сума" type="select" />
-            <SettingRow skey="price_markup_value" label="Розмір націнки" hint="15 = 15% або 15 грн" type="number" />
+            <SettingRow skey="price_markup_type" label="Тип fallback-націнки" hint="Використовується тільки якщо немає правила для категорії Rozetka" type="select" />
+            <SettingRow skey="price_markup_value" label="Розмір fallback-націнки" hint="15 = 15% або 15 грн (fallback, якщо немає правила категорії)" type="number" />
             <SettingRow skey="price_rounding" label="Округлення ціни" hint="До найближчого X (0 = без округлення)" type="number" />
           </div>
           <div className="mt-6 pt-4 border-t border-gray-100">
             <h3 className="text-sm font-semibold text-gray-700 mb-2">Поточні значення</h3>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
-              <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Тип націнки</span><div className="font-medium">{settings.price_markup_type === 'fixed' ? 'Фіксована' : 'Відсоток'}</div></div>
-              <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Розмір націнки</span><div className="font-medium">{settings.price_markup_value || '0'}{settings.price_markup_type === 'fixed' ? ' грн' : '%'}</div></div>
+              <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Тип fallback-націнки</span><div className="font-medium">{settings.price_markup_type === 'fixed' ? 'Фіксована' : 'Відсоток'}</div></div>
+              <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Розмір fallback-націнки</span><div className="font-medium">{settings.price_markup_value || '0'}{settings.price_markup_type === 'fixed' ? ' грн' : '%'}</div></div>
               <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Округлення</span><div className="font-medium">{settings.price_rounding ? `до ${settings.price_rounding}` : '—'}</div></div>
             </div>
           </div>

@@ -870,7 +870,7 @@ def export_preview(
     from app.channels.mapping_resolver import ChannelMappingResolver
     from app.channels.export_settings import (
         load_export_settings,
-        apply_export_settings,
+        apply_rozetka_export_settings,
         stock_exclusion_reason,
     )
     from app.services.rozetka_pricing import RozetkaPricingResolver
@@ -920,19 +920,17 @@ def export_preview(
             except Exception:
                 payload = None
 
-            # Apply the SAME export settings/preview as the real export.
+            # Apply the SAME Rozetka-specific pricing as the real export.
+            # products.price already contains the business markup from import.
+            # For Rozetka: use category rule (commission) or fallback markup.
             if payload is not None and export_settings is not None:
-                apply_export_settings(payload, export_settings)
-                # Apply Rozetka commission pricing (same logic as export_run.py)
-                if pricing_resolver.has_rules and ext_cat_id:
-                    brand = None
-                    if product.get("brand") and isinstance(product["brand"], dict):
-                        brand = product["brand"].get("name")
-                    base_kopecks = int(round((payload.get("export_price") or 0) * 100))
-                    commission_kopecks = pricing_resolver.calculate_export_price(
-                        str(ext_cat_id), base_kopecks, brand)
-                    if commission_kopecks is not None:
-                        payload["export_price"] = commission_kopecks / 100.0
+                if ext_cat_id:
+                    payload["external_category_id"] = str(ext_cat_id)
+                brand = None
+                if product.get("brand") and isinstance(product["brand"], dict):
+                    brand = product["brand"].get("name")
+                apply_rozetka_export_settings(
+                    payload, export_settings, pricing_resolver, brand)
                 product["export_price"] = payload.get("export_price")
 
             validation = _validate(pid, channel_code=code,

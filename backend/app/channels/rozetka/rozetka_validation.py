@@ -28,7 +28,7 @@ from app.channels.validation import (
 )
 from app.channels.export_settings import (
     load_export_settings,
-    apply_export_settings,
+    apply_rozetka_export_settings,
 )
 from app.core.db_connect import DB
 
@@ -239,7 +239,8 @@ def _audit_attributes(cur, channel_id, ext_cat_id, resolver, product, issues, at
 
 def _validate_payload(product, resolver, ext_cat_id, attr_specs,
                       public_base_url, export_settings,
-                      required_count: int = 0):
+                      required_count: int = 0,
+                      pricing_resolver=None):
     """Payload-format checks shared with the real export run.
 
     The Rozetka API rejects items with empty params regardless of whether
@@ -254,7 +255,10 @@ def _validate_payload(product, resolver, ext_cat_id, attr_specs,
     try:
         transformed = _build_transform_payload(product, resolver, ext_cat_id, public_base_url)
         if export_settings:
-            apply_export_settings(transformed, export_settings)
+            if ext_cat_id:
+                transformed["external_category_id"] = str(ext_cat_id)
+            apply_rozetka_export_settings(
+                transformed, export_settings, pricing_resolver)
 
         valid_images = [i for i in (transformed.get("images") or [])
                         if not i.get("is_suppressed")

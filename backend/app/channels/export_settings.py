@@ -4,12 +4,20 @@ Single source of truth for:
   * loading per-channel export settings from `channel_settings`
   * computing the authoritative export price (markup + rounding)
   * deciding whether a product passes the stock rules
+  * Rozetka-specific pricing: category rule → commission, fallback → markup
 
 The SAME functions are used by:
   * POST /export/channels/{code}/export/preview
   * POST /export/channels/{code}/export        (real background run)
 
 The frontend never computes authoritative prices.
+
+Rozetka pricing model:
+  - `products.price` already contains the business markup from import.
+  - For Rozetka export we must NOT apply an additional global business markup.
+  - Instead: if a Rozetka category pricing rule exists, apply commission
+    compensation only (price / (1 - commission)).
+  - If no rule exists, fall back to the configured default markup (e.g. 30%).
 """
 
 from __future__ import annotations
@@ -110,6 +118,10 @@ def calculate_export_price(base_price, settings: dict) -> float:
       fixed:      base + value
     followed by optional rounding to the nearest multiple of `price_rounding`
     (ROUND_HALF_UP; 0 disables rounding).  Never negative.
+
+    NOTE: This is the GENERIC markup calculator. For Rozetka export use
+    `calculate_rozetka_export_price()` which applies category-specific
+    commission rules with fallback to this markup only when no rule exists.
     """
     base = Decimal(str(parse_float(base_price))) / Decimal('100')
     markup_value = Decimal(str(settings.get("price_markup_value", 0.0)))
@@ -129,14 +141,93 @@ def calculate_export_price(base_price, settings: dict) -> float:
     return float(price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
+def calculate_rozetka_export_price(
+    base_price,
+    ext_cat_id: Optional[str],
+    pricing_resolver,
+    settings: dict,
+    brand: Optional[str] = None,
+) -> float:
+    """Compute the Rozetka export price using category-specific commission rules.
+
+    `products.price` already contains the business markup from import, so we
+    must NOT apply an additional global business markup when a category rule
+    exists.
+
+    Logic:
+      1. If a Rozetka category pricing rule exists for ext_cat_id:
+         apply commission compensation only: price / (1 - commission).
+      2. If no rule exists (or no category is mapped):
+         fall back to the configured default markup (e.g. 30%).
+
+    Args:
+        base_price: products.price in kopecks (minor units).
+        ext_cat_id: Rozetka external category ID (may be None).
+        pricing_resolver: RozetkaPricingResolver instance.
+        settings: Export settings dict with fallback markup config.
+        brand: Optional brand name for rule matching.
+
+    Returns:
+        Final export price in UAH (major units).
+    """
+    base_kopecks = int(parse_float(base_price))
+
+    # Try to find a category-specific commission rule
+    if ext_cat_id and pricing_resolver and pricing_resolver.has_rules:
+        commission_kopecks = pricing_resolver.calculate_export_price(
+            str(ext_cat_id), base_kopecks, brand)
+        if commission_kopecks is not None:
+            # Rule found: apply commission compensation only (no global markup)
+            return commission_kopecks / 100.0
+
+    # No rule found: fall back to the configured default markup
+    return calculate_export_price(base_price, settings)
+
+
 def apply_export_settings(transformed: dict, settings: dict) -> dict:
     """Apply export settings onto a transformed product payload IN PLACE
     (adds `export_price` next to the untouched base fields).
 
     Preview and real export both call this — they cannot diverge.
+
+    NOTE: This is the GENERIC applicator. For Rozetka export use
+    `apply_rozetka_export_settings()` which uses category-specific pricing.
     """
     transformed["export_price"] = calculate_export_price(
         transformed.get("price") or 0, settings)
+    return transformed
+
+
+def apply_rozetka_export_settings(
+    transformed: dict,
+    settings: dict,
+    pricing_resolver,
+    brand: Optional[str] = None,
+) -> dict:
+    """Apply Rozetka-specific export settings onto a transformed product payload
+    IN PLACE (adds `export_price` next to the untouched base fields).
+
+    Uses category-specific commission rules with fallback to default markup
+    when no rule exists. Does NOT apply global business markup when a rule
+    exists (products.price already contains the business markup).
+
+    Args:
+        transformed: Product payload dict with at least 'price' key.
+        settings: Export settings dict with fallback markup config.
+        pricing_resolver: RozetkaPricingResolver instance.
+        brand: Optional brand name for rule matching.
+
+    Returns:
+        The modified transformed dict.
+    """
+    ext_cat_id = transformed.get("external_category_id")
+    transformed["export_price"] = calculate_rozetka_export_price(
+        transformed.get("price") or 0,
+        ext_cat_id,
+        pricing_resolver,
+        settings,
+        brand,
+    )
     return transformed
 
 

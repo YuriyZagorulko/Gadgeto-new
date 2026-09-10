@@ -40,7 +40,7 @@ from app.channels.export_listings import (
     upsert_listing_pending,
 )
 from app.channels.export_settings import (
-    apply_export_settings as apply_settings,
+    apply_rozetka_export_settings,
     load_export_settings,
 )
 from app.channels.mapping_resolver import ChannelMappingResolver
@@ -453,7 +453,10 @@ def _process_product(ctx: dict, product_id: int) -> dict:
     ext_cat_id = _get_external_category_id(ctx["resolver"], product)
     transformed = _build_transform_payload(product, ctx["resolver"],
                                            ext_cat_id, ctx["public_base_url"])
-    apply_settings(transformed, ctx["settings"])
+
+    # Store ext_cat_id in transformed for pricing function
+    if ext_cat_id:
+        transformed["external_category_id"] = str(ext_cat_id)
 
     # ── Resolve producer ID (Rozetka producer dictionary) ─────────────────
     # Look up the producer ID for the product's brand.  The resolved ID is
@@ -491,24 +494,18 @@ def _process_product(ctx: dict, product_id: int) -> dict:
     transformed["producer_id"] = producer_id
     transformed["producer_title"] = brand_name
 
-    # Apply Rozetka commission pricing — adjusts the export price upward
-    # so that after Rozetka deducts its commission, the seller receives
-    # the intended net price.  The commission is category-dependent and
-    # supports parent-category inheritance (child categories without
-    # explicit rules inherit from ancestors).
+    # ── Apply Rozetka-specific pricing ─────────────────────────────────────
+    # products.price already contains the business markup from import.
+    # For Rozetka export we must NOT apply an additional global business markup.
+    # Instead: if a Rozetka category pricing rule exists, apply commission
+    # compensation only (price / (1 - commission)).
+    # If no rule exists, fall back to the configured default markup.
     pricing_resolver = ctx.get("pricing_resolver")
-    if pricing_resolver and pricing_resolver.has_rules and ext_cat_id:
-        brand = None
-        if product.get("brand") and isinstance(product["brand"], dict):
-            brand = product["brand"].get("name")
-        export_price_uah = transformed.get("export_price") or 0
-        # Convert UAH → kopecks for the resolver
-        base_kopecks = int(round(export_price_uah * 100))
-        commission_kopecks = pricing_resolver.calculate_export_price(
-            str(ext_cat_id), base_kopecks, brand)
-        if commission_kopecks is not None:
-            # Convert back to UAH (major units) for the payload builder
-            transformed["export_price"] = commission_kopecks / 100.0
+    brand = None
+    if product.get("brand") and isinstance(product["brand"], dict):
+        brand = product["brand"].get("name")
+    apply_rozetka_export_settings(
+        transformed, ctx["settings"], pricing_resolver, brand)
 
     content_hash, commercial_hash = compute_listing_hashes(
         ctx["resolver"], product, transformed, ctx["public_base_url"])

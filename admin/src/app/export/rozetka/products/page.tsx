@@ -192,7 +192,7 @@ export default function RozetkaExportPage() {
       </div>
 
       <div className="flex flex-wrap gap-4 mb-4 text-xs text-gray-600">
-        <span>Націнка Rozetka: </span>
+        <span>Націнка Rozetka: fallback-націнка (використовується тільки якщо немає правила для категорії)</span>
         <a href="/export/rozetka/settings" className="text-blue-600 hover:underline">Налаштування →</a>
       </div>
 
