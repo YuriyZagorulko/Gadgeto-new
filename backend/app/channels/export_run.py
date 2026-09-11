@@ -809,6 +809,98 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
 
     last_write = [0.0]
 
+    # Load Rozetka supplier selection (using existing connection/cursor)
+    import json
+    import logging
+    
+
+    # Get selected suppliers for Rozetka export
+    cur.execute(
+        "SELECT value FROM channel_settings WHERE channel_id = %s AND key = %s",
+        (channel_id, "export_suppliers"),
+    )
+    sel_row = cur.fetchone()
+    selected_suppliers = []
+    if sel_row and sel_row["value"]:
+        try:
+            selected_suppliers = json.loads(sel_row["value"])
+        except (json.JSONDecodeError, TypeError):
+            selected_suppliers = []
+    
+    # Build set of enabled supplier IDs
+    enabled_supplier_ids = set(selected_suppliers)
+    
+    # If no suppliers selected, reconcile previously exported products
+    if not enabled_supplier_ids:
+        # Find products that were previously exported to Rozetka
+        cur.execute("""
+            SELECT cl.product_id, p.id as product_id, p.supplier_id
+            FROM channel_listings cl
+            JOIN products p ON p.id = cl.product_id
+            WHERE cl.channel_id = %s
+              AND cl.external_id IS NOT NULL
+            GROUP BY cl.product_id, p.supplier_id
+        """, (channel_id,))
+        previously_exported = cur.fetchall()
+        
+        # For each previously exported product, set stock to 0 if supplier is disabled
+        for row in previously_exported:
+            product_id = row["product_id"]
+            supplier_id = row["supplier_id"]
+            cur.execute(
+                "UPDATE products SET stock_qty = 0, stock_status = 'out_of_stock' WHERE id = %s",
+                (product_id,)
+            )
+        
+        # No products to export
+        product_ids = []
+    else:
+        # Filter product_ids to only include products from enabled suppliers
+        placeholders = ",".join(["%s"] * len(enabled_supplier_ids))
+        cur.execute(
+            f"SELECT p.id, p.supplier_id FROM products p WHERE p.supplier_id IN ({placeholders})",
+            list(enabled_supplier_ids),
+        )
+        supplier_products = {row["id"]: row["supplier_id"] for row in cur.fetchall()}
+        
+        # Filter the original product_ids
+        product_ids = [pid for pid in product_ids if pid in supplier_products]
+        
+        # Reconcile: find previously exported products from disabled suppliers
+        # and set their stock to 0
+        if product_ids:
+            placeholders2 = ",".join(["%s"] * min(len(product_ids), 100))
+            cur.execute(
+                f"""
+                SELECT cl.product_id, p.supplier_id
+                FROM channel_listings cl
+                JOIN products p ON p.id = cl.product_id
+                WHERE cl.channel_id = %s
+                  AND cl.external_id IS NOT NULL
+                  AND p.id IN ({placeholders2})
+                """,
+                [channel_id] + list(product_ids)[:100],
+            )
+            previously_exported_ids = {row["product_id"] for row in cur.fetchall()}
+            
+            for pid in previously_exported_ids:
+                if pid in supplier_products:
+                    supplier_id = supplier_products[pid]
+                    if supplier_id not in enabled_supplier_ids:
+                        cur.execute(
+                            "UPDATE products SET stock_qty = 0, stock_status = 'out_of_stock' WHERE id = %s",
+                            (pid,)
+                        )
+    
+    
+    # Log supplier selection
+    logger = logging.getLogger("channels.export_run")
+    logger.info(
+        "Rozetka supplier selection: %d suppliers enabled, %d products to export",
+        len(selected_suppliers),
+        len(product_ids) if product_ids else 0,
+    )
+
     def _flush(force: bool = False) -> None:
         now = time.time()
         if not force and (now - last_write[0]) < WRITE_EVERY:

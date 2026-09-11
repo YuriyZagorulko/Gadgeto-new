@@ -85,6 +85,55 @@ function SearchableCategorySelect({ value, options, onChange }: {
   );
 }
 
+function SupplierSelectionSelect({ suppliers, selected, onToggle }: {
+  suppliers: Supplier[]; selected: Set<number>; onToggle: (newSelection: Set<number>) => void;
+}) {
+  const allSelected = selected.size === suppliers.length && suppliers.length > 0;
+
+  const handleToggle = (supplierId: number) => {
+    const newSelection = new Set(selected);
+    if (newSelection.has(supplierId)) {
+      newSelection.delete(supplierId);
+    } else {
+      newSelection.add(supplierId);
+    }
+    onToggle(newSelection);
+  };
+
+  const handleSelectAll = () => {
+    if (allSelected) {
+      onToggle(new Set());
+    } else {
+      onToggle(new Set(suppliers.map((s) => s.id)));
+    }
+  };
+
+  return (
+    <div>
+      <h3 className="text-xs text-gray-500 mb-2">Постачальники для експорту</h3>
+      <div className="space-y-1">
+        {suppliers.map((s) => (
+          <div key={s.id} className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={selected.has(s.id)}
+              onChange={() => handleToggle(s.id)}
+              className="rounded border-gray-300"
+            />
+            <span className="font-medium text-sm">{s.name}</span>
+            <span className="text-xs text-gray-500">({s.code || '-'})</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex justify-between text-xs">
+        <Button variant="ghost" size="sm" onClick={handleSelectAll}>
+          {allSelected ? 'Сняти всіх' : 'Вибрати всіх'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /* ───── Confirm dialog ───── */
 
 function ConfirmModal({ open, title, message, confirmLabel, busy, onConfirm, onCancel }: {
@@ -113,6 +162,9 @@ export default function RozetkaSettingsPage() {
   const toast = useToast();
   const [tab, setTab] = useState<TabName>('general');
   const [settings, setSettings] = useState<Record<string, string>>({});
+  const [supplierSelection, setSupplierSelection] = useState<Set<number>>(new Set());
+
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -150,7 +202,7 @@ export default function RozetkaSettingsPage() {
 
   // Load suppliers
   useEffect(() => {
-    if (supLoaded || tab !== 'products') return;
+    if (supLoaded || (tab !== 'products' && tab !== 'export')) return;
     api.get<{ items: Supplier[] }>('/suppliers?per_page=100')
       .then((d) => { setSuppliers(d.items || []); setSupLoaded(true); })
       .catch(() => setSupLoaded(true));
@@ -269,6 +321,17 @@ export default function RozetkaSettingsPage() {
       .finally(() => setLoading(false));
   }, []);
 
+
+  // Load supplier selection from API
+  useEffect(() => {
+    if (!supLoaded) return;
+    api.get<any>('/export/channels/rozetka/export/supplier-selection')
+      .then((d) => {
+        setSupplierSelection(new Set(d.data?.selected ?? []));
+      })
+      .catch(() => {});
+  }, [supLoaded]);
+
   useEffect(() => { load(); }, [load]);
 
   const updateSetting = async (key: string, value: string) => {
@@ -284,6 +347,20 @@ export default function RozetkaSettingsPage() {
     }
   };
 
+  const handleSaveSupplierSelection = async () => {
+    setSaving(true);
+    try {
+      await api.put('/export/channels/rozetka/export/supplier-selection', {
+        selected: Array.from(supplierSelection),
+      });
+      toast.push('success', 'Вибір постачальників збережено');
+    } catch (e: any) {
+      toast.push('error', e.message || 'Помилка збереження вибору постачальників');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const SettingRow = ({ label, hint, skey, type = 'text' }: {
     label: string; hint?: string; skey: string; type?: 'text' | 'number' | 'select';
   }) => {
@@ -294,7 +371,7 @@ export default function RozetkaSettingsPage() {
     const save = () => {
       if (draft === val) return;
       updateSetting(skey, draft);
-      setChanged(false);
+            setChanged(false);
     };
     return (
       <div className="flex items-start justify-between py-4 border-b border-gray-100 last:border-0">
@@ -419,30 +496,44 @@ export default function RozetkaSettingsPage() {
       )}
 
       {tab === 'export' && (
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <h2 className="text-base font-semibold text-gray-900 mb-4">Налаштування експорту товарів</h2>
-          <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4">
-            <p className="text-xs text-blue-700">
-              <strong>Логіка ціноутворення:</strong> Ціна товару вже містить вашу бізнес-націнку.
-              Якщо для категорії Rozetka є правило комісії — застосовується тільки компенсація комісії.
-              Якщо правила немає — використовується fallback-націнка за замовчуванням.
-            </p>
-          </div>
-          <p className="text-xs text-gray-500 mb-6">Ці налаштування застосовуються під час експорту товарів до Rozetka.</p>
-          <div className="divide-y divide-gray-100">
-            <SettingRow skey="price_markup_type" label="Тип fallback-націнки" hint="Використовується тільки якщо немає правила для категорії Rozetka" type="select" />
-            <SettingRow skey="price_markup_value" label="Розмір fallback-націнки" hint="15 = 15% або 15 грн (fallback, якщо немає правила категорії)" type="number" />
-            <SettingRow skey="price_rounding" label="Округлення ціни" hint="До найближчого X (0 = без округлення)" type="number" />
-          </div>
-          <div className="mt-6 pt-4 border-t border-gray-100">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2">Поточні значення</h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
-              <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Тип fallback-націнки</span><div className="font-medium">{settings.price_markup_type === 'fixed' ? 'Фіксована' : 'Відсоток'}</div></div>
-              <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Розмір fallback-націнки</span><div className="font-medium">{settings.price_markup_value || '0'}{settings.price_markup_type === 'fixed' ? ' грн' : '%'}</div></div>
-              <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Округлення</span><div className="font-medium">{settings.price_rounding ? `до ${settings.price_rounding}` : '—'}</div></div>
+        <>
+          <div className="bg-white rounded-lg border border-gray-200 p-6  mb-4">
+            <h2 className="text-base font-semibold text-gray-900 mb-4">Налаштування експорту товарів</h2>
+            <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4">
+              <p className="text-xs text-blue-700">
+                <strong>Логіка ціноутворення:</strong> Ціна товару вже містить вашу бізнес-націнку.
+                Якщо для категорії Rozetka є правило комісії — застосовується тільки компенсація комісії.
+                Якщо правила немає — використовується fallback-націнка за замовчуванням.
+              </p>
+            </div>
+            <p className="text-xs text-gray-500 mb-6">Ці налаштування застосовуються під час експорту товарів до Rozetka.</p>
+            <div className="divide-y divide-gray-100">
+              <SettingRow skey="price_markup_type" label="Тип fallback-націнки" hint="Використовується тільки якщо немає правила для категорії Rozetka" type="select" />
+              <SettingRow skey="price_markup_value" label="Розмір fallback-націнки" hint="15 = 15% або 15 грн (fallback, якщо немає правила категорії)" type="number" />
+              <SettingRow skey="price_rounding" label="Округлення ціни" hint="До найближчого X (0 = без округлення)" type="number" />
+            </div>
+            <div className="mt-6 pt-4 border-t border-gray-100">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Поточні значення</h3>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+                <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Тип fallback-націнки</span><div className="font-medium">{settings.price_markup_type === 'fixed' ? 'Фіксована' : 'Відсоток'}</div></div>
+                <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Розмір fallback-націнки</span><div className="font-medium">{settings.price_markup_value || '0'}{settings.price_markup_type === 'fixed' ? ' грн' : '%'}</div></div>
+                <div className="bg-gray-50 rounded px-3 py-2"><span className="text-gray-500 text-xs">Округлення</span><div className="font-medium">{settings.price_rounding ? `до ${settings.price_rounding}` : '—'}</div></div>
+              </div>
             </div>
           </div>
-        </div>
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Постачальники для експорту</h3>
+            <p className="text-xs text-gray-500 mb-3">
+              Які постачальники повинні автоматично експортуватись.
+              Вимкнення доступу до постачальника змінює статус його товарів на "немає" у наявності.
+            </p>
+            <SupplierSelectionSelect suppliers={suppliers} selected={supplierSelection} onToggle={setSupplierSelection} />
+            <div className="mt-4 flex gap-2">
+              <Button variant="secondary" onClick={() => setSupplierSelection(new Set())}>Сняти всіх</Button>
+              <Button variant="primary" onClick={handleSaveSupplierSelection}>Зберегти</Button>
+            </div>
+          </div>
+        </>
       )}
 
       {tab === 'products' && (

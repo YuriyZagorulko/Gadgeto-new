@@ -15,6 +15,7 @@ Endpoints:
 
 from datetime import datetime
 from typing import Optional
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -58,6 +59,45 @@ def list_channels(user=Depends(require_admin)):
         return {"items": cur.fetchall()}
     finally:
         conn.close()
+
+@router.get("/export/channels/{code}/export/supplier-selection")
+def get_rozetka_supplier_selection(code: str, user=Depends(require_admin)):
+    """Get current Rozetka supplier selection (enabled/disabled state)."""
+    conn, cur = admin_cursor()
+    try:
+        channel = _resolve_channel(cur, code)
+        cur.execute(
+            "SELECT value FROM channel_settings WHERE channel_id = %s AND key = %s",
+            (channel["id"], "export_suppliers"),
+        )
+        row = cur.fetchone()
+        if row and row["value"]:
+            selected = json.loads(row["value"])
+        else:
+            selected = []
+        return {"ok": True, "selected": selected}
+    finally:
+        conn.close()
+
+@router.put("/export/channels/{code}/export/supplier-selection")
+def set_rozetka_supplier_selection(code: str, body: dict, user=Depends(require_admin)):
+    """Set Rozetka supplier selection (array of supplier IDs to enable)."""
+    conn, cur = admin_cursor()
+    try:
+        channel = _resolve_channel(cur, code)
+        selected = body.get("selected", [])
+        cur.execute(
+            """INSERT INTO channel_settings (channel_id, key, value, is_secret, created_at, updated_at)
+               VALUES (%s, %s, %s, %s, NOW(), NOW())
+               ON CONFLICT (channel_id, key)
+               DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()""",
+            (channel["id"], "export_suppliers", json.dumps(selected), False),
+        )
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
 
 
 @router.get("/export/channels/{code}")

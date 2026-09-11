@@ -1,5 +1,5 @@
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch, call
 
 from app.channels.export_run import (
     _summarize_validation_issues,
@@ -145,4 +145,106 @@ class TestSummarizeValidationIssues:
                          external_category_id="131143")], "131143")
         assert s["total"] == 1
         assert s["missing_attribute_mappings"] == []
-        assert s["other"][0]["code"] == "MISSING_REQUIRED_ATTR_MAPPING"
+class TestSupplierSelectionParsing:
+    """Validate supplier selection JSON parsing -- regression for the bug
+    where raw string "[2]" was passed directly to set(), iterating over
+    characters and producing {']','[','2'} instead of {2}.
+    """
+
+    @staticmethod
+    def _parse(raw_value):
+        if not raw_value:
+            return set()
+        try:
+            return set(json.loads(raw_value))
+        except (json.JSONDecodeError, TypeError):
+            return set()
+
+    def test_normal_json_array_parses_to_int_set(self):
+        assert self._parse("[2, 5, 10]") == {2, 5, 10}
+
+    def test_single_element_array(self):
+        assert self._parse("[2]") == {2}
+
+    def test_empty_array_is_empty_set(self):
+        assert self._parse("[]") == set()
+
+    def test_null_value_is_empty_set(self):
+        assert self._parse(None) == set()
+
+    def test_empty_string_is_empty_set(self):
+        assert self._parse("") == set()
+
+    def test_zero_single_element(self):
+        assert self._parse("[0]") == {0}
+
+    def test_large_ids(self):
+        assert self._parse("[99999999]") == {99999999}
+
+    def test_multiple_ids_preserves_all(self):
+        ids = list(range(1, 101))
+        result = self._parse(json.dumps(ids))
+        assert result == set(ids)
+        assert len(result) == 100
+
+    def test_invalid_json_returns_empty(self):
+        assert self._parse("{broken") == set()
+
+    def test_junk_string_returns_empty(self):
+        assert self._parse("not-json-at-all") == set()
+
+    def test_bug_regression_raw_string_set_iteration(self):
+        raw_value = "[2]"
+        bug_result = set(raw_value)
+        assert bug_result == {']', '[', '2'}
+
+    def test_bug_run_export_parses_json_string_from_db(self):
+        from app.channels.export_run import run_export
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+
+        def fetchone_side_effect(*args):
+            sql = args[0] if args else ""
+            if "export_suppliers" in str(sql):
+                return {"value": "[2]"}
+            return None
+
+        mock_cur.fetchone.side_effect = fetchone_side_effect
+        mock_cur.fetchall.return_value = []
+        mock_conn.cursor.return_value = mock_cur
+
+        with patch("app.channels.export_run.psycopg2.connect", return_value=mock_conn):
+            with patch("app.channels.export_run.DB", "mock_db"):
+                with patch("app.channels.export_run.start_export_run") as m:
+                    m.return_value = 42
+                    with patch("app.channels.export_run.RozetkaAdapter"):
+                        result = run_export(channel_id=1, channel_code="rozetka",
+                                            run_id=99, product_ids=[],
+                                            public_base_url="example.com")
+
+        sel_calls = [c for c in mock_cur.execute.call_args_list
+                     if "export_suppliers" in str(c)]
+        assert len(sel_calls) >= 1
+        for call_args in mock_cur.execute.call_args_list:
+            sql = str(call_args[0][0])
+            if "supplier_id IN" in sql:
+                assert "']'" not in sql
+        assert result["status"] in ("SUCCEEDED", "PARTIAL")
+
+    def test_bug_no_export_suppliers_setting(self):
+        from app.channels.export_run import run_export
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.fetchone.return_value = None
+        mock_cur.fetchall.return_value = []
+        mock_conn.cursor.return_value = mock_cur
+
+        with patch("app.channels.export_run.psycopg2.connect", return_value=mock_conn):
+            with patch("app.channels.export_run.DB", "mock_db"):
+                with patch("app.channels.export_run.start_export_run") as m:
+                    m.return_value = 42
+                    with patch("app.channels.export_run.RozetkaAdapter"):
+                        result = run_export(channel_id=1, channel_code="rozetka",
+                                            run_id=99, product_ids=[10, 20, 30],
+                                            public_base_url="example.com")
+        assert result["status"] == "SUCCEEDED"

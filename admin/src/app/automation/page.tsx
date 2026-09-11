@@ -1,6 +1,7 @@
 'use client';
 
 import { Fragment, useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { api, qs } from '@/lib/api';
 import {
   PageHeader, Button, Table, Th, Td, Badge, Input, Modal,
@@ -60,16 +61,17 @@ type AutomationStatus = {
     id: number; status: string; trigger: string;
     started_at: string | null; finished_at: string | null;
     progress_json: string | null;
-    suppliers: Array<{ code: string; name: string; status?: string; }>;
-    exports: Array<{ channel: string; status?: string; run_id?: number; }>;
+    suppliers: Array<{ code: string; name: string; status?: string; error?: string; }>;
+    exports: Array<{ channel: string; status?: string; run_id?: number; error?: string; }>;
     logs: Array<{ level: string; message: string; created_at: string; }>;
   } | null;
   last_run: {
     id: number; status: string; trigger: string;
     started_at: string | null; finished_at: string | null;
     progress_json: string | null;
-    suppliers: Array<{ code: string; name: string; status?: string; }>;
-    exports: Array<{ channel: string; status?: string; run_id?: number; }>;
+    error_details_json: string | null;
+    suppliers: Array<{ code: string; name: string; status?: string; error?: string; }>;
+    exports: Array<{ channel: string; status?: string; run_id?: number; error?: string; }>;
   } | null;
   next_run_at: string | null;
   lock: {
@@ -84,9 +86,60 @@ type AutomationStatus = {
 type AutomationHistoryItem = {
   id: number; status: string; trigger: string;
   started_at: string | null; finished_at: string | null;
-  suppliers: Array<{ code: string; name: string; status?: string; }>;
-  exports: Array<{ channel: string; status?: string; run_id?: number; }>;
+  suppliers: Array<{ code: string; name: string; status?: string; error?: string; }>;
+  exports: Array<{ channel: string; status?: string; run_id?: number; error?: string; }>;
+  error_details_json: string | null;
+  progress_json: string | null;
 };
+function ErrorDetailBlock({ errorDetailsJson, progressJson }: { errorDetailsJson: string | null; progressJson: string | null }) {
+  let errorDetails: any = null;
+  let progress: any = null;
+  try { if (errorDetailsJson) errorDetails = JSON.parse(errorDetailsJson); } catch {}
+  try { if (progressJson) progress = JSON.parse(progressJson); } catch {}
+
+  const errors: Array<{ from: string; message: string }> = [];
+
+  // Collect from error_details_json (structured error details)
+  if (errorDetails) {
+    if (errorDetails.reason) {
+      errors.push({ from: 'Система', message: String(errorDetails.reason) });
+    }
+    if (errorDetails.policy) {
+      errors.push({ from: 'Політика', message: String(errorDetails.policy) });
+    }
+    if (errorDetails.type) {
+      errors.push({ from: errorDetails.type, message: String(errorDetails.message || '') });
+    }
+    if (Array.isArray(errorDetails.failed_suppliers)) {
+      errorDetails.failed_suppliers.forEach((f: any) => {
+        errors.push({ from: `Постачальник: ${f.supplier}`, message: String(f.error || 'Помилка') });
+      });
+    }
+  }
+
+  // Collect from progress_json (export-level error details)
+  if (progress) {
+    if (progress.error_details) {
+      const ed = progress.error_details;
+      const fromStr = ed.last_sku ? `Товар ${ed.last_sku}` : 'Експорт';
+      errors.push({ from: `${fromStr} (${ed.type || 'Помилка'})`, message: String(ed.message || '') });
+    }
+  }
+
+  if (errors.length === 0) return null;
+
+  return (
+    <div className="mt-3">
+      <div className="font-medium text-gray-500 mb-1">Помилки:</div>
+      {errors.map((e, i) => (
+        <div key={i} className="pl-4 mb-1">
+          <div className="text-red-600 font-medium">{e.from}</div>
+          <div className="text-red-500 break-words">{e.message}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function AutomationPanel() {
   const toast = useToast();
@@ -602,6 +655,7 @@ function AutomationPanel() {
                             </span>
                             <span>{s.name || s.code}</span>
                             {s.status && <span className="text-gray-400">({s.status})</span>}
+                            {s.status === 'FAILED' && s.error && <span className="text-red-500 ml-2">{String(s.error)}</span>}
                           </div>
                         )) : <div className="pl-4 text-gray-400">Немає даних</div>}
                         <div className="font-medium text-gray-500 mt-2">Експорт:</div>
@@ -611,9 +665,19 @@ function AutomationPanel() {
                               {e.status === 'SUCCEEDED' ? '\u2713' : e.status === 'FAILED' ? '\u2717' : '\u22EF'}
                             </span>
                             <span>{e.channel}</span>
-                            {e.run_id && <span className="text-gray-400">(run #{e.run_id})</span>}
+                            {e.run_id && e.channel === 'rozetka' && (
+                              <Link href={`/export/rozetka/history/${e.run_id}`} className="text-blue-600 hover:text-blue-800 ml-1" title="Переглянути звіт">
+                                (run #{e.run_id})
+                              </Link>
+                            )}
+                            {e.run_id && e.channel !== 'rozetka' && <span className="text-gray-400">(run #{e.run_id})</span>}
+                            {e.error && <span className="text-red-500 ml-2">{String(e.error)}</span>}
                           </div>
                         )) : <div className="pl-4 text-gray-400">\u2014</div>}
+                        {/* Error details */}
+                        {(r.status === 'FAILED' || r.status === 'PARTIAL') && r.error_details_json && (
+                          <ErrorDetailBlock errorDetailsJson={r.error_details_json} progressJson={r.progress_json} />
+                        )}
                       </div>
                     </td>
                   </tr>
