@@ -141,7 +141,12 @@ def build_create_payload(transformed, attr_specs, producer_id: int = 0):
     price = int(round(parse_float(price_value)))
     if price <= 0:
         raise PayloadBuildError(f"Invalid export price: {price}")
-    producer_title = (transformed.get("brand") or "").strip()
+    # producer_title carries the RESOLVED producer name (set by
+    # export_run.resolve_producer_for_export — may be "Без бренда" for a
+    # missing/unknown brand).  Callers that skip producer resolution (e.g.
+    # validation) fall back to the raw brand.
+    producer_title = (transformed.get("producer_title")
+                      or transformed.get("brand") or "").strip()
     if not producer_title:
         producer_title = ROZETKA_NO_BRAND_PRODUCER_TITLE
     producer = {"id": producer_id, "title": producer_title}
@@ -182,7 +187,8 @@ def build_basic_data_item(external_ref, transformed, attr_specs, include_categor
     if description:
         item["description"] = description
         item["description_ua"] = description
-    producer_title = (transformed.get("brand") or "").strip()
+    producer_title = (transformed.get("producer_title")
+                      or transformed.get("brand") or "").strip()
     if not producer_title:
         producer_title = ROZETKA_NO_BRAND_PRODUCER_TITLE
     item["producer"] = {"id": producer_id, "title": producer_title}

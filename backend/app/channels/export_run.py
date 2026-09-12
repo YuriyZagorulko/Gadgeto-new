@@ -202,6 +202,9 @@ def start_export_run(channel_id: int, product_ids: list[int],
                      user_id: Optional[int] = None) -> int:
     """Create a QUEUED export run after reconciling stale ones.
 
+    Uses a transaction-level pg_try_advisory_xact_lock to serialise the
+    SELECT+INSERT so two concurrent requests cannot both create QUEUED runs.
+
     `product_ids` are resolved SERVER-SIDE by the API layer before this call.
     Raises ExportRunBusy when an export is already queued/running for the
     channel and ExportSelectionEmpty on an empty selection.
@@ -210,39 +213,73 @@ def start_export_run(channel_id: int, product_ids: list[int],
         raise ExportSelectionEmpty("Виберіть хоча б один товар для експорту")
 
     conn = psycopg2.connect(DB)
-    conn.autocommit = True
+    cur = None
     try:
+        # Phase 1 — reconcile stale runs (autocommit, separate transaction)
+        conn.autocommit = True
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         try:
             reconcile_stale_runs(cur)
         except Exception:
             pass
-        cur.execute(
-            "SELECT count(*) AS c FROM sync_runs WHERE channel_id=%s"
-            f" AND run_type='{RUN_TYPE}' AND status IN ('QUEUED','RUNNING')",
-            (channel_id,),
-        )
-        if cur.fetchone()["c"]:
-            raise ExportRunBusy(
-                "Експорт на Rozetka вже виконується. Дочекайтесь завершення.")
-        cur.execute(
-            f"""INSERT INTO sync_runs
-                (channel_id, run_type, status, total_count, processed_count,
-                 progress_json, heartbeat_at, triggered_by_user_id,
-                 started_at, created_at, updated_at)
-                VALUES (%s, '{RUN_TYPE}', 'QUEUED', %s, 0, %s, NOW(), %s,
-                        NOW(), NOW(), NOW())
-                RETURNING id""",
-            (channel_id, len(product_ids),
-             json.dumps({"public_base_url": public_base_url,
-                         "logs": [], "results": [], "errors": 0}),
-             user_id),
-        )
-        run_id = cur.fetchone()["id"]
-        cur.close()
-        return run_id
+
+        # Phase 2 — atomic channel lock + check + insert
+        conn.autocommit = False
+        cur.execute("BEGIN")
+        try:
+            # pg_try_advisory_xact_lock returns true iff the lock was
+            # acquired.  It is auto-released at COMMIT or ROLLBACK.
+            cur.execute(
+                "SELECT pg_try_advisory_xact_lock(%s)", (channel_id,))
+            row = cur.fetchone()
+            if not row or not row.get("pg_try_advisory_xact_lock"):
+                raise ExportRunBusy(
+                    "Експорт на Rozetka вже виконується. "
+                    "Дочекайтесь завершення.")
+
+            cur.execute(
+                "SELECT count(*) AS c FROM sync_runs WHERE channel_id=%s"
+                f" AND run_type='{RUN_TYPE}' AND status IN ('QUEUED','RUNNING')",
+                (channel_id,),
+            )
+            if cur.fetchone()["c"]:
+                raise ExportRunBusy(
+                    "Експорт на Rozetka вже виконується. "
+                    "Дочекайтесь завершення.")
+
+            cur.execute(
+                f"""INSERT INTO sync_runs
+                    (channel_id, run_type, status, total_count, processed_count,
+                     progress_json, heartbeat_at, triggered_by_user_id,
+                     started_at, created_at, updated_at)
+                    VALUES (%s, '{RUN_TYPE}', 'QUEUED', %s, 0, %s, NOW(), %s,
+                            NOW(), NOW(), NOW())
+                    RETURNING id""",
+                (channel_id, len(product_ids),
+                 json.dumps({"public_base_url": public_base_url,
+                             "logs": [], "results": [], "errors": 0}),
+                 user_id),
+            )
+            run_id = cur.fetchone()["id"]
+            conn.commit()
+            cur.close()
+            return run_id
+        except ExportRunBusy:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
     finally:
-        conn.close()
+        try:
+            if cur is not None:
+                cur.close()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
 def get_export_run_status(cur, channel_id: int, run_id: int) -> Optional[dict]:
     """UI-friendly status of one export run (polled by the frontend)."""
     cur.execute(
@@ -393,6 +430,80 @@ def build_payload_update(refs: dict, transformed: dict, attr_specs: dict,
         producer_id=producer_id)
     return item
 
+def resolve_producer_for_export(ctx: dict, transformed: dict) -> None:
+    """Resolve the Rozetka producer for one product into ``transformed``.
+
+    Business rule (identical for CREATE and UPDATE operations):
+
+    * product has no producer/brand          -> "Без бренда" (id 581286);
+    * brand exists but is unknown to Rozetka -> "Без бренда" (id 581286);
+    * brand is known to Rozetka              -> the real Rozetka producer id.
+
+    ``producer_id=0`` must never result from the missing/unknown-producer
+    cases: on UPDATE the Rozetka API silently ignores ``id: 0`` and the
+    previous behaviour blocked the product with PRODUCER_NOT_FOUND.
+
+    Results are cached per brand in ``ctx["_producer_map"]`` (value is a
+    ``(producer_id, producer_title)`` tuple), so each brand triggers at most
+    one producer-dictionary lookup per export run.
+
+    A producer-dictionary API *failure* is an infrastructure problem, not a
+    dictionary fact: it is NOT cached and leaves ``producer_id=0`` with the
+    real brand title.  On CREATE that still proceeds (Rozetka creates the
+    producer on the fly); on UPDATE it hits the explicit PRODUCER_NOT_FOUND
+    guard, which accurately reports the failed lookup.
+    """
+    from app.channels.rozetka.payload import (
+        ROZETKA_NO_BRAND_PRODUCER_ID,
+        ROZETKA_NO_BRAND_PRODUCER_TITLE,
+    )
+
+    brand_name = (transformed.get("brand") or "").strip()
+    if not brand_name:
+        # Case B — missing producer/brand -> "Без бренда".
+        transformed["producer_id"] = ROZETKA_NO_BRAND_PRODUCER_ID
+        transformed["producer_title"] = ROZETKA_NO_BRAND_PRODUCER_TITLE
+        return
+
+    producer_map = ctx.setdefault("_producer_map", {})
+    cached = producer_map.get(brand_name)
+    if cached is not None:
+        transformed["producer_id"] = cached[0]
+        transformed["producer_title"] = cached[1]
+        return
+
+    adapter: RozetkaAdapter = ctx["adapter"]
+    producer_id = 0
+    producer_title = brand_name
+    try:
+        found = adapter._client.search_producers(title=brand_name) or []
+    except Exception as exc:
+        logger.info("Producer lookup failed for '%s': %s", brand_name, exc)
+        found = None
+    if found is None:
+        # API failure — see docstring: keep id=0 + real title, not cached.
+        pass
+    else:
+        # Prefer an exact title match among the search hits (the dictionary
+        # search may return partial matches); keep the previous behaviour of
+        # taking the first hit when there is no exact one.
+        chosen = next(
+            (p for p in found
+             if (p.get("title") or "").strip().lower() == brand_name.lower()),
+            found[0] if found else None,
+        )
+        if chosen and chosen.get("id"):
+            # Case A — known producer -> real Rozetka producer ID.
+            producer_id = int(chosen["id"])
+        else:
+            # Case C — unknown producer -> "Без бренда" (cached dictionary
+            # fact, identical for CREATE and UPDATE).
+            producer_title = ROZETKA_NO_BRAND_PRODUCER_TITLE
+            producer_id = ROZETKA_NO_BRAND_PRODUCER_ID
+        producer_map[brand_name] = (producer_id, producer_title)
+    transformed["producer_id"] = producer_id
+    transformed["producer_title"] = producer_title
+
 
 def _validate_with_ctx(ctx: dict, product_id: int) -> dict:
     """validate_product on the caller's cursor with the shared settings."""
@@ -459,40 +570,13 @@ def _process_product(ctx: dict, product_id: int) -> dict:
         transformed["external_category_id"] = str(ext_cat_id)
 
     # ── Resolve producer ID (Rozetka producer dictionary) ─────────────────
-    # Look up the producer ID for the product's brand.  The resolved ID is
-    # stored in transformed["producer_id"] so that:
+    # The resolved ID is stored in transformed["producer_id"] so that:
     #   a) the content hash includes it → brand changes trigger updates;
     #   b) _push_product_ops can use it directly.
-    # The producer_map cache avoids repeated API calls in the same run.
-    from app.channels.rozetka.payload import (
-        ROZETKA_NO_BRAND_PRODUCER_ID,
-        ROZETKA_NO_BRAND_PRODUCER_TITLE,
-    )
-    adapter: RozetkaAdapter = ctx["adapter"]
-    brand_name = (transformed.get("brand") or "").strip()
-    if not brand_name:
-        brand_name = ROZETKA_NO_BRAND_PRODUCER_TITLE
-        producer_id = ROZETKA_NO_BRAND_PRODUCER_ID
-    else:
-        producer_map = ctx.get("_producer_map", {})
-        if brand_name in producer_map:
-            producer_id = producer_map[brand_name]
-        else:
-            producer_id = 0
-            try:
-                found = adapter._client.search_producers(title=brand_name)
-                if found:
-                    pid = found[0].get("id")
-                    if pid:
-                        producer_id = int(pid)
-                        if "_producer_map" not in ctx:
-                            ctx["_producer_map"] = {}
-                        ctx["_producer_map"][brand_name] = producer_id
-            except Exception as exc:
-                logger.info("Producer lookup failed for '%s': %s",
-                            brand_name, exc)
-    transformed["producer_id"] = producer_id
-    transformed["producer_title"] = brand_name
+    # Business rule: missing brand OR brand unknown to Rozetka resolves to
+    # "Без бренда" (id 581286) — identical for CREATE and UPDATE.  See
+    # resolve_producer_for_export for the full semantics.
+    resolve_producer_for_export(ctx, transformed)
 
     # ── Apply Rozetka-specific pricing ─────────────────────────────────────
     # products.price already contains the business markup from import.
@@ -785,11 +869,19 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
 
     Persists live progress into sync_runs.  Per-product failures never stop
     the batch; fatal init errors (auth, settings) fail the whole run.
-    """
-    conn = psycopg2.connect(DB)
-    conn.autocommit = True
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+    All initialization (DB connect, advisory lock, supplier loading, status
+    update, resolver, adapter) is INSIDE the single try/except so that any
+    failure transitions the run to FAILED with error details rather than
+    leaving it QUEUED or RUNNING without observation.
+
+    A session-level pg_try_advisory_lock prevents concurrent exports for the
+    same channel.  The lock is released in ``finally``; if the thread dies
+    without reaching ``finally``, the lock is freed when PostgreSQL detects
+    the dead connection (TCP keepalive, ~60 s).
+    """
+    conn = None
+    cur = None
     progress: dict = {
         "total": len(product_ids), "processed": 0,
         "created": 0, "updated": 0, "failed": 0, "skipped": 0,
@@ -797,6 +889,7 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
         "errors": 0, "current_operation": "Initializing...",
         "results": [], "logs": [],
     }
+    last_write = [0.0]
 
     def _log(level: str, message: str) -> None:
         progress["logs"].append({
@@ -807,101 +900,9 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
         if len(progress["logs"]) > MAX_LOGS:
             del progress["logs"][: len(progress["logs"]) - MAX_LOGS]
 
-    last_write = [0.0]
-
-    # Load Rozetka supplier selection (using existing connection/cursor)
-    import json
-    import logging
-    
-
-    # Get selected suppliers for Rozetka export
-    cur.execute(
-        "SELECT value FROM channel_settings WHERE channel_id = %s AND key = %s",
-        (channel_id, "export_suppliers"),
-    )
-    sel_row = cur.fetchone()
-    selected_suppliers = []
-    if sel_row and sel_row["value"]:
-        try:
-            selected_suppliers = json.loads(sel_row["value"])
-        except (json.JSONDecodeError, TypeError):
-            selected_suppliers = []
-    
-    # Build set of enabled supplier IDs
-    enabled_supplier_ids = set(selected_suppliers)
-    
-    # If no suppliers selected, reconcile previously exported products
-    if not enabled_supplier_ids:
-        # Find products that were previously exported to Rozetka
-        cur.execute("""
-            SELECT cl.product_id, p.id as product_id, p.supplier_id
-            FROM channel_listings cl
-            JOIN products p ON p.id = cl.product_id
-            WHERE cl.channel_id = %s
-              AND cl.external_id IS NOT NULL
-            GROUP BY cl.product_id, p.supplier_id
-        """, (channel_id,))
-        previously_exported = cur.fetchall()
-        
-        # For each previously exported product, set stock to 0 if supplier is disabled
-        for row in previously_exported:
-            product_id = row["product_id"]
-            supplier_id = row["supplier_id"]
-            cur.execute(
-                "UPDATE products SET stock_qty = 0, stock_status = 'out_of_stock' WHERE id = %s",
-                (product_id,)
-            )
-        
-        # No products to export
-        product_ids = []
-    else:
-        # Filter product_ids to only include products from enabled suppliers
-        placeholders = ",".join(["%s"] * len(enabled_supplier_ids))
-        cur.execute(
-            f"SELECT p.id, p.supplier_id FROM products p WHERE p.supplier_id IN ({placeholders})",
-            list(enabled_supplier_ids),
-        )
-        supplier_products = {row["id"]: row["supplier_id"] for row in cur.fetchall()}
-        
-        # Filter the original product_ids
-        product_ids = [pid for pid in product_ids if pid in supplier_products]
-        
-        # Reconcile: find previously exported products from disabled suppliers
-        # and set their stock to 0
-        if product_ids:
-            placeholders2 = ",".join(["%s"] * min(len(product_ids), 100))
-            cur.execute(
-                f"""
-                SELECT cl.product_id, p.supplier_id
-                FROM channel_listings cl
-                JOIN products p ON p.id = cl.product_id
-                WHERE cl.channel_id = %s
-                  AND cl.external_id IS NOT NULL
-                  AND p.id IN ({placeholders2})
-                """,
-                [channel_id] + list(product_ids)[:100],
-            )
-            previously_exported_ids = {row["product_id"] for row in cur.fetchall()}
-            
-            for pid in previously_exported_ids:
-                if pid in supplier_products:
-                    supplier_id = supplier_products[pid]
-                    if supplier_id not in enabled_supplier_ids:
-                        cur.execute(
-                            "UPDATE products SET stock_qty = 0, stock_status = 'out_of_stock' WHERE id = %s",
-                            (pid,)
-                        )
-    
-    
-    # Log supplier selection
-    logger = logging.getLogger("channels.export_run")
-    logger.info(
-        "Rozetka supplier selection: %d suppliers enabled, %d products to export",
-        len(selected_suppliers),
-        len(product_ids) if product_ids else 0,
-    )
-
     def _flush(force: bool = False) -> None:
+        if cur is None:
+            return
         now = time.time()
         if not force and (now - last_write[0]) < WRITE_EVERY:
             return
@@ -926,6 +927,8 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
             pass
 
     def _cancel_requested() -> bool:
+        if cur is None:
+            return False
         try:
             cur.execute(
                 "SELECT cancel_requested FROM sync_runs WHERE id=%s",
@@ -935,16 +938,108 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
         except Exception:
             return False
 
-    cur.execute(
-        f"""UPDATE sync_runs SET status='RUNNING', heartbeat_at=NOW(),
-               updated_at=NOW() WHERE id=%s""",
-        (run_id,),
-    )
-    _flush(force=True)
-    _log("INFO", f"Експорт запущено: {len(product_ids)} товарів")
-
-    final_status = "FAILED"
     try:
+        # B01: Database connection
+        conn = psycopg2.connect(DB)
+        conn.autocommit = True
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # B02: Session-level advisory lock for this channel
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (channel_id,))
+        row = cur.fetchone()
+        if not row or not row.get("pg_try_advisory_lock"):
+            raise RuntimeError(
+                f"Lock conflict for channel {channel_id}: "
+                f"another export is already running here")
+
+        # B03: Supplier selection
+        cur.execute(
+            "SELECT value FROM channel_settings WHERE channel_id = %s AND key = %s",
+            (channel_id, "export_suppliers"),
+        )
+        sel_row = cur.fetchone()
+        selected_suppliers = []
+        if sel_row and sel_row["value"]:
+            try:
+                selected_suppliers = json.loads(sel_row["value"])
+            except (json.JSONDecodeError, TypeError):
+                selected_suppliers = []
+
+        # B04: Supplier IDs
+        enabled_supplier_ids = set(selected_suppliers)
+
+        if not enabled_supplier_ids:
+            cur.execute("""
+                SELECT cl.product_id, p.id as product_id, p.supplier_id
+                FROM channel_listings cl
+                JOIN products p ON p.id = cl.product_id
+                WHERE cl.channel_id = %s
+                  AND cl.external_id IS NOT NULL
+                GROUP BY cl.product_id, p.supplier_id
+            """, (channel_id,))
+            previously_exported = cur.fetchall()
+
+            for row in previously_exported:
+                product_id = row["product_id"]
+                supplier_id = row["supplier_id"]
+                cur.execute(
+                    "UPDATE products SET stock_qty = 0, stock_status = 'out_of_stock' WHERE id = %s",
+                    (product_id,)
+                )
+
+            product_ids = []
+        else:
+            placeholders = ",".join(["%s"] * len(enabled_supplier_ids))
+            cur.execute(
+                f"SELECT p.id, p.supplier_id FROM products p WHERE p.supplier_id IN ({placeholders})",
+                list(enabled_supplier_ids),
+            )
+            supplier_products = {row["id"]: row["supplier_id"] for row in cur.fetchall()}
+
+            product_ids = [pid for pid in product_ids if pid in supplier_products]
+
+            if product_ids:
+                placeholders2 = ",".join(["%s"] * min(len(product_ids), 100))
+                cur.execute(
+                    f"""
+                    SELECT cl.product_id, p.supplier_id
+                    FROM channel_listings cl
+                    JOIN products p ON p.id = cl.product_id
+                    WHERE cl.channel_id = %s
+                      AND cl.external_id IS NOT NULL
+                      AND p.id IN ({placeholders2})
+                    """,
+                    [channel_id] + list(product_ids)[:100],
+                )
+                previously_exported_ids = {row["product_id"] for row in cur.fetchall()}
+
+                for pid in previously_exported_ids:
+                    if pid in supplier_products:
+                        supplier_id = supplier_products[pid]
+                        if supplier_id not in enabled_supplier_ids:
+                            cur.execute(
+                                "UPDATE products SET stock_qty = 0, stock_status = 'out_of_stock' WHERE id = %s",
+                                (pid,)
+                            )
+
+        logger.info(
+            "Rozetka supplier selection: %d suppliers enabled, %d products to export",
+            len(selected_suppliers),
+            len(product_ids) if product_ids else 0,
+        )
+
+        # B05: Set RUNNING status
+        progress["total"] = len(product_ids)
+        cur.execute(
+            f"""UPDATE sync_runs SET status='RUNNING', heartbeat_at=NOW(),
+                   updated_at=NOW() WHERE id=%s""",
+            (run_id,),
+        )
+        _flush(force=True)
+        _log("INFO", f"\u0415\u043a\u0441\u043f\u043e\u0440\u0442 \u0437\u0430\u043f\u0443\u0449\u0435\u043d\u043e: {len(product_ids)} \u0442\u043e\u0432\u0430\u0440\u0456\u0432")
+
+        # B06: Main processing
+        final_status = "FAILED"
         # Channel guard — this Rozetka-specific engine must only ever run for
         # the rozetka channel.  Prom.ua (prepared but not configured) and any
         # other channel fail the whole run with a clear application error and
@@ -1090,11 +1185,22 @@ def run_export(channel_id: int, channel_code: str, run_id: int,
         return {"success": False, "status": "FAILED", "error": exc_msg,
                 "error_type": exc_type, "error_details": progress["error_details"]}
     finally:
+        # Release session-level advisory lock for this channel.
+        # If this thread was killed, PostgreSQL's TCP keepalive (~60 s via
+        # keepalives_idle=30, keepalives_interval=10, keepalives_count=3)
+        # will detect the dead connection and release the lock automatically.
+        if cur is not None:
+            try:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (channel_id,))
+            except Exception:
+                pass
         try:
-            cur.close()
+            if cur is not None:
+                cur.close()
         except Exception:
             pass
         try:
-            conn.close()
+            if conn is not None:
+                conn.close()
         except Exception:
             pass

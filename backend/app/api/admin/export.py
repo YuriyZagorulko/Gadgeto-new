@@ -1197,9 +1197,33 @@ async def start_export(
 
     # Offload to a worker thread so the async event loop stays free.
     import asyncio
+    import logging
+
     loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, run_export, cid, code, run_id,
-                         product_ids, body.public_base_url)
+    future = loop.run_in_executor(None, run_export, cid, code, run_id,
+                                  product_ids, body.public_base_url)
+
+    def _on_export_done(fut):
+        """Ensure background export exceptions are never silently lost.
+
+        run_export already catches all Python exceptions internally and
+        transitions to FAILED with error details.  This callback is a
+        safety net for truly unhandled exceptions (SystemExit, C-level
+        crashes that manifest as Python exceptions, etc.).
+        """
+        if fut.cancelled():
+            return
+        try:
+            exc = fut.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is not None:
+            log = logging.getLogger("channels.export_run")
+            log.error(
+                "Export run %s background task raised unhandled "
+                "exception: %s", run_id, exc, exc_info=exc)
+
+    future.add_done_callback(_on_export_done)
 
     return {
         "run_id": run_id,

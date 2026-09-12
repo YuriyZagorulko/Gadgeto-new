@@ -204,9 +204,14 @@ class TestSupplierSelectionParsing:
         mock_cur = MagicMock()
 
         def fetchone_side_effect(*args):
-            sql = args[0] if args else ""
-            if "export_suppliers" in str(sql):
-                return {"value": "[2]"}
+            # Check the last execute() call to determine what to return
+            calls = mock_cur.execute.call_args_list
+            if calls:
+                last_sql = str(calls[-1][0][0]) if calls[-1][0] else ""
+                if "pg_try_advisory_lock" in last_sql:
+                    return {"pg_try_advisory_lock": True}
+                if "export_suppliers" in last_sql:
+                    return {"value": "[2]"}
             return None
 
         mock_cur.fetchone.side_effect = fetchone_side_effect
@@ -235,7 +240,16 @@ class TestSupplierSelectionParsing:
         from app.channels.export_run import run_export
         mock_conn = MagicMock()
         mock_cur = MagicMock()
-        mock_cur.fetchone.return_value = None
+
+        def fetchone_side_effect(*args):
+            calls = mock_cur.execute.call_args_list
+            if calls:
+                last_sql = str(calls[-1][0][0]) if calls[-1][0] else ""
+                if "pg_try_advisory_lock" in last_sql:
+                    return {"pg_try_advisory_lock": True}
+            return None
+
+        mock_cur.fetchone.side_effect = fetchone_side_effect
         mock_cur.fetchall.return_value = []
         mock_conn.cursor.return_value = mock_cur
 

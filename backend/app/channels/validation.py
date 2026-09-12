@@ -34,6 +34,10 @@ ISSUE_MISSING_BRAND = "MISSING_BRAND"
 ISSUE_MISSING_STOCK = "MISSING_STOCK"
 ISSUE_NO_TAXONOMY = "NO_TAXONOMY"
 ISSUE_MISSING_REQUIRED_ATTR_MAPPING = "MISSING_REQUIRED_ATTR_MAPPING"
+# Two+ internal attributes resolving to the same external characteristic
+# produce duplicate "id" entries in the outgoing params list — rejected by
+# the Rozetka API.  Blocking is reported before the API round-trip.
+ISSUE_DUPLICATE_EXTERNAL_PARAM = "DUPLICATE_EXTERNAL_PARAM"
 # Phase 6.5: strict leaf category validation for Rozetka export
 # Non-leaf / parent Rozetka categories can NEVER be used for export.
 ROZETKA_CATEGORY_NOT_LEAF = "ROZETKA_CATEGORY_NOT_LEAF"
@@ -132,18 +136,34 @@ _SELECT_PARAM_TYPES = frozenset({
 })
 
 
-def _would_produce_empty_params(cur, channel_id: int, ext_cat_id: str,
-                                resolver: ChannelMappingResolver,
-                                product: dict) -> bool:
-    """True when the Rozetka ``params`` list for this product would be empty.
+def _analyze_product_params(cur, channel_id: int, ext_cat_id: str,
+                            resolver: ChannelMappingResolver,
+                            product: dict) -> dict:
+    """Mirror ``rozetka.payload._build_params`` for one product/category.
 
-    Mirrors ``rozetka.payload._build_params``: a product attribute contributes a
-    param only when it has an accepted category mapping AND the resulting
-    characteristic is buildable.  List/select characteristics require an
-    external value ID (missing value mappings are skipped); text/decimal/integer
-    characteristics pass through the raw value string.  When every mapped
-    attribute is skipped, the payload's ``params`` is ``[]`` and the Rozetka API
-    rejects the item.
+    Classifies every product attribute's contribution to the outgoing
+    ``params`` list, using the SAME acceptance rules as the payload builder:
+    an accepted category mapping is required, the resulting external
+    characteristic must be part of the category taxonomy (non-taxonomy
+    targets — including phantom global fallbacks — are skipped by the
+    builder), and list/select characteristics require an external value ID
+    (missing value mappings are skipped); text/decimal/integer
+    characteristics pass through the raw value string.
+
+    Returns a report dict with contribution buckets.  Each contribution is
+    ``{"external_attribute_id", "external_attribute_name",
+    "internal_attribute_ids", "internal_attribute_names", "scoped"}``:
+
+    ``emitted``                   contributions that WOULD be sent as params
+    ``omitted_missing_value``     select-type contributions skipped because
+                                  no external value ID resolved
+    ``skipped_not_in_taxonomy``   contributions whose external attribute is
+                                  not part of the category taxonomy
+    ``duplicates``                ``emitted`` contributions sharing one
+                                  external attribute id (API-rejected)
+
+    Used by ``_validate`` for EMPTY_PARAMS diagnostics and the duplicate
+    external parameter guard with a single taxonomy query.
     """
     specs: dict[str, str] = {}
     cur.execute(
@@ -153,6 +173,17 @@ def _would_produce_empty_params(cur, channel_id: int, ext_cat_id: str,
     )
     for row in cur.fetchall():
         specs[str(row["external_id"])] = (row["param_type"] or "").strip().lower()
+
+    def _blank(ext_id: str, ext_name: str, scoped: bool) -> dict:
+        return {"external_attribute_id": ext_id,
+                "external_attribute_name": ext_name,
+                "internal_attribute_ids": [],
+                "internal_attribute_names": [],
+                "scoped": scoped}
+
+    emitted: dict[str, dict] = {}
+    omitted: dict[str, dict] = {}
+    skipped: dict[str, dict] = {}
     for pa in product.get("attributes") or []:
         attr_mapping = resolver.resolve_attribute(pa["attribute_id"], ext_cat_id)
         if attr_mapping is None:
@@ -160,7 +191,17 @@ def _would_produce_empty_params(cur, channel_id: int, ext_cat_id: str,
         ext_attr_id = str(attr_mapping.get("external_attribute_id") or "")
         if not ext_attr_id:
             continue
-        ptype = specs.get(ext_attr_id, "")
+        ext_name = attr_mapping.get("external_attribute_name") or ""
+        scoped = attr_mapping.get("external_category_id") is not None
+        ptype = specs.get(ext_attr_id)
+        if ptype is None:
+            # Payload builder skips characteristics absent from the category
+            # taxonomy (attr_specs only contains taxonomy rows).
+            bucket = skipped.setdefault(
+                ext_attr_id, _blank(ext_attr_id, ext_name, scoped))
+            bucket["internal_attribute_ids"].append(pa["attribute_id"])
+            bucket["internal_attribute_names"].append(pa.get("attr_name") or "")
+            continue
         external_value_id = None
         if pa.get("attribute_value_id"):
             val_mapping = resolver.resolve_value(pa["attribute_value_id"], ext_cat_id)
@@ -175,9 +216,40 @@ def _would_produce_empty_params(cur, channel_id: int, ext_cat_id: str,
         if ptype in _SELECT_PARAM_TYPES and external_value_id is None:
             # Select/list characteristic without a value mapping is omitted
             # from the payload — contributes nothing.
+            bucket = omitted.setdefault(
+                ext_attr_id, _blank(ext_attr_id, ext_name, scoped))
+            bucket["internal_attribute_ids"].append(pa["attribute_id"])
+            bucket["internal_attribute_names"].append(pa.get("attr_name") or "")
             continue
-        return False
-    return True
+        bucket = emitted.setdefault(
+            ext_attr_id, _blank(ext_attr_id, ext_name, scoped))
+        bucket["internal_attribute_ids"].append(pa["attribute_id"])
+        bucket["internal_attribute_names"].append(pa.get("attr_name") or "")
+    duplicates = [c for c in emitted.values()
+                  if len(c["internal_attribute_ids"]) > 1]
+    return {
+        "emitted": list(emitted.values()),
+        "omitted_missing_value": list(omitted.values()),
+        "skipped_not_in_taxonomy": list(skipped.values()),
+        "duplicates": duplicates,
+    }
+
+
+def _would_produce_empty_params(cur, channel_id: int, ext_cat_id: str,
+                                resolver: ChannelMappingResolver,
+                                product: dict) -> bool:
+    """True when the Rozetka ``params`` list for this product would be empty.
+
+    Mirrors ``rozetka.payload._build_params`` exactly (see
+    ``_analyze_product_params``): a param is only produced by an attribute
+    with an accepted category mapping whose external characteristic is part
+    of the category taxonomy and buildable (select/list characteristics
+    require an external value ID).  When every mapped attribute is skipped,
+    the payload's ``params`` is ``[]`` and the Rozetka API rejects the item.
+    """
+    report = _analyze_product_params(cur, channel_id, ext_cat_id,
+                                     resolver, product)
+    return not report["emitted"]
 def validate_product(product_id: int, channel_code: str = "rozetka",
                      public_base_url: str | None = None,
                      export_settings: dict | None = None) -> dict:
@@ -403,12 +475,16 @@ def _validate(cur, product_id: int, channel_code: str = "rozetka",
     # characteristics list (params) is empty.  This fires when the product
     # would contribute zero usable params — either because no accepted attribute
     # mappings exist for the category, or every mapped characteristic is a
-    # list/select with a missing value mapping.
+    # list/select with a missing value mapping or targets a characteristic
+    # outside the category taxonomy.
     # Blocking here prevents the pointless API round-trip that ends in
     # "empty params" rejection.
     if ext_cat_id and taxonomy_ok:
-        if _would_produce_empty_params(cur, channel_id, ext_cat_id, resolver,
-                                       product):
+        # One taxonomy query serves both the EMPTY_PARAMS check and the
+        # duplicate-external-parameter guard below.
+        param_report = _analyze_product_params(cur, channel_id, ext_cat_id,
+                                               resolver, product)
+        if not param_report["emitted"]:
             # Count internal attributes for richer diagnostics
             pa_count = len(product.get("attributes") or [])
             mapped_count = 0
@@ -440,6 +516,20 @@ def _validate(cur, product_id: int, channel_code: str = "rozetka",
                     f"з них {mapped_count} мапповано, {unmapped} не мапповано"
                 )
 
+            # Enrich details with exactly which mapped attributes were skipped
+            # and why (mirrors the payload builder's skip decisions).
+            omitted_attrs = [
+                {"external_attribute_id": c["external_attribute_id"],
+                 "internal_attribute_ids": c["internal_attribute_ids"],
+                 "reason": "missing_value_mapping"}
+                for c in param_report["omitted_missing_value"]]
+            skipped_attrs = [
+                {"external_attribute_id": c["external_attribute_id"],
+                 "internal_attribute_ids": c["internal_attribute_ids"],
+                 "mapping_scope": "scoped" if c["scoped"] else "global",
+                 "reason": "not_in_category_taxonomy"}
+                for c in param_report["skipped_not_in_taxonomy"]]
+
             issues.append({
                 "code": ISSUE_EMPTY_PARAMS,
                 "severity": SEVERITY_ERROR,
@@ -451,6 +541,34 @@ def _validate(cur, product_id: int, channel_code: str = "rozetka",
                     "mapped_attribute_count": mapped_count,
                     "unmapped_attribute_count": unmapped,
                     "has_only_brand_attribute": bool(pa_count == 1 and only_brand),
+                    "omitted_attributes": omitted_attrs,
+                    "skipped_attributes": skipped_attrs,
+                },
+            })
+            ready = False
+
+        # Concern D: duplicate external parameters.  Two+ internal attributes
+        # resolving to the same external characteristic produce duplicate "id"
+        # entries in the outgoing params list, which the Rozetka API rejects
+        # ("Дублікат параметрів").  Blocking here prevents the pointless API
+        # round-trip instead of silently deduplicating data.
+        for dup in param_report["duplicates"]:
+            names = ", ".join(n for n in dup["internal_attribute_names"] if n)
+            issues.append({
+                "code": ISSUE_DUPLICATE_EXTERNAL_PARAM,
+                "severity": SEVERITY_ERROR,
+                "message": (
+                    f"Кілька внутрішніх атрибутів ({names or 'id ' + ', '.join(str(i) for i in dup['internal_attribute_ids'])}) "
+                    f"відповідають одній характеристиці Rozetka "
+                    f"«{dup['external_attribute_name'] or dup['external_attribute_id']}» "
+                    f"(id {dup['external_attribute_id']}) — дублікати параметрів "
+                    f"заборонені API. Виправте відповідності атрибутів"
+                ),
+                "details": {
+                    "external_category_id": ext_cat_id,
+                    "external_attribute_id": dup["external_attribute_id"],
+                    "internal_attribute_ids": dup["internal_attribute_ids"],
+                    "internal_attribute_names": dup["internal_attribute_names"],
                 },
             })
             ready = False

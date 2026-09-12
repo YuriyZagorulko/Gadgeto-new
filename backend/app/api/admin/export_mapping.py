@@ -572,6 +572,52 @@ def list_mappings(
         conn.close()
 
 
+def _validate_external_target(cur, kind: str, cid: int, external_id,
+                              ext_cat_id: Optional[str]) -> None:
+    """Reject mapping targets that do not exist in the channel taxonomy.
+
+    Closes the phantom-mapping failure mode found by the Rozetka export
+    audit: attribute mappings pointing at external characteristics that are
+    not part of the target category's taxonomy (e.g. a global fallback to an
+    id that exists only in other categories) silently produce empty or
+    invalid payloads and end in Rozetka API rejections.  A mapping target
+    must be a real taxonomy entry:
+
+    * ``attributes``: must exist in ``channel_external_attributes``; scoped
+      mappings must match the exact (external_id, external_category_id) pair,
+      global mappings must exist for at least one category;
+    * ``values``: must exist in ``channel_external_values`` for the channel;
+    * ``categories``: handled by the existing leaf-category validation.
+
+    Raises ``HTTPException(400)`` on violation.
+    """
+    if not external_id:
+        return
+    if kind == "attributes":
+        cur.execute(
+            "SELECT 1 FROM channel_external_attributes "
+            "WHERE channel_id=%s AND external_id=%s "
+            "AND category_external_id IS NOT DISTINCT FROM %s LIMIT 1",
+            (cid, str(external_id), ext_cat_id))
+    elif kind == "values":
+        cur.execute(
+            "SELECT 1 FROM channel_external_values "
+            "WHERE channel_id=%s AND external_id=%s LIMIT 1",
+            (cid, str(external_id)))
+    else:
+        return
+    if cur.fetchone() is None:
+        if kind == "attributes" and ext_cat_id is not None:
+            detail = (f"Зовнішня характеристика {external_id} відсутня у таксономії "
+                      f"категорії {ext_cat_id} цього каналу")
+        elif kind == "attributes":
+            detail = (f"Зовнішня характеристика {external_id} відсутня у таксономії "
+                      f"каналу")
+        else:
+            detail = (f"Зовнішнє значення {external_id} відсутнє у таксономії каналу")
+        raise HTTPException(status_code=400, detail="Validation error: " + detail)
+
+
 @router.post("/export/channels/{code}/mappings/{kind}")
 def create_mapping(code: str, kind: str, body: MappingCreate, user=Depends(require_admin)):
     """Create a mapping idempotently.
@@ -609,6 +655,14 @@ def create_mapping(code: str, kind: str, body: MappingCreate, user=Depends(requi
                     status_code=400,
                     detail="Validation error: " + error_msg
                 )
+
+        # Audit fix: attribute/value mapping targets must exist in the
+        # channel taxonomy (exact category scope for scoped mappings) —
+        # phantom targets silently produced invalid payloads and API
+        # rejections.
+        if kind in ("attributes", "values"):
+            _validate_external_target(cur, kind, cid, body.external_id,
+                                      body.external_category_id)
 
         # Idempotent upsert: (channel, internal, external_category) identifies a row.
         cur.execute(
