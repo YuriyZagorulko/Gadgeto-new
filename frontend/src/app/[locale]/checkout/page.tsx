@@ -6,6 +6,8 @@ import { useRouter } from '@/i18n/navigation';
 import { formatPrice } from '@/lib/format';
 import { useCartStore, useCartTotalItems, useCartSubtotal } from '@/lib/cart-store';
 import { getCities, getWarehouses, getStreets } from '@/lib/api';
+import { trackBeginCheckout, trackViewCart } from '@/lib/analytics';
+import { getAttribution } from '@/lib/attribution';
 import type { NPCity, NPWarehouse, NPStreet } from '@/lib/api';
 
 interface SelectedCity { ref: string; name: string; }
@@ -69,6 +71,18 @@ export default function CheckoutPage() {
   useEffect(() => {
     refreshFromAPI().then(() => setLoaded(true)).catch(() => setLoaded(true));
   }, [refreshFromAPI]);
+
+  // GA4 view_cart + begin_checkout — once per checkout mount (not on refresh loops).
+  const checkoutTrackedRef = useRef(false);
+  useEffect(() => {
+    if (!loaded || !items.length || checkoutTrackedRef.current) return;
+    checkoutTrackedRef.current = true;
+    const gaItems = items.map((i) => ({
+      id: i.product_id, name: i.name, price: i.price, quantity: i.qty, sku: i.sku,
+    }));
+    trackViewCart(gaItems);
+    trackBeginCheckout(gaItems);
+  }, [loaded, items]);
 
   // Debounced city search against the NP API
   useEffect(() => {
@@ -200,12 +214,17 @@ export default function CheckoutPage() {
           payment_method: paymentMethod,
           notes: form.notes,
           auth_token: token||'',
+          ...getAttribution(),
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Checkout failed');
 
-      localStorage.setItem('last_order', JSON.stringify(data));
+      // Snapshot cart BEFORE backend clears it — feeds the purchase event.
+      const purchasedItems = items.map((i) => ({
+        id: i.product_id, name: i.name, price: i.price, quantity: i.qty, sku: i.sku,
+      }));
+      localStorage.setItem('last_order', JSON.stringify({ ...data, items: purchasedItems }));
 
       // LiqPay: auto-submit the payment form
       if (data.payment_method === 'liqpay' && data.payment) {

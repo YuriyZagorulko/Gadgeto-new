@@ -1,8 +1,29 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
+import { useSearchParams } from 'next/navigation';
 import { Link } from '@/i18n/navigation';
 import { formatPrice } from '@/lib/format';
+import { trackPurchaseOnce } from '@/lib/analytics';
+
+function PurchaseTrigger({ order }: { order: any }) {
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    if (!order) return;
+    // Fire purchase EXACTLY once per order — guarded by order ID, so
+    // refresh / back-forward / revisits never duplicate the event.
+    const urlOrderId = searchParams?.get('order_id');
+    const orderId = order.order_id ?? urlOrderId;
+    if (orderId && (order.total !== undefined || order.items)) {
+      trackPurchaseOnce({
+        transactionId: order.number || orderId,
+        items: order.items || [],
+        totalMinor: order.total || 0,
+      });
+    }
+  }, [order, searchParams]);
+  return null;
+}
 
 export default function SuccessPage() {
   const t = useTranslations('checkoutSuccess');
@@ -14,6 +35,9 @@ export default function SuccessPage() {
 
   return (
     <div className="max-w-md mx-auto px-4 py-12 text-center">
+      <Suspense fallback={null}>
+        <PurchaseTrigger order={order} />
+      </Suspense>
       <div className="text-6xl mb-4">✅</div>
       <h1 className="text-2xl font-bold mb-4">{t('title')}</h1>
       {order && <div className="space-y-2 mb-6">

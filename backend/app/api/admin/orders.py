@@ -64,6 +64,8 @@ def list_orders(
             SELECT o.id, o.number, o.buyer_name, o.email, o.phone, o.status,
                    o.payment_status, o.payment_method, o.total_amount,
                    o.shipping_amount, o.created_at,
+                   o.first_source, o.first_medium, o.first_campaign,
+                   o.last_source, o.last_medium, o.last_campaign,
                    (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS items_count
             FROM orders o
             WHERE {where}

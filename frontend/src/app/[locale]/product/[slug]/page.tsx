@@ -82,7 +82,7 @@ function ProductView({
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6">
-      <TrackViewedProduct productId={product.id} />
+      <TrackViewedProduct productId={product.id} product={{ id: product.id, name: product.name, price: product.price, sku: product.sku }} />
       <nav className="text-sm text-gray-500 mb-4">
         <Link href="/catalog" className="hover:text-blue-600">{catalogLabel}</Link>
         {product.breadcrumbs?.map((b: any, i: number) => (

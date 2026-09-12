@@ -9,6 +9,7 @@ import {
   PAYMENT_STATUS_LABELS, orderStatusTone,
 } from '@/lib/format';
 import { PageHeader, Button, Select, Table, Th, Td, Badge, LoadingState, ErrorState, ConfirmDialog, useToast } from '@/components/ui';
+import { formatAttribution, attributionDetails } from '@/lib/attribution-label';
 
 type Order = {
   id: number; number: string; user_id: number | null;
@@ -18,6 +19,11 @@ type Order = {
   city_ref?: string | null; warehouse_number?: string | null; warehouse_ref?: string | null;
   area_name?: string | null; delivery_address?: string | null;
   notes?: string | null; ip_address?: string | null; created_at: string; updated_at?: string;
+  first_source?: string | null; first_medium?: string | null; first_campaign?: string | null;
+  first_term?: string | null; first_content?: string | null; first_landing_page?: string | null;
+  first_gclid?: string | null; last_source?: string | null; last_medium?: string | null;
+  last_campaign?: string | null; last_term?: string | null; last_content?: string | null;
+  last_landing_page?: string | null; last_gclid?: string | null;
 };
 type Item = { id: number; product_id: number | null; product_name: string; product_sku: string | null; qty: number; price: number; total: number; product_slug: string | null };
 type Event = { id: number; event: string; actor: string | null; payload: Record<string, unknown> | null; created_at: string };
@@ -133,6 +139,17 @@ export default function OrderDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Items */}
+      <section className="mb-6">
+        <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Джерело трафіку</h3>
+        <div className="bg-white border border-gray-200 rounded-lg p-4 text-sm space-y-1">
+          <div className="text-base font-semibold">{formatAttribution(o)}</div>
+          {attributionDetails(o as unknown as Record<string, unknown>).map((row) => (
+            <div key={row.label}><span className="text-gray-500">{row.label}:</span> {row.value}</div>
+          ))}
+        </div>
+      </section>
 
       {/* Items */}
       <section className="mb-6">

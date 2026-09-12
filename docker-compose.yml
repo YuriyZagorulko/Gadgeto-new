@@ -176,6 +176,7 @@ services:
       dockerfile: Dockerfile.dev
       args:
         NEXT_PUBLIC_API_URL: "http://backend:8000"
+        NEXT_PUBLIC_GTM_ID: "${NEXT_PUBLIC_GTM_ID:-GTM-TFC47QZW}"
     container_name: gadgeto-frontend
     volumes:
       # Mount source code, keep node_modules and .next in named volumes
@@ -184,6 +185,7 @@ services:
       - frontend_next:/app/.next
     environment:
       - NEXT_PUBLIC_API_URL=http://backend:8000
+      - NEXT_PUBLIC_GTM_ID=${NEXT_PUBLIC_GTM_ID:-GTM-TFC47QZW}
     ports:
       - "3000:3000"
     depends_on:

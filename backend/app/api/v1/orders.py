@@ -46,9 +46,31 @@ class CheckoutRequest(BaseModel):
     # Payment method: "cod" (cash on delivery / накладений платіж),
     # "liqpay" (card payment via LiqPay), "bank_transfer" (банківський переказ).
     payment_method: str = "cod"
+    # Traffic-source attribution snapshot (first-touch + latest/session).
+    # All optional: missing attribution must never break order creation.
+    first_source: str = ""
+    first_medium: str = ""
+    first_campaign: str = ""
+    first_term: str = ""
+    first_content: str = ""
+    first_landing_page: str = ""
+    first_gclid: str = ""
+    last_source: str = ""
+    last_medium: str = ""
+    last_campaign: str = ""
+    last_term: str = ""
+    last_content: str = ""
+    last_landing_page: str = ""
+    last_gclid: str = ""
 
 
 _PAYMENT_METHODS = ("cod", "liqpay", "bank_transfer")
+
+
+def _clean(value: str | None, max_len: int) -> str | None:
+    """Trim attribution input; empty -> NULL so missing data stays missing."""
+    v = (value or "").strip()[:max_len]
+    return v or None
 
 
 def _build_delivery_info(req: CheckoutRequest) -> tuple[str, dict | None]:
@@ -158,14 +180,26 @@ def checkout(req: CheckoutRequest, _db: tuple = Depends(get_connection_dep)):
     cur.execute("""
         INSERT INTO orders (number, user_id, buyer_name, email, phone, status, total_amount, subtotal_amount,
             shipping_amount, city_ref, warehouse_ref, warehouse_number, delivery_address, shipping_address_json,
-            notes, payment_method, payment_status, created_at, updated_at)
-        VALUES (%s,%s,%s,%s,%s,'PENDING',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',NOW(),NOW())
+            notes, payment_method, payment_status,
+            first_source, first_medium, first_campaign, first_term, first_content, first_landing_page, first_gclid,
+            last_source, last_medium, last_campaign, last_term, last_content, last_landing_page, last_gclid,
+            created_at, updated_at)
+        VALUES (%s,%s,%s,%s,%s,'PENDING',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'pending',
+            %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
         RETURNING id
     """, (order_number, user["id"] if user else None, buyer_name, req.email, req.phone,
           total, subtotal, shipping, req.city_ref, req.warehouse_ref, req.warehouse_number,
           delivery_address,
           json.dumps(shipping_json, ensure_ascii=False) if shipping_json else None,
-          req.notes, payment_method))
+          req.notes, payment_method,
+          _clean(req.first_source, 100), _clean(req.first_medium, 100),
+          _clean(req.first_campaign, 255), _clean(req.first_term, 255),
+          _clean(req.first_content, 255), _clean(req.first_landing_page, 500),
+          _clean(req.first_gclid, 255),
+          _clean(req.last_source, 100), _clean(req.last_medium, 100),
+          _clean(req.last_campaign, 255), _clean(req.last_term, 255),
+          _clean(req.last_content, 255), _clean(req.last_landing_page, 500),
+          _clean(req.last_gclid, 255)))
     order_id = cur.fetchone()["id"]
 
     # Create order items (snapshot)

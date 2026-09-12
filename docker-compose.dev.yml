@@ -49,12 +49,14 @@ services:
       dockerfile: Dockerfile.dev
       args:
         NEXT_PUBLIC_API_URL: "http://backend:8000"
+        NEXT_PUBLIC_GTM_ID: "${NEXT_PUBLIC_GTM_ID:-GTM-TFC47QZW}"
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
       - frontend_next:/app/.next
     environment:
       - NEXT_PUBLIC_API_URL=http://backend:8000
+      - NEXT_PUBLIC_GTM_ID=${NEXT_PUBLIC_GTM_ID:-GTM-TFC47QZW}
     ports:
       - "3000:3000"
     depends_on:

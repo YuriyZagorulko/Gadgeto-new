@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, qs } from '@/lib/api';
+import { formatAttribution } from '@/lib/attribution-label';
 import {
   formatPrice, formatDateTime, ORDER_STATUSES, ORDER_STATUS_LABELS,
   PAYMENT_STATUS_LABELS, orderStatusTone,
@@ -13,6 +14,8 @@ type Row = {
   id: number; number: string; buyer_name: string; email: string; phone: string;
   status: string; payment_status: string | null; payment_method: string | null;
   total_amount: number; shipping_amount: number; created_at: string; items_count: number;
+  first_source: string | null; first_medium: string | null; first_campaign: string | null;
+  last_source: string | null; last_medium: string | null; last_campaign: string | null;
 };
 type ListResp = { items: Row[]; total: number; page: number; per_page: number };
 
@@ -76,7 +79,7 @@ export default function OrdersPage() {
       {!error && data?.items.length === 0 && <EmptyState title="Замовлень не знайдено" />}
       {data && data.items.length > 0 && (
         <>
-          <Table head={<tr><Th>Номер</Th><Th>Покупець</Th><Th>Телефон</Th><Th>Позицій</Th><Th>Сума</Th><Th>Статус</Th><Th>Оплата</Th><Th>Дата</Th></tr>}>
+          <Table head={<tr><Th>Номер</Th><Th>Покупець</Th><Th>Телефон</Th><Th>Позицій</Th><Th>Сума</Th><Th>Джерело</Th><Th>Статус</Th><Th>Оплата</Th><Th>Дата</Th></tr>}>
             {data.items.map((o) => (
               <tr key={o.id} className="hover:bg-gray-50">
                 <Td>
@@ -86,6 +89,7 @@ export default function OrdersPage() {
                 <Td className="text-sm whitespace-nowrap">{o.phone}</Td>
                 <Td>{o.items_count}</Td>
                 <Td className="font-medium whitespace-nowrap">{formatPrice(o.total_amount)}</Td>
+                <Td className="text-xs whitespace-nowrap"><span title={o.last_campaign || o.first_campaign || ''}>{formatAttribution(o)}</span></Td>
                 <Td><Badge tone={orderStatusTone(o.status)}>{ORDER_STATUS_LABELS[o.status] || o.status}</Badge></Td>
                 <Td>
                   <Badge tone={o.payment_status === 'paid' ? 'green' : o.payment_status === 'failed' ? 'red' : 'gray'}>

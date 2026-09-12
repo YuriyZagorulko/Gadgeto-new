@@ -6,6 +6,7 @@
  */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { trackAddToCart, trackRemoveFromCart } from './analytics';
 
 export interface CartItem {
   /** cart_items.id from backend (0 if not yet synced) */
@@ -121,6 +122,10 @@ export const useCartStore = create<CartState>()(
             body: JSON.stringify({ product_id: product.id, qty: 1 }),
           });
           await get().refreshFromAPI();
+          trackAddToCart({
+            id: product.id, name: product.name, price: product.price,
+            quantity: 1, sku: product.sku,
+          });
         } catch (e: any) {
           set({ error: e.message, items: items.filter((i) => i.product_id !== product.id) });
         }
@@ -161,6 +166,10 @@ export const useCartStore = create<CartState>()(
         const item = items.find((i) => i.product_id === productId);
         if (!item) return;
         set({ items: items.filter((i) => i.product_id !== productId), error: null });
+        trackRemoveFromCart({
+          id: item.product_id, name: item.name, price: item.price,
+          quantity: item.qty, sku: item.sku,
+        });
         try {
           if (item.id > 0) {
             await apiCart(`/items/${item.id}`, { method: 'DELETE' });
