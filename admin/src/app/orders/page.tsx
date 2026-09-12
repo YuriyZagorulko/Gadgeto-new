@@ -8,7 +8,7 @@ import {
   formatPrice, formatDateTime, ORDER_STATUSES, ORDER_STATUS_LABELS,
   PAYMENT_STATUS_LABELS, orderStatusTone,
 } from '@/lib/format';
-import { PageHeader, Button, Input, Select, Table, Th, Td, Badge, Pagination, LoadingState, ErrorState, EmptyState } from '@/components/ui';
+import { PageHeader, Button, Input, Select, Table, Th, Td, Badge, Pagination, LoadingState, ErrorState, EmptyState, ConfirmDialog, useToast } from '@/components/ui';
 
 type Row = {
   id: number; number: string; buyer_name: string; email: string; phone: string;
@@ -22,6 +22,7 @@ type ListResp = { items: Row[]; total: number; page: number; per_page: number };
 const PAYMENT_STATUSES = ['pending', 'paid', 'failed', 'refunded'];
 
 export default function OrdersPage() {
+  const toast = useToast();
   const [q, setQ] = useState('');
   const [appliedQ, setAppliedQ] = useState('');
   const [status, setStatus] = useState('');
@@ -31,6 +32,8 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [tick, setTick] = useState(0);
+  const [deleting, setDeleting] = useState<{ id: number; number: string } | null>(null);
+  const [deletingBusy, setDeletingBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,6 +47,24 @@ export default function OrdersPage() {
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
   }, [page, appliedQ, status, payment, tick]);
+
+  const reload = () => setTick((t) => t + 1);
+
+  const doDelete = async () => {
+    if (!deleting || deletingBusy) return;
+    setDeletingBusy(true);
+    try {
+      await api.delete(`/orders/${deleting.id}`);
+      toast.push('success', `Замовлення ${deleting.number} видалено`);
+      setDeleting(null);
+      reload();
+    } catch (e: unknown) {
+      toast.push('error', (e as Error).message);
+      setDeleting(null);
+    } finally {
+      setDeletingBusy(false);
+    }
+  };
 
   return (
     <div>
@@ -79,7 +100,7 @@ export default function OrdersPage() {
       {!error && data?.items.length === 0 && <EmptyState title="Замовлень не знайдено" />}
       {data && data.items.length > 0 && (
         <>
-          <Table head={<tr><Th>Номер</Th><Th>Покупець</Th><Th>Телефон</Th><Th>Позицій</Th><Th>Сума</Th><Th>Джерело</Th><Th>Статус</Th><Th>Оплата</Th><Th>Дата</Th></tr>}>
+          <Table head={<tr><Th>Номер</Th><Th>Покупець</Th><Th>Телефон</Th><Th>Позицій</Th><Th>Сума</Th><Th>Джерело</Th><Th>Статус</Th><Th>Оплата</Th><Th>Дата</Th><Th className="w-12"></Th></tr>}>
             {data.items.map((o) => (
               <tr key={o.id} className="hover:bg-gray-50">
                 <Td>
@@ -97,6 +118,18 @@ export default function OrdersPage() {
                   </Badge>
                 </Td>
                 <Td className="whitespace-nowrap text-xs text-gray-500">{formatDateTime(o.created_at)}</Td>
+                <Td>
+                  <button
+                    type="button"
+                    onClick={() => setDeleting({ id: o.id, number: o.number })}
+                    disabled={deletingBusy}
+                    className="px-2 py-1.5 text-base leading-none text-red-600 hover:text-red-800 border border-transparent hover:border-red-200 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Видалити замовлення"
+                    aria-label={`Видалити замовлення ${o.number}`}
+                  >
+                    🗑️
+                  </button>
+                </Td>
               </tr>
             ))}
           </Table>
@@ -106,6 +139,19 @@ export default function OrdersPage() {
           </div>
         </>
       )}
+
+      <ConfirmDialog
+        open={!!deleting}
+        title="Видалити замовлення?"
+        message={deleting
+          ? `Замовлення ${deleting.number} та всі пов'язані дані (позиції, події, платежі) буде видалено безповоротно.`
+          : ''}
+        confirmLabel="Видалити"
+        danger
+        busy={deletingBusy}
+        onConfirm={doDelete}
+        onCancel={() => setDeleting(null)}
+      />
     </div>
   );
 }

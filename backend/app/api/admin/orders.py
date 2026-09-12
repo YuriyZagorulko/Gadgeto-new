@@ -172,3 +172,38 @@ def update_order_status(
     finally:
         conn.close()
 
+
+@router.delete("/orders/{order_id}")
+def delete_order(order_id: int, user: dict = Depends(require_admin)):
+    """Permanently delete an order and all its dependent records.
+
+    order_items / order_events / payments hold NOT-NULL foreign keys to
+    orders WITHOUT ON DELETE CASCADE (see migration 005), so dependents are
+    deleted first, inside one explicit transaction. If anything fails the
+    whole deletion rolls back — the database can never end up partially
+    deleted. A missing order returns 404; DB internals are never exposed.
+    Deleting the same order twice is safe (second call → 404).
+    """
+    conn, cur = admin_cursor()
+    try:
+        # Explicit transaction: admin_cursor() returns an autocommit
+        # connection, so switch it off for the duration of the deletion.
+        conn.autocommit = False
+        try:
+            cur.execute("SELECT number FROM orders WHERE id = %s", (order_id,))
+            if not cur.fetchone():
+                conn.rollback()
+                raise HTTPException(status_code=404, detail="Замовлення не знайдено")
+
+            cur.execute("DELETE FROM order_items WHERE order_id = %s", (order_id,))
+            cur.execute("DELETE FROM order_events WHERE order_id = %s", (order_id,))
+            cur.execute("DELETE FROM payments WHERE order_id = %s", (order_id,))
+            cur.execute("DELETE FROM orders WHERE id = %s", (order_id,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return {"ok": True, "id": order_id}
+    finally:
+        conn.close()
+
